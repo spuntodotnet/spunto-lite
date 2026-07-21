@@ -21,6 +21,7 @@ export type ProjectFeature = {
 export type SetupStatus = {
   phase:
     | "pending"
+    | "initializing"
     | "credentials"
     | "dotfiles"
     | "cloning"

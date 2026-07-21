@@ -12,7 +12,7 @@ export type Repository = {
 export type ProjectFeature = { id: string; options?: Record<string, string>; ociRef?: string; localScript?: string }
 
 export type SetupStatus = {
-  phase: "pending" | "credentials" | "dotfiles" | "cloning" | "features" | "lifecycle" | "ready" | "error"
+  phase: "pending" | "initializing" | "credentials" | "dotfiles" | "cloning" | "features" | "lifecycle" | "ready" | "error"
   repos: { name: string; state: "pending" | "cloning" | "done" | "error" }[]
   postCreate: "pending" | "running" | "done" | "error" | null
   postStart: "pending" | "running" | "done" | "error" | null
@@ -57,6 +57,16 @@ export type ProjectVersion = {
   projectId: string
   version: number
   config: Omit<Project, "id" | "currentVersion" | "favorite" | "createdAt" | "deployPublicKey">
+  createdAt: string
+}
+
+export type ProjectImageBuild = {
+  id: string
+  projectId: string
+  version: number
+  imageRef: string
+  state: "building" | "ready" | "error"
+  logs: string
   createdAt: string
 }
 
