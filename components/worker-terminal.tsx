@@ -2,6 +2,22 @@
 
 import { useEffect, useRef } from "react"
 
+// base64 → raw bytes. Passing the Uint8Array to xterm lets it decode UTF-8 itself;
+// atob() alone yields a latin-1 string that mangles multi-byte glyphs (❯, box-drawing, accents).
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64)
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return bytes
+}
+// string → UTF-8 bytes → base64 (so pasted/typed non-ASCII survives the trip).
+function utf8ToB64(s: string): string {
+  const bytes = new TextEncoder().encode(s)
+  let bin = ""
+  for (const b of bytes) bin += String.fromCharCode(b)
+  return btoa(bin)
+}
+
 // Bare interactive xterm bound to a tmux session over the terminal WebSocket.
 // The session strip renders the chrome above it.
 export function WorkerXterm({ workerId, session = "main" }: { workerId: string; session?: string }) {
@@ -22,7 +38,7 @@ export function WorkerXterm({ workerId, session = "main" }: { workerId: string; 
 
       term = new Terminal({
         cursorBlink: true,
-        fontFamily: 'var(--font-geist-mono), "JetBrains Mono", monospace',
+        fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
         fontSize: 13,
         lineHeight: 1.4,
         theme: { background: "#09090b", foreground: "#e4e4e7", cursor: "#ea5400" },
@@ -39,11 +55,11 @@ export function WorkerXterm({ workerId, session = "main" }: { workerId: string; 
 
       ws.onmessage = (ev) => {
         const msg = JSON.parse(ev.data)
-        if (msg.type === "output") term.write(atob(msg.data))
+        if (msg.type === "output") term.write(b64ToBytes(msg.data))
         else if (msg.type === "error") term.writeln(`\r\n\x1b[31m${msg.message}\x1b[0m`)
       }
       term.onData((data: string) => {
-        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data: btoa(data) }))
+        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data: utf8ToB64(data) }))
       })
 
       onResize = () => {
