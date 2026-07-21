@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Star, Box, GitBranch, Container } from "lucide-react"
+import { Plus, Star, Box, GitBranch, Container, Rocket } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Project } from "@/lib/types"
 import { Button } from "@/components/ui/button"
@@ -28,11 +28,18 @@ export default function ProjectsPage() {
           <h1 className="font-[family-name:var(--font-syne)] text-2xl font-bold tracking-tight">Projects</h1>
           <p className="text-sm text-muted-foreground mt-1">Devcontainer specs you can spawn workers from.</p>
         </div>
-        <Link href="/projects/new">
-          <Button>
-            <Plus /> New project
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href="/projects/new-from-template">
+            <Button variant="outline">
+              <Rocket /> From template
+            </Button>
+          </Link>
+          <Link href="/projects/new">
+            <Button>
+              <Plus /> New project
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {isLoading ? (

@@ -84,3 +84,14 @@ export type DevFeature = {
   options?: { name: string; default: string; description: string }[]
 }
 export type ExtensionSuggestion = { id: string; label: string }
+export type Template = {
+  id: string
+  name: string
+  description: string
+  stack: string
+  image: string
+  features?: { id: string; options?: Record<string, string> }[]
+  postCreateCommand: string
+  postStartCommand: string
+  forwardPorts: number[]
+}
