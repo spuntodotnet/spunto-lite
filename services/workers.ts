@@ -70,6 +70,14 @@ export async function ensureProjectImage(project: Project, version: number): Pro
   }
 }
 
+/** Fire-and-forget pre-build of the current version's image (no-op if already built). */
+export function triggerBuild(projectId: string): boolean {
+  const project = getProjectRow(projectId)
+  if (!project) return false
+  void ensureProjectImage(project, project.currentVersion).catch((e) => console.error(`[build ${projectId}]`, e))
+  return true
+}
+
 export function listBuilds(projectId: string) {
   return db
     .select()

@@ -1,21 +1,19 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { toast } from "sonner"
-import { LayoutGrid, Rows3, Zap, Container } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
+import { LayoutGrid, Rows3, Container } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import type { Worker } from "@/lib/types"
-import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { WorkerCard } from "@/components/worker-card"
 import { WorkerTable } from "@/components/worker-table"
+import { SpawnWorkerButton } from "@/components/spawn-worker-button"
 
 type View = "card" | "table"
 
 export function WorkersPanel({ projectId, projectVersion }: { projectId: string; projectVersion: number }) {
-  const qc = useQueryClient()
   const [view, setView] = useState<View>("card")
 
   useEffect(() => {
@@ -33,15 +31,6 @@ export function WorkersPanel({ projectId, projectVersion }: { projectId: string;
     refetchInterval: 2500,
   })
 
-  const spawn = useMutation({
-    mutationFn: () => api.post(`/api/projects/${projectId}/workers`, {}),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["workers", projectId] })
-      toast.success("Workspace spawning…")
-    },
-    onError: (e) => toast.error((e as Error).message),
-  })
-
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -51,29 +40,24 @@ export function WorkersPanel({ projectId, projectVersion }: { projectId: string;
             {workers.length}
           </Badge>
         </div>
-        <div className="flex items-center gap-2">
-          {workers.length > 0 && (
-            <div className="inline-flex items-center rounded-lg border border-border bg-muted/30 p-0.5">
-              <button
-                aria-pressed={view === "card"}
-                onClick={() => selectView("card")}
-                className={cn("flex h-6 w-6 items-center justify-center rounded-md transition-colors", view === "card" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground/60 hover:text-foreground")}
-              >
-                <LayoutGrid className="h-3.5 w-3.5" />
-              </button>
-              <button
-                aria-pressed={view === "table"}
-                onClick={() => selectView("table")}
-                className={cn("flex h-6 w-6 items-center justify-center rounded-md transition-colors", view === "table" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground/60 hover:text-foreground")}
-              >
-                <Rows3 className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          )}
-          <Button size="sm" className="gap-1.5" onClick={() => spawn.mutate()} disabled={spawn.isPending}>
-            <Zap className="h-3.5 w-3.5" /> New workspace
-          </Button>
-        </div>
+        {workers.length > 0 && (
+          <div className="inline-flex items-center rounded-lg border border-border bg-muted/30 p-0.5">
+            <button
+              aria-pressed={view === "card"}
+              onClick={() => selectView("card")}
+              className={cn("flex h-6 w-6 items-center justify-center rounded-md transition-colors", view === "card" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground/60 hover:text-foreground")}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+            </button>
+            <button
+              aria-pressed={view === "table"}
+              onClick={() => selectView("table")}
+              className={cn("flex h-6 w-6 items-center justify-center rounded-md transition-colors", view === "table" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground/60 hover:text-foreground")}
+            >
+              <Rows3 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
       </div>
 
       {workers.length === 0 ? (
@@ -86,9 +70,7 @@ export function WorkersPanel({ projectId, projectVersion }: { projectId: string;
               <p className="font-medium text-sm">No workspaces yet</p>
               <p className="text-sm text-muted-foreground mt-1">Spawn a workspace to get a full dev environment with code-server.</p>
             </div>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => spawn.mutate()} disabled={spawn.isPending}>
-              <Zap className="h-3.5 w-3.5" /> New workspace
-            </Button>
+            <SpawnWorkerButton projectId={projectId} variant="outline" />
           </div>
         </div>
       ) : view === "card" ? (

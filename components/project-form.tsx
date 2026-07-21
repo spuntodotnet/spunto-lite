@@ -350,6 +350,7 @@ export function ProjectForm({ initial }: { initial?: Project }) {
         </div>
       </Section>
 
+      {!editing && (
       <Section
         title="Secrets"
         description="Injected as env vars into every worker. Write-only — values are never shown again."
@@ -383,13 +384,9 @@ export function ProjectForm({ initial }: { initial?: Project }) {
           <Button variant="outline" size="sm" onClick={() => setSecrets((cur) => [...cur, { name: "", value: "" }])}>
             <Plus /> Add secret
           </Button>
-          {editing && (
-            <p className="text-xs text-muted-foreground">
-              Existing secrets are managed on the project page. Adding here upserts by name.
-            </p>
-          )}
         </div>
       </Section>
+      )}
 
       <div className="flex items-center justify-end gap-2 pb-10">
         <Button variant="ghost" onClick={() => router.back()}>
