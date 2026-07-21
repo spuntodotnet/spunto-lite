@@ -11,7 +11,12 @@ export type Repository = {
   cloneUrl?: string
 }
 
-export type ProjectFeature = { id: string; options?: Record<string, string>; ociRef?: string }
+export type ProjectFeature = {
+  id: string
+  options?: Record<string, string>
+  ociRef?: string
+  localScript?: string
+}
 
 export type SetupStatus = {
   phase:
