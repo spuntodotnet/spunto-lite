@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { KeyRound, User } from "lucide-react"
+import { KeyRound, User, FileCode2 } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Settings, HostKey } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -19,12 +19,14 @@ export default function SettingsPage() {
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [keyPath, setKeyPath] = useState("")
+  const [dotfilesRepo, setDotfilesRepo] = useState("")
 
   useEffect(() => {
     if (settings) {
       setName(settings.gitUserName ?? "")
       setEmail(settings.gitUserEmail ?? "")
       setKeyPath(settings.sshKeyPath ?? "")
+      setDotfilesRepo(settings.dotfilesRepo ?? "")
     }
   }, [settings])
 
@@ -34,6 +36,7 @@ export default function SettingsPage() {
         gitUserName: name || null,
         gitUserEmail: email || null,
         sshKeyPath: keyPath || null,
+        dotfilesRepo: dotfilesRepo.trim() || null,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] })
@@ -104,6 +107,32 @@ export default function SettingsPage() {
               ))}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <FileCode2 className="size-4" /> Dotfiles
+          </CardTitle>
+          <CardDescription>
+            A personal dotfiles repo (GitHub Codespaces-style). Cloned into{" "}
+            <code className="font-mono text-xs">~/dotfiles</code> on each worker&apos;s first boot; its install script (
+            <code className="font-mono text-xs">install.sh</code>, <code className="font-mono text-xs">bootstrap.sh</code>,{" "}
+            <code className="font-mono text-xs">setup.sh</code> or <code className="font-mono text-xs">script/setup</code>)
+            is run, else every dotfile is symlinked into <code className="font-mono text-xs">$HOME</code>. Private repos use
+            your SSH key.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <Label htmlFor="df">Repository</Label>
+          <Input
+            id="df"
+            value={dotfilesRepo}
+            onChange={(e) => setDotfilesRepo(e.target.value)}
+            placeholder="owner/dotfiles or git@github.com:owner/dotfiles.git"
+          />
+          <p className="text-xs text-muted-foreground">Leave empty to disable.</p>
         </CardContent>
       </Card>
 

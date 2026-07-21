@@ -126,6 +126,9 @@ export const settings = sqliteTable("settings", {
   gitUserEmail: text("git_user_email"),
   // Relative filename under the mounted /host-ssh dir, e.g. "id_ed25519".
   sshKeyPath: text("ssh_key_path"),
+  // Personal dotfiles repo (Codespaces-style): "owner/repo" shorthand or full URL.
+  // Cloned into ~/dotfiles on first boot of every worker and its install script run.
+  dotfilesRepo: text("dotfiles_repo"),
 })
 
 export type Project = typeof projects.$inferSelect

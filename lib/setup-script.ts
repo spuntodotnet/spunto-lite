@@ -209,10 +209,19 @@ export type SetupScriptParams = {
   userSshPrivateKey?: string
   userEnvSecrets?: Record<string, string>
   projectDeployKey?: string
+  /** Personal dotfiles repo: "owner/repo" shorthand or a full http(s)/ssh/git@ URL. */
+  dotfilesRepo?: string
+}
+
+/** owner/repo → https://github.com/owner/repo; a full URL (http.../git@.../ssh://) is kept as-is. */
+function normalizeDotfilesUrl(raw: string): string {
+  const v = raw.trim()
+  if (/^(https?:\/\/|ssh:\/\/|git@)/.test(v)) return v
+  return `https://github.com/${v.replace(/^\/+|\/+$/g, "")}`
 }
 
 export function buildSetupScript(params: SetupScriptParams): { script: string } {
-  const { project, userInfo, userSshPrivateKey, userEnvSecrets, projectDeployKey } = params
+  const { project, userInfo, userSshPrivateKey, userEnvSecrets, projectDeployKey, dotfilesRepo } = params
   const homeDir = "/home/vscode"
   const username = "vscode"
 
@@ -258,6 +267,63 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
       `mkdir -p ${homeDir}/.ssh`,
       `printf '%s' ${shQuote(projectDeployKey)} > ${homeDir}/.ssh/mp_deploy_key`,
       `chmod 600 ${homeDir}/.ssh/mp_deploy_key`,
+    )
+  }
+
+  // ── 2b. Dotfiles (Codespaces-style) ──
+  // Runs after credentials (so ~/.ssh/mp_user_key is ready for private clones) and
+  // before repo cloning — same order as the SetupStatus enum. Everything is best-effort
+  // (clone/install failures are logged, never fatal) and guarded by a first-boot marker.
+  if (dotfilesRepo && dotfilesRepo.trim()) {
+    const url = normalizeDotfilesUrl(dotfilesRepo)
+    const sshPrefix = userSshPrivateKey
+      ? `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${homeDir}/.ssh/mp_user_key" `
+      : ""
+    // Inner script runs as `vscode` (cwd ~/dotfiles) so install scripts and symlinks
+    // land in the user's home with the right ownership. Always exits 0.
+    const dotfilesInner = [
+      "set +e",
+      `DOTFILES_DIR="$HOME/dotfiles"`,
+      `echo "Cloning dotfiles from ${url} ..."`,
+      `if [ ! -d "$DOTFILES_DIR/.git" ]; then`,
+      `  ${sshPrefix}git clone ${shQuote(url)} "$DOTFILES_DIR"`,
+      `fi`,
+      `if [ -d "$DOTFILES_DIR/.git" ]; then`,
+      `  cd "$DOTFILES_DIR" || exit 0`,
+      `  _mp_installed=0`,
+      `  for _cand in install.sh bootstrap.sh setup.sh script/setup; do`,
+      `    if [ -f "$DOTFILES_DIR/$_cand" ]; then`,
+      `      echo "[dotfiles] Running install script: $_cand"`,
+      `      chmod +x "$DOTFILES_DIR/$_cand" 2>/dev/null || true`,
+      `      "$DOTFILES_DIR/$_cand"`,
+      `      echo "[dotfiles] install script exited $?"`,
+      `      _mp_installed=1`,
+      `      break`,
+      `    fi`,
+      `  done`,
+      `  if [ "$_mp_installed" = 0 ]; then`,
+      `    echo "[dotfiles] No install script found, symlinking dotfiles into $HOME"`,
+      `    for _f in "$DOTFILES_DIR"/.*; do`,
+      `      _base=$(basename "$_f")`,
+      `      case "$_base" in .|..|.git|.gitignore|.gitmodules) continue ;; esac`,
+      `      ln -sf "$_f" "$HOME/$_base"`,
+      `    done`,
+      `  fi`,
+      `else`,
+      `  echo "[dotfiles] clone failed, continuing"`,
+      `fi`,
+      `exit 0`,
+    ].join("\n")
+    push(...banner("SETUP: DOTFILES"))
+    mp(mkStatus("dotfiles", allReposPending, pc0, null))
+    push(
+      `if [ ! -f "${homeDir}/.mp-dotfiles-done" ]; then`,
+      `  echo ${JSON.stringify(Buffer.from(dotfilesInner).toString("base64"))} | base64 -d > /tmp/mp_dotfiles.sh`,
+      `  chmod +x /tmp/mp_dotfiles.sh`,
+      `  su ${username} -c "${envPrefix(userEnvSecrets)}bash /tmp/mp_dotfiles.sh" 2>&1 || true`,
+      `  rm -f /tmp/mp_dotfiles.sh`,
+      `  touch "${homeDir}/.mp-dotfiles-done"`,
+      `fi`,
     )
   }
 

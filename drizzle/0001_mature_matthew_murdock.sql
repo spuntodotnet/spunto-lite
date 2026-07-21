@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `dotfiles_repo` text;

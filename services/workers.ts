@@ -107,6 +107,7 @@ function buildFullScript(project: Project): string {
     userSshPrivateKey,
     userEnvSecrets: secrets,
     projectDeployKey,
+    dotfilesRepo: settings.dotfilesRepo ?? undefined,
   })
 
   const { script: start } = buildStartScript({
