@@ -305,6 +305,34 @@ export async function detectListeningPorts(containerId: string): Promise<number[
   return [...new Set(out.trim().split("\n").map((n) => parseInt(n)).filter((n) => n > 0 && n < 65536))]
 }
 
+// ─── tmux session management (persistent multi-session terminals) ─────────────
+
+export type TmuxSession = { name: string; windows: number; attached: boolean; command: string }
+
+export async function listTmuxSessions(containerId: string): Promise<TmuxSession[]> {
+  const fmt = "#{session_name}|#{session_windows}|#{session_attached}|#{pane_current_command}"
+  const out = await execCapture(containerId, ["su", "vscode", "-c", `tmux list-sessions -F '${fmt}' 2>/dev/null || true`], 4000)
+  return out
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [name, windows, attached, command] = line.split("|")
+      return { name, windows: parseInt(windows) || 1, attached: attached === "1", command: command || "" }
+    })
+}
+
+export async function createTmuxSession(containerId: string, name: string): Promise<void> {
+  const safe = name.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 40) || "main"
+  await execCapture(containerId, ["su", "vscode", "-c", `tmux new-session -d -s '${safe}' 2>&1 || true`], 4000)
+}
+
+export async function killTmuxSession(containerId: string, name: string): Promise<void> {
+  const safe = name.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 40)
+  if (!safe) return
+  await execCapture(containerId, ["su", "vscode", "-c", `tmux kill-session -t '${safe}' 2>&1 || true`], 4000)
+}
+
 // ─── Image build ──────────────────────────────────────────────────────────────
 
 function buildTar(files: { name: string; content: Buffer }[]): Buffer {

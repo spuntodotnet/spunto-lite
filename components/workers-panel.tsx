@@ -1,28 +1,32 @@
 "use client"
 
-import { useState } from "react"
-import Link from "next/link"
+import { useEffect, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
-import { Container, Play, Square, RotateCw, Trash2, Plus, ExternalLink, Loader2 } from "lucide-react"
+import { LayoutGrid, Rows3, Zap, Container } from "lucide-react"
+import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
-import type { Worker, SetupStatus } from "@/lib/types"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import type { Worker } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { workerBaseUrl } from "@/lib/worker-url"
+import { WorkerCard } from "@/components/worker-card"
+import { WorkerTable } from "@/components/worker-table"
 
-const STATE_BADGE: Record<string, { label: string; variant: "success" | "warning" | "muted" | "destructive" | "default" }> = {
-  pending: { label: "Pending", variant: "muted" },
-  building: { label: "Building image", variant: "warning" },
-  starting: { label: "Starting", variant: "warning" },
-  ready: { label: "Ready", variant: "success" },
-  stopped: { label: "Stopped", variant: "muted" },
-  error: { label: "Error", variant: "destructive" },
-}
+type View = "card" | "table"
 
 export function WorkersPanel({ projectId, projectVersion }: { projectId: string; projectVersion: number }) {
   const qc = useQueryClient()
+  const [view, setView] = useState<View>("card")
+
+  useEffect(() => {
+    const saved = localStorage.getItem("spunto-lite:workerView") as View | null
+    if (saved === "card" || saved === "table") setView(saved)
+  }, [])
+  const selectView = (v: View) => {
+    setView(v)
+    localStorage.setItem("spunto-lite:workerView", v)
+  }
+
   const { data: workers = [] } = useQuery({
     queryKey: ["workers", projectId],
     queryFn: () => api.get<Worker[]>(`/api/projects/${projectId}/workers`),
@@ -33,127 +37,68 @@ export function WorkersPanel({ projectId, projectVersion }: { projectId: string;
     mutationFn: () => api.post(`/api/projects/${projectId}/workers`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workers", projectId] })
-      toast.success("Worker spawning…")
+      toast.success("Workspace spawning…")
     },
     onError: (e) => toast.error((e as Error).message),
   })
 
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle className="text-base flex items-center gap-2">
-          <Container className="size-4" /> Workers
-        </CardTitle>
-        <Button size="sm" onClick={() => spawn.mutate()} disabled={spawn.isPending}>
-          <Plus /> Spawn worker
-        </Button>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {workers.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No workers yet. Spawn one to get a running dev container.</p>
-        ) : (
-          workers.map((w) => (
-            <WorkerRow key={w.id} worker={w} projectId={projectId} behindVersion={w.projectVersion < projectVersion} />
-          ))
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function WorkerRow({ worker, projectId, behindVersion }: { worker: Worker; projectId: string; behindVersion: boolean }) {
-  const qc = useQueryClient()
-  const [busy, setBusy] = useState(false)
-  const badge = STATE_BADGE[worker.state] ?? STATE_BADGE.pending
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["workers", projectId] })
-
-  async function act(fn: () => Promise<unknown>, msg?: string) {
-    setBusy(true)
-    try {
-      await fn()
-      invalidate()
-      if (msg) toast.success(msg)
-    } catch (e) {
-      toast.error((e as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const codeUrl = workerBaseUrl(worker.id)
-
-  return (
-    <div className="rounded-lg border border-border p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <Link href={`/projects/${projectId}/workers/${worker.id}`} className="font-medium text-sm truncate hover:underline">
-            {worker.name}
-          </Link>
-          <Badge variant={badge.variant}>
-            {(worker.state === "building" || worker.state === "starting") && <Loader2 className="size-3 animate-spin" />}
-            {badge.label}
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-medium text-muted-foreground">Workspaces</h2>
+          <Badge variant="secondary" className="text-[11px] h-5 px-1.5">
+            {workers.length}
           </Badge>
-          {behindVersion && <Badge variant="warning">behind</Badge>}
         </div>
-        <div className="flex items-center gap-1 shrink-0">
-          {worker.state === "ready" && (
-            <a href={codeUrl} target="_blank" rel="noreferrer">
-              <Button variant="outline" size="sm">
-                <ExternalLink /> VS Code
-              </Button>
-            </a>
+        <div className="flex items-center gap-2">
+          {workers.length > 0 && (
+            <div className="inline-flex items-center rounded-lg border border-border bg-muted/30 p-0.5">
+              <button
+                aria-pressed={view === "card"}
+                onClick={() => selectView("card")}
+                className={cn("flex h-6 w-6 items-center justify-center rounded-md transition-colors", view === "card" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground/60 hover:text-foreground")}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </button>
+              <button
+                aria-pressed={view === "table"}
+                onClick={() => selectView("table")}
+                className={cn("flex h-6 w-6 items-center justify-center rounded-md transition-colors", view === "table" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground/60 hover:text-foreground")}
+              >
+                <Rows3 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           )}
-          {worker.state === "stopped" ? (
-            <Button variant="ghost" size="icon" className="size-8" disabled={busy} onClick={() => act(() => api.post(`/api/workers/${worker.id}/start`), "Starting")}>
-              <Play className="size-4" />
-            </Button>
-          ) : (
-            <Button variant="ghost" size="icon" className="size-8" disabled={busy} onClick={() => act(() => api.post(`/api/workers/${worker.id}/stop`), "Stopped")}>
-              <Square className="size-4" />
-            </Button>
-          )}
-          <Button variant="ghost" size="icon" className="size-8" disabled={busy} onClick={() => act(() => api.post(`/api/workers/${worker.id}/rebuild`), "Rebuilding")}>
-            <RotateCw className="size-4" />
-          </Button>
-          <Button variant="ghost" size="icon" className="size-8" disabled={busy} onClick={() => confirm("Delete this worker?") && act(() => api.del(`/api/workers/${worker.id}`), "Deleted")}>
-            <Trash2 className="size-4" />
+          <Button size="sm" className="gap-1.5" onClick={() => spawn.mutate()} disabled={spawn.isPending}>
+            <Zap className="h-3.5 w-3.5" /> New workspace
           </Button>
         </div>
       </div>
-      {worker.setupStatus && worker.state !== "ready" && worker.state !== "stopped" && (
-        <SetupTimeline status={worker.setupStatus} />
-      )}
-    </div>
-  )
-}
 
-const PHASE_ORDER = ["initializing", "credentials", "dotfiles", "cloning", "lifecycle", "ready"]
-
-export function SetupTimeline({ status }: { status: SetupStatus }) {
-  const idx = PHASE_ORDER.indexOf(status.phase)
-  return (
-    <div className="mt-3 space-y-1.5">
-      <div className="flex items-center gap-1">
-        {PHASE_ORDER.map((p, i) => (
-          <div
-            key={p}
-            className={`h-1 flex-1 rounded-full ${
-              status.phase === "error" ? "bg-destructive/40" : i <= idx ? "bg-primary" : "bg-border"
-            }`}
-          />
-        ))}
-      </div>
-      <div className="text-xs text-muted-foreground capitalize">
-        {status.phase === "error" ? <span className="text-destructive">Error: {status.error || "setup failed"}</span> : `${status.phase}…`}
-      </div>
-      {status.repos.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {status.repos.map((r) => (
-            <Badge key={r.name} variant={r.state === "done" ? "success" : r.state === "error" ? "destructive" : "muted"}>
-              {r.name}
-            </Badge>
+      {workers.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border">
+          <div className="flex flex-col items-center justify-center py-12 gap-3 text-center">
+            <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center">
+              <Container className="h-5 w-5 text-muted-foreground" />
+            </div>
+            <div>
+              <p className="font-medium text-sm">No workspaces yet</p>
+              <p className="text-sm text-muted-foreground mt-1">Spawn a workspace to get a full dev environment with code-server.</p>
+            </div>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => spawn.mutate()} disabled={spawn.isPending}>
+              <Zap className="h-3.5 w-3.5" /> New workspace
+            </Button>
+          </div>
+        </div>
+      ) : view === "card" ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {workers.map((w) => (
+            <WorkerCard key={w.id} worker={w} projectId={projectId} projectVersion={projectVersion} />
           ))}
         </div>
+      ) : (
+        <WorkerTable workers={workers} projectId={projectId} />
       )}
     </div>
   )
