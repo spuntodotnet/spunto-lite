@@ -17,6 +17,16 @@ cp .env.example .env          # optional — sane defaults work out of the box
 docker compose up -d --build
 ```
 
+Or run the pre-built image straight from GHCR:
+
+```bash
+docker run -d --name spunto-lite -p 80:80 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$HOME/.ssh:/host-ssh:ro" \
+  -v spunto-lite-data:/app/data \
+  ghcr.io/spuntodotnet/spunto-lite:latest
+```
+
 Then open **http://localhost**. Workers appear at
 `http://worker-<id>.localhost` (VS Code) and
 `http://worker-<id>-<port>.localhost` (forwarded ports). `*.localhost` resolves
