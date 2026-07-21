@@ -1,0 +1,25 @@
+services:
+  spunto-lite:
+    build: .
+    container_name: spunto-lite
+    restart: unless-stopped
+    ports:
+      # Port 80 gives clean worker URLs (http://worker-<id>.localhost) with no :port.
+      - "80:80"
+    volumes:
+      # Talk to the host Docker daemon — workers are sibling containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mount the user's SSH keys read-only; injected into workers for git push.
+      - ${HOME}/.ssh:/host-ssh:ro
+      # Persist the SQLite DB.
+      - spunto-lite-data:/app/data
+    environment:
+      BASE_DOMAIN: localhost
+      DATA_DIR: /app/data
+      HOST_SSH_DIR: /host-ssh
+      PORT: 80
+      # Set a strong value to protect stored secrets. Defaults to an insecure dev key.
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-spunto-lite-dev-insecure-key}
+
+volumes:
+  spunto-lite-data:
