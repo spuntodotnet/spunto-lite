@@ -26,6 +26,7 @@ import {
   Plus,
   AlertTriangle,
 } from "lucide-react"
+import { chartColors } from "@spunto/design-system/colors"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import type { Worker, Project, ProjectImageBuild, SetupStatus } from "@/lib/types"
@@ -416,8 +417,8 @@ function StatsChart({ statPoints, memLimitMb, last }: { statPoints: { t: string;
             <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" opacity={0.5} />
             <XAxis dataKey="t" hide />
             <YAxis domain={[0, 100]} tick={{ fontSize: 9, fill: "var(--muted-foreground)" }} tickLine={false} axisLine={false} />
-            <Tooltip contentStyle={TS} itemStyle={{ color: "oklch(0.70 0.20 43)" }} formatter={(v) => [`${Number(v).toFixed(2)}%`, "CPU"]} />
-            <Line type="monotone" dataKey="cpuPercent" stroke="oklch(0.70 0.20 43)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            <Tooltip contentStyle={TS} itemStyle={{ color: chartColors.cpu }} formatter={(v) => [`${Number(v).toFixed(2)}%`, "CPU"]} />
+            <Line type="monotone" dataKey="cpuPercent" stroke={chartColors.cpu} strokeWidth={1.5} dot={false} isAnimationActive={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -432,8 +433,8 @@ function StatsChart({ statPoints, memLimitMb, last }: { statPoints: { t: string;
             <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" opacity={0.5} />
             <XAxis dataKey="t" hide />
             <YAxis domain={[0, Math.max(memLimitMb, 1)]} tick={{ fontSize: 9, fill: "var(--muted-foreground)" }} tickLine={false} axisLine={false} />
-            <Tooltip contentStyle={TS} itemStyle={{ color: "oklch(0.83 0.15 72)" }} formatter={(v) => [`${Number(v).toFixed(1)} MB`, "Memory"]} />
-            <Line type="monotone" dataKey="memUsageMb" stroke="oklch(0.83 0.15 72)" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+            <Tooltip contentStyle={TS} itemStyle={{ color: chartColors.memory }} formatter={(v) => [`${Number(v).toFixed(1)} MB`, "Memory"]} />
+            <Line type="monotone" dataKey="memUsageMb" stroke={chartColors.memory} strokeWidth={1.5} dot={false} isAnimationActive={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>

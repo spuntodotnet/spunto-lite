@@ -5,6 +5,8 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   // better-sqlite3 / dockerode are native/CJS — keep them external to the server bundle.
   serverExternalPackages: ["better-sqlite3", "dockerode", "ws"],
+  // The design system ships raw TS/TSX; Next skips node_modules transpilation by default.
+  transpilePackages: ["@spunto/design-system"],
 }
 
 export default nextConfig
