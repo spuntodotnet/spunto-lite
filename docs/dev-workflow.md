@@ -32,6 +32,11 @@ parle directement au socket Docker local. Persistance SQLite (Drizzle) sous
 | Lint | `npm run lint` |
 | Générer une migration Drizzle | `npm run db:generate` (après avoir édité le schéma) |
 | Stack complète en conteneur | `docker compose up -d --build` (app sur le port **80**) |
+| Stack + navigateur de test | `docker compose --profile browser up -d --build` (ajoute `browser-remote`) |
+
+Pour **tester l'UI toi-même** (Claude), tu disposes des outils MCP `browser_*`
+(navigate / snapshot / click / type / screenshot) — voir la section
+[« Tester l'UI »](#tester-lui-avec-les-outils-browser_-claude) plus bas.
 
 ## 1. Implémenter
 
@@ -55,13 +60,46 @@ Ces trois points ne sont pas optionnels :
 - [ ] **`npm run build`** passe (aucune erreur TypeScript / Next).
 - [ ] **`npm run lint`** passe.
 - [ ] **Smoke test manuel** de ta feature, de bout en bout, sur la stack lancée
-      (`docker compose up -d --build`) — pas un test partiel ni un screenshot
-      d'une itération précédente. Pour une feature UI, joins une **preuve** à la
-      carte (capture ou courte vidéo) ; pour un changement backend, le résultat
-      de la vérification.
+      — pas un test partiel ni un screenshot d'une itération précédente. Pour une
+      feature **UI**, pilote-la vraiment avec les outils `browser_*` (voir la
+      section suivante) et joins une **preuve** à la carte (capture) ; pour un
+      changement **backend**, le résultat de la vérification.
 
 Le worker expose l'app sur le port 80 → le lien « App » du channel de la carte
 pointe dessus (voir `spuntoProjects.ts` côté `automations`).
+
+## Tester l'UI avec les outils `browser_*` (Claude)
+
+Ce repo embarque un **serveur MCP** qui te donne un navigateur pilotable
+directement depuis Claude Code — pas de Playwright ni de script à écrire. Les
+outils sont exposés via [`.mcp.json`](../.mcp.json) (détail :
+[`mcp/README.md`](../mcp/README.md)) :
+
+| Outil | Rôle |
+|---|---|
+| `browser_snapshot` | état de la page + éléments interactifs (chacun un `ref` stable). **À appeler avant de cliquer/saisir.** |
+| `browser_navigate` | aller à une URL |
+| `browser_click` | cliquer par `ref` (recommandé) / `text` / `x,y` |
+| `browser_type` | saisir dans un champ, `submit:true` presse Entrée |
+| `browser_screenshot` | capture PNG (pour la preuve à joindre à la carte) |
+
+Déroulé type pour vérifier une feature UI :
+
+1. Lancer la stack **avec le navigateur** :
+   `docker compose --profile browser up -d --build`.
+   (Le service `browser-remote` est lancé à la demande — image ~1,4 Go, pas au
+   boot.)
+2. `browser_navigate` vers **`http://spunto-lite`** — le navigateur atteint
+   l'app par son nom de service sur le réseau compose (pas `localhost`, qui
+   depuis le conteneur navigateur ne pointerait pas sur l'app).
+3. `browser_snapshot` pour lire la page et récupérer les `ref`, puis
+   `browser_click` / `browser_type` pour reproduire le parcours de ta feature.
+4. `browser_screenshot` sur l'état final → joins l'image à la carte Notion
+   comme preuve de test.
+
+Si les outils `browser_*` n'apparaissent pas : c'est que les dépendances du
+serveur MCP ne sont pas encore installées — un `npm install` puis relancer la
+session Claude suffit (voir dépannage dans [`mcp/README.md`](../mcp/README.md)).
 
 ## 3. Faire avancer la carte + ouvrir la PR
 

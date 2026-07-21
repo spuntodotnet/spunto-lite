@@ -21,5 +21,21 @@ services:
       # Set a strong value to protect stored secrets. Defaults to an insecure dev key.
       DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-spunto-lite-dev-insecure-key}
 
+  # Navigateur pilotable pour tester l'UI de bout en bout (humain ou agent
+  # Claude via le serveur MCP `mcp/server.js`, voir `.mcp.json` + `mcp/README.md`).
+  # Sur le réseau compose par défaut : il atteint l'app à `http://spunto-lite`.
+  # Lancé À LA DEMANDE (image ~1,4 Go, pas au boot) via le profil `browser` :
+  #   docker compose --profile browser up -d --build
+  browser-remote:
+    image: ghcr.io/spuntodotnet/browser-remote:latest
+    restart: unless-stopped
+    profiles:
+      - browser
+    ports:
+      # Publié pour que le serveur MCP (côté hôte/worker) l'atteigne en localhost.
+      - "3005:3000"
+    environment:
+      ACTIVATE_STEALTH_PLUGIN: "true"
+
 volumes:
   spunto-lite-data:
