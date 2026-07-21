@@ -232,18 +232,21 @@ export async function getContainerStats(containerId: string) {
   } | null
   if (!raw) return null
   const r = raw
+  // Coerce to finite numbers — some daemons (cgroup v2, Docker Desktop VM) omit
+  // memory_stats fields, which would otherwise yield NaN → serialized as null.
+  const n = (x: number) => (Number.isFinite(x) ? x : 0)
   const cpuDelta = r.cpu_stats.cpu_usage.total_usage - r.precpu_stats.cpu_usage.total_usage
   const systemDelta = r.cpu_stats.system_cpu_usage - r.precpu_stats.system_cpu_usage
   const numCPUs = r.cpu_stats.online_cpus ?? r.cpu_stats.cpu_usage.percpu_usage?.length ?? 1
   const cpuPercent = systemDelta > 0 ? (cpuDelta / systemDelta) * numCPUs * 100 : 0
   const cache = r.memory_stats.stats?.inactive_file ?? r.memory_stats.stats?.cache ?? 0
-  const memUsage = r.memory_stats.usage - cache
-  const memLimit = r.memory_stats.limit
+  const memUsage = Math.max(0, (r.memory_stats.usage ?? 0) - cache)
+  const memLimit = r.memory_stats.limit ?? 0
   return {
-    cpuPercent: Math.round(cpuPercent * 100) / 100,
-    memUsageMb: Math.round((memUsage / 1024 / 1024) * 100) / 100,
-    memLimitMb: Math.round((memLimit / 1024 / 1024) * 100) / 100,
-    memPercent: memLimit > 0 ? Math.round((memUsage / memLimit) * 10000) / 100 : 0,
+    cpuPercent: n(Math.round(cpuPercent * 100) / 100),
+    memUsageMb: n(Math.round((memUsage / 1024 / 1024) * 100) / 100),
+    memLimitMb: n(Math.round((memLimit / 1024 / 1024) * 100) / 100),
+    memPercent: memLimit > 0 ? n(Math.round((memUsage / memLimit) * 10000) / 100) : 0,
   }
 }
 

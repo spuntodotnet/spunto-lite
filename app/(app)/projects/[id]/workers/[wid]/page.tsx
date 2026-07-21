@@ -409,7 +409,7 @@ function StatsChart({ statPoints, memLimitMb, last }: { statPoints: { t: string;
         <div className="flex items-center gap-1.5 mb-2">
           <Cpu className="h-3 w-3 text-primary" />
           <span className="text-xs text-muted-foreground font-mono">CPU %</span>
-          <span className="ml-auto text-xs font-mono text-foreground/80 tabular-nums">{last.cpuPercent.toFixed(1)}%</span>
+          <span className="ml-auto text-xs font-mono text-foreground/80 tabular-nums">{(last.cpuPercent ?? 0).toFixed(1)}%</span>
         </div>
         <ResponsiveContainer width="100%" height={90}>
           <LineChart data={statPoints} margin={{ top: 2, right: 4, bottom: 0, left: -20 }}>
@@ -425,7 +425,7 @@ function StatsChart({ statPoints, memLimitMb, last }: { statPoints: { t: string;
         <div className="flex items-center gap-1.5 mb-2">
           <MemoryStick className="h-3 w-3 text-build" />
           <span className="text-xs text-muted-foreground font-mono">Memory MB</span>
-          <span className="ml-auto text-xs font-mono text-foreground/80 tabular-nums">{last.memUsageMb.toFixed(0)} MB</span>
+          <span className="ml-auto text-xs font-mono text-foreground/80 tabular-nums">{(last.memUsageMb ?? 0).toFixed(0)} MB</span>
         </div>
         <ResponsiveContainer width="100%" height={90}>
           <LineChart data={statPoints} margin={{ top: 2, right: 4, bottom: 0, left: -20 }}>

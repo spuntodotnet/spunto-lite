@@ -145,7 +145,7 @@ export function ResourceBars({ stats, compact = false }: { stats: Stats; compact
             <Cpu className="h-3 w-3" /> CPU
           </span>
           <span className={cn("text-[11px] font-mono tabular-nums", stats.cpuPercent > 80 ? "text-orange-400" : "text-foreground/70")}>
-            {stats.cpuPercent.toFixed(1)}%
+            {(stats.cpuPercent ?? 0).toFixed(1)}%
           </span>
         </div>
         <div className="h-1 rounded-full bg-muted overflow-hidden">
