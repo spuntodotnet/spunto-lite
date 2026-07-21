@@ -136,7 +136,13 @@ export async function startContainer(containerId: string): Promise<void> {
   await docker.getContainer(containerId).start()
 }
 
-export async function removeWorker(workerId: string, containerId: string | null): Promise<void> {
+/**
+ * Removes the container and its network, but KEEPS the named volumes
+ * (`mp-worker-<id>-{workspace,docker,containerd}`). Used by rebuild: the
+ * `/workspace` volume survives so the idempotent clone guard in the setup
+ * script skips re-cloning and preserves the user's working tree.
+ */
+export async function removeContainerOnly(workerId: string, containerId: string | null): Promise<void> {
   if (containerId) {
     try {
       const container = docker.getContainer(containerId)
@@ -147,11 +153,6 @@ export async function removeWorker(workerId: string, containerId: string | null)
     } catch (err: unknown) {
       if ((err as { statusCode?: number }).statusCode !== 404) throw err
     }
-  }
-  for (const suffix of ["workspace", "docker", "containerd"]) {
-    try {
-      await docker.getVolume(`mp-worker-${workerId}-${suffix}`).remove()
-    } catch {}
   }
   const network = workerNetworkName(workerId)
   try {
@@ -164,6 +165,16 @@ export async function removeWorker(workerId: string, containerId: string | null)
       await docker.getNetwork(net.Id).remove()
     }
   } catch {}
+}
+
+/** Removes the container + network AND all associated volumes. Used by delete. */
+export async function removeWorker(workerId: string, containerId: string | null): Promise<void> {
+  await removeContainerOnly(workerId, containerId)
+  for (const suffix of ["workspace", "docker", "containerd"]) {
+    try {
+      await docker.getVolume(`mp-worker-${workerId}-${suffix}`).remove()
+    } catch {}
+  }
 }
 
 export async function getContainerState(containerId: string): Promise<"running" | "stopped" | "not_found" | "error"> {

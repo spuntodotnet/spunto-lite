@@ -15,6 +15,7 @@ import {
   stopContainer,
   startContainer,
   removeWorker as removeWorkerContainer,
+  removeContainerOnly,
   getContainerState,
   getSetupStatus,
   buildProjectImage,
@@ -282,13 +283,18 @@ export async function deleteWorker(id: string): Promise<void> {
   db.delete(workers).where(eq(workers.id, id)).run()
 }
 
-/** Removes the container (and volumes) and respawns against the project's current version. */
+/**
+ * Removes the container but KEEPS the workspace volume, then respawns against
+ * the project's current version. The `/workspace` volume (git clone, uncommitted
+ * work) survives; the setup script's idempotent clone guard skips re-cloning.
+ * Use `deleteWorker` to also wipe the volumes.
+ */
 export async function rebuildWorker(id: string): Promise<Worker | undefined> {
   const w = getWorkerRow(id)
   if (!w) return undefined
   const project = getProjectRow(w.projectId)
   if (!project) return undefined
-  await removeWorkerContainer(w.id, w.containerId).catch(() => {})
+  await removeContainerOnly(w.id, w.containerId).catch(() => {})
   db.update(workers)
     .set({ containerId: null, state: "pending", projectVersion: project.currentVersion, setupStatus: { phase: "pending", repos: [], postCreate: null, postStart: null } })
     .where(eq(workers.id, id))
