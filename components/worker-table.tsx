@@ -1,13 +1,15 @@
 "use client"
 
 import Link from "next/link"
-import { useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { Clock, Code2, ChevronRight } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { api } from "@/lib/api"
 import { buttonVariants } from "@/components/ui/button"
+import { Tooltip } from "@/components/ui/tooltip"
 import { workerBaseUrl } from "@/lib/worker-url"
 import type { Worker } from "@/lib/types"
-import { cfgFor, isSettingUp, phaseLabel, setupProgress, formatRelativeTime, useWorkerMutations } from "@/components/worker-card"
+import { cfgFor, isSettingUp, phaseLabel, setupProgress, formatRelativeTime, GitStatusSummary, type GitStatus } from "@/components/worker-card"
 
 function StatusCell({ worker }: { worker: Worker }) {
   const settingUp = isSettingUp(worker.state)
@@ -26,15 +28,21 @@ function StatusCell({ worker }: { worker: Worker }) {
 }
 
 function RowActions({ worker, projectId }: { worker: Worker; projectId: string }) {
-  const qc = useQueryClient()
   const running = worker.state === "ready"
-  void qc
+  const { data: gitStatus = [] } = useQuery({
+    queryKey: ["git-status", worker.id],
+    queryFn: () => api.get<GitStatus[]>(`/api/workers/${worker.id}/git-status`),
+    enabled: running,
+    refetchInterval: running ? 10000 : false,
+  })
   return (
     <div className="flex items-center justify-end gap-1">
       {running && (
-        <a href={workerBaseUrl(worker.id)} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "outline", size: "sm" }), "h-7 text-xs gap-1")}>
-          <Code2 className="h-3 w-3" /> Open
-        </a>
+        <Tooltip content={gitStatus.length > 0 ? <GitStatusSummary gitStatus={gitStatus} /> : null} side="top">
+          <a href={workerBaseUrl(worker.id)} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "outline", size: "sm" }), "h-7 text-xs gap-1")}>
+            <Code2 className="h-3 w-3" /> Open
+          </a>
+        </Tooltip>
       )}
       <Link href={`/projects/${projectId}/workers/${worker.id}`} className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "h-7 text-xs text-muted-foreground gap-1")}>
         View <ChevronRight className="h-3 w-3" />

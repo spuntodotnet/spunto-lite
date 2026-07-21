@@ -26,6 +26,7 @@ import {
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import { buttonVariants } from "@/components/ui/button"
+import { Tooltip } from "@/components/ui/tooltip"
 import { workerBaseUrl } from "@/lib/worker-url"
 import type { Worker, SetupStatus } from "@/lib/types"
 
@@ -269,7 +270,30 @@ function ActionsMenu({ worker, projectId }: { worker: Worker; projectId: string 
 
 // ─── WorkerCard ──────────────────────────────────────────────────────────────
 
-type GitStatus = { path: string; branch: string; modified: number; ahead: number; behind: number }
+export type GitStatus = { path: string; branch: string; modified: number; ahead: number; behind: number }
+
+function repoLabel(path: string) {
+  return path.replace("/workspace/", "")
+}
+
+/** Per-repo git state (branch + modified/ahead/behind) — used in the VS Code tooltip. */
+export function GitStatusSummary({ gitStatus }: { gitStatus: GitStatus[] }) {
+  if (gitStatus.length === 0) return <span className="text-muted-foreground">No repositories</span>
+  return (
+    <div className="flex flex-col gap-1 text-left">
+      {gitStatus.map((repo) => (
+        <div key={repo.path} className="flex items-center gap-1.5 font-mono text-[11px]">
+          <span className="font-medium text-foreground/80">{repoLabel(repo.path)}</span>
+          <GitBranch className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
+          <span className="text-muted-foreground">{repo.branch || "—"}</span>
+          {repo.modified > 0 && <span className="text-amber-500 dark:text-amber-400">+{repo.modified}</span>}
+          {repo.ahead > 0 && <span className="text-primary">↑{repo.ahead}</span>}
+          {repo.behind > 0 && <span className="text-orange-400">↓{repo.behind}</span>}
+        </div>
+      ))}
+    </div>
+  )
+}
 
 export function WorkerCard({
   worker,
@@ -348,17 +372,26 @@ export function WorkerCard({
         </div>
       )}
 
-      {/* Git branch chips */}
+      {/* Git branch chips — clickable, each opens VS Code on that repo folder */}
       {running && gitStatus.length > 0 && (
         <div className="px-4 pb-3 flex flex-wrap gap-1.5">
           {gitStatus.map((repo) => (
-            <span key={repo.path} className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground font-mono">
-              <span className="font-medium text-foreground/70">{repo.path.replace("/workspace/", "")}</span>
+            <a
+              key={repo.path}
+              href={workerBaseUrl(worker.id, { folder: repo.path })}
+              target="_blank"
+              rel="noreferrer"
+              title={`Open ${repoLabel(repo.path)} in VS Code`}
+              className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground font-mono transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-foreground"
+            >
+              <span className="font-medium text-foreground/70">{repoLabel(repo.path)}</span>
               <span className="text-muted-foreground/40 mx-0.5">·</span>
               <GitBranch className="h-2.5 w-2.5 shrink-0" />
               <span className="truncate max-w-[120px]">{repo.branch || "—"}</span>
               {repo.modified > 0 && <span className="text-amber-500 dark:text-amber-400 ml-0.5">+{repo.modified}</span>}
-            </span>
+              {repo.ahead > 0 && <span className="text-primary ml-0.5">↑{repo.ahead}</span>}
+              {repo.behind > 0 && <span className="text-orange-400 ml-0.5">↓{repo.behind}</span>}
+            </a>
           ))}
         </div>
       )}
@@ -369,9 +402,11 @@ export function WorkerCard({
           View <ChevronRight className="h-3.5 w-3.5" />
         </Link>
         {running && (
-          <a href={workerBaseUrl(worker.id)} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "outline", size: "sm" }), "h-7 text-xs gap-1.5")}>
-            <Code2 className="h-3.5 w-3.5" /> VS Code
-          </a>
+          <Tooltip content={gitStatus.length > 0 ? <GitStatusSummary gitStatus={gitStatus} /> : null} side="top">
+            <a href={workerBaseUrl(worker.id)} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "outline", size: "sm" }), "h-7 text-xs gap-1.5")}>
+              <Code2 className="h-3.5 w-3.5" /> VS Code
+            </a>
+          </Tooltip>
         )}
       </div>
     </div>
