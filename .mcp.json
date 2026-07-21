@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "browser": {
+      "command": "node",
+      "args": ["mcp/server.js"],
+      "env": {
+        "BROWSER_REMOTE_URL": "http://localhost:3005"
+      }
+    }
+  }
+}
