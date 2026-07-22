@@ -290,10 +290,65 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
     push(`chown -R ${username}:${username} ${homeDir}/.ssh`)
   }
 
-  // ── 2b. Dotfiles (Codespaces-style) ──
-  // Runs after credentials (so ~/.ssh/mp_user_key is ready for private clones) and
-  // before repo cloning — same order as the SetupStatus enum. Everything is best-effort
-  // (clone/install failures are logged, never fatal) and guarded by a first-boot marker.
+  // ── 2b. Shell setup ──
+  // Runs BEFORE dotfiles (same order as spunto/apps/api) so a user's dotfiles
+  // layer on top of the Spunto base: oh-my-zsh + theme + aliases + auto-cd. At this
+  // point the home is fresh (no .zshrc yet), so oh-my-zsh drops its default and we
+  // apply our tweaks unconditionally; the dotfiles step then appends or overrides.
+  const landInWorkspace = [
+    ``,
+    `if [ "$PWD" = "$HOME" ] && [ -d /workspace ]; then`,
+    `  __mp_dirs=$(find /workspace -mindepth 1 -maxdepth 1 -type d -not -name '.*' 2>/dev/null)`,
+    `  __mp_n=$(printf '%s\\n' "$__mp_dirs" | grep -c .)`,
+    `  if [ "$__mp_n" = 1 ]; then cd "$__mp_dirs" 2>/dev/null; else cd /workspace 2>/dev/null; fi`,
+    `  unset __mp_dirs __mp_n`,
+    `fi`,
+  ].join("\n")
+
+  const bashrcSnippet = [
+    ``,
+    `__mp_ps1_git() { local b; b=$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null) || return; printf ' \\e[0;33m(%s)\\e[0m' "$b"; }`,
+    `PS1='\\n\\[\\e[0;2m\\]\\u@\\h\\[\\e[0m\\] \\[\\e[1;34m\\]\\w\\[\\e[0m\\]$(__mp_ps1_git)\\n\\[\\e[1;32m\\]❯\\[\\e[0m\\] '`,
+    `alias ll='ls -lah --color=auto'`,
+    `alias gs='git status'`,
+    `alias gd='git diff'`,
+    `alias gl='git log --oneline --graph --decorate -20'`,
+    landInWorkspace,
+  ].join("\n")
+
+  // zsh gets its own alias block (oh-my-zsh already provides the theme/prompt).
+  const zshrcAliasSnippet = [
+    ``,
+    `setopt NO_BANG_HIST`,
+    `alias ll='ls -lah --color=auto'`,
+    `alias gs='git status'`,
+    `alias gd='git diff'`,
+    `alias gl='git log --oneline --graph --decorate -20'`,
+    landInWorkspace,
+  ].join("\n")
+
+  push(...banner("SETUP: SHELL"))
+  push(
+    `echo ${JSON.stringify(Buffer.from(bashrcSnippet).toString("base64"))} | base64 -d >> ${homeDir}/.bashrc`,
+    `if command -v zsh >/dev/null 2>&1; then`,
+    `  if [ ! -d "${homeDir}/.oh-my-zsh" ]; then`,
+    `    _OMZ_TMP=$(mktemp)`,
+    `    curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o "$_OMZ_TMP" 2>&1 || true`,
+    `    chmod 644 "$_OMZ_TMP"`,
+    `    su ${username} -c "HOME=${homeDir} RUNZSH=no CHSH=no KEEP_ZSHRC=no bash $_OMZ_TMP" 2>&1 || true`,
+    `    rm -f "$_OMZ_TMP"`,
+    `  fi`,
+    `  sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="af-magic"/' ${homeDir}/.zshrc 2>/dev/null || true`,
+    `  echo ${JSON.stringify(Buffer.from(zshrcAliasSnippet).toString("base64"))} | base64 -d >> ${homeDir}/.zshrc`,
+    `fi`,
+    `echo ${JSON.stringify(Buffer.from(landInWorkspace).toString("base64"))} | base64 -d >> ${homeDir}/.profile`,
+  )
+
+  // ── 2c. Dotfiles (Codespaces-style) ──
+  // Runs after the shell base (so dotfiles layer on top of it) and after credentials
+  // (so ~/.ssh/mp_user_key is ready for private clones), before repo cloning.
+  // Everything is best-effort (clone/install failures are logged, never fatal) and
+  // guarded by a first-boot marker.
   if (dotfilesRepo && dotfilesRepo.trim()) {
     const url = normalizeDotfilesUrl(dotfilesRepo)
     const sshPrefix = userSshPrivateKey
@@ -346,53 +401,6 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
       `fi`,
     )
   }
-
-  // ── 3. Shell setup ──
-  const landInWorkspace = [
-    ``,
-    `if [ "$PWD" = "$HOME" ] && [ -d /workspace ]; then`,
-    `  __mp_dirs=$(find /workspace -mindepth 1 -maxdepth 1 -type d -not -name '.*' 2>/dev/null)`,
-    `  __mp_n=$(printf '%s\\n' "$__mp_dirs" | grep -c .)`,
-    `  if [ "$__mp_n" = 1 ]; then cd "$__mp_dirs" 2>/dev/null; else cd /workspace 2>/dev/null; fi`,
-    `  unset __mp_dirs __mp_n`,
-    `fi`,
-  ].join("\n")
-
-  const bashrcSnippet = [
-    ``,
-    `__mp_ps1_git() { local b; b=$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null) || return; printf ' \\e[0;33m(%s)\\e[0m' "$b"; }`,
-    `PS1='\\n\\[\\e[0;2m\\]\\u@\\h\\[\\e[0m\\] \\[\\e[1;34m\\]\\w\\[\\e[0m\\]$(__mp_ps1_git)\\n\\[\\e[1;32m\\]❯\\[\\e[0m\\] '`,
-    `alias ll='ls -lah --color=auto'`,
-    `alias gs='git status'`,
-    `alias gd='git diff'`,
-    `alias gl='git log --oneline --graph --decorate -20'`,
-    landInWorkspace,
-  ].join("\n")
-
-  push(...banner("SETUP: SHELL"))
-  push(
-    `echo ${JSON.stringify(Buffer.from(bashrcSnippet).toString("base64"))} | base64 -d >> ${homeDir}/.bashrc`,
-    `if command -v zsh >/dev/null 2>&1; then`,
-    `  # Dotfiles run before this step and may install their own .zshrc (possibly as a`,
-    `  # symlink). Preserve it: detect it first, install oh-my-zsh with KEEP_ZSHRC=yes`,
-    `  # (keeps an existing .zshrc, still drops a sane default when there is none), and`,
-    `  # only apply our theme / auto-cd tweaks when we generated that default — never`,
-    `  # clobber a dotfiles-provided .zshrc.`,
-    `  _mp_dotfiles_zshrc=0; { [ -f "${homeDir}/.zshrc" ] || [ -h "${homeDir}/.zshrc" ]; } && _mp_dotfiles_zshrc=1`,
-    `  if [ ! -d "${homeDir}/.oh-my-zsh" ]; then`,
-    `    _OMZ_TMP=$(mktemp)`,
-    `    curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o "$_OMZ_TMP" 2>&1 || true`,
-    `    chmod 644 "$_OMZ_TMP"`,
-    `    su ${username} -c "HOME=${homeDir} RUNZSH=no CHSH=no KEEP_ZSHRC=yes bash $_OMZ_TMP" 2>&1 || true`,
-    `    rm -f "$_OMZ_TMP"`,
-    `  fi`,
-    `  if [ "$_mp_dotfiles_zshrc" = 0 ]; then`,
-    `    sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="af-magic"/' ${homeDir}/.zshrc 2>/dev/null || true`,
-    `    echo ${JSON.stringify(Buffer.from(landInWorkspace).toString("base64"))} | base64 -d >> ${homeDir}/.zshrc`,
-    `  fi`,
-    `fi`,
-    `echo ${JSON.stringify(Buffer.from(landInWorkspace).toString("base64"))} | base64 -d >> ${homeDir}/.profile`,
-  )
 
   // ── 4. Clone repos ──
   if (project.repositories.length > 0) push(...banner(`SETUP: CLONE REPOSITORIES (${project.repositories.length})`))
