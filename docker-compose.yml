@@ -35,11 +35,36 @@ services:
     restart: unless-stopped
     profiles:
       - browser
+      - test
     ports:
       # Publié pour que le serveur MCP (côté hôte/worker) l'atteigne en localhost.
       - "3005:3000"
     environment:
       ACTIVATE_STEALTH_PLUGIN: "true"
+
+  # E2E runner (Playwright) on the compose network, so both its Node `request` fixture and the
+  # CDP-driven browser reach the app at the same URL (http://spunto-lite). Runs the browser
+  # suite against browser-remote's shared Chrome over CDP — no bundled Playwright browsers.
+  # Launched on demand:  docker compose --profile test run --rm e2e
+  # (add `--project=api` / `--project=browser` to scope). Requires the `browser-remote` service,
+  # which `--profile test` also brings up.
+  e2e:
+    image: node:24-bookworm-slim
+    profiles:
+      - test
+    working_dir: /work/e2e
+    depends_on:
+      - spunto-lite
+      - browser-remote
+    volumes:
+      - ./:/work
+    environment:
+      E2E_BASE_URL: http://spunto-lite
+      CDP_ENDPOINT: http://browser-remote:3000
+      CI: "true"
+    # `npm ci` then run the suite. The browser project connects over CDP; the api project is
+    # pure HTTP — neither downloads a browser.
+    command: sh -c "npm ci && npx playwright test"
 
 volumes:
   spunto-lite-data:

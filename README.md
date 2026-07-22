@@ -54,3 +54,20 @@ npm install
 npm run db:generate     # regenerate SQL migrations after schema changes
 PORT=3900 npm run dev    # run the control plane directly (needs a reachable Docker socket)
 ```
+
+## Testing
+
+End-to-end tests live in [`e2e/`](e2e/README.md) — a [Playwright](https://playwright.dev)
+suite split into an HTTP-only **API** project and a **browser** project (driving
+[`browser-remote`](https://github.com/spuntodotnet/browser-remote)'s Chrome over CDP, or a local
+Chromium). No auth to set up (the control plane is open); SQLite means no DB service either.
+
+```bash
+# fast API suite — boot the app, then run the `api` project
+PORT=3900 DATA_DIR=./.e2e-data npm run dev
+cd e2e && npm install && E2E_BASE_URL=http://localhost:3900 npm run test:api
+```
+
+CI runs the API suite on every PR (`.github/workflows/e2e-api.yml`). See `e2e/README.md` for the
+browser suite, the compose `test` profile (browser-remote/CDP), and the opt-in worker-lifecycle
+project.

@@ -7,9 +7,12 @@
 > implémenter, tester, faire avancer la carte, ouvrir la PR — c'est **toi**,
 > l'agent, qui le pilotes en suivant ce fichier.
 >
-> Le repo est encore jeune : pas de suite de tests automatisée. La vérification
-> attendue est donc **`build` + `lint` verts + un smoke test manuel** de ce que
-> tu as changé (stub, à étoffer quand une vraie suite existera).
+> Vérification attendue : **`build` + `lint` verts**, plus la **suite e2e** quand
+> ton changement touche l'API ou l'UI. La suite vit dans [`e2e/`](../e2e/README.md)
+> (Playwright — projet `api` HTTP-only + projet `browser` pilotant `browser-remote`
+> via CDP). Rapide : booter l'app (`PORT=3900 DATA_DIR=./.e2e-data npm run dev`) puis
+> `cd e2e && E2E_BASE_URL=http://localhost:3900 npm run test:api`. Voir
+> `e2e/README.md` pour le suite navigateur et le cycle de vie worker.
 
 ## Contexte de départ (déjà en place quand tu démarres)
 
