@@ -12,6 +12,11 @@
 > verts + un smoke test réel** de ce que tu as changé, avec **une preuve attachée
 > à la carte**. (Ce fichier suit le modèle du `docs/dev-workflow.md` de
 > `coderhammer/spunto`, adapté à l'outillage réellement disponible ici.)
+>
+> Deux helpers sous [`scripts/`](../scripts/) — portés de spunto, sans aucune
+> dépendance (Node ≥ 18, `$NOTION_TOKEN` suffit) — automatisent le handoff :
+> `notion-comment.mjs` (commentaire riche, § 5) et `notion-attach-image.mjs`
+> (preuve image, § 3). Les deux ont un `--dry-run`.
 
 ## ✅ Check-list avant de passer la carte en `to be tested`
 
@@ -139,32 +144,21 @@ d'enregistrement vidéo (spunto a un script `ffmpeg` dédié, pas ce repo) : la
 preuve d'une feature UI est **la capture `browser_screenshot`** de l'état final
 du parcours, attachée **directement à la carte Notion** comme bloc image.
 
-Le PNG produit par `browser_screenshot` est un fichier sur le worker ; attache-le
-via l'**API File Upload de Notion** (marche avec `$NOTION_TOKEN`, limite 5 Mo —
-une capture fait quelques dizaines/centaines de Ko). Flux en 3 étapes :
+Le PNG produit par `browser_screenshot` est un fichier sur le worker.
+Attache-le avec le helper **[`scripts/notion-attach-image.mjs`](../scripts/notion-attach-image.mjs)**
+(il fait à ta place les 3 étapes de l'API File Upload de Notion : créer le
+`file_upload`, envoyer les octets, ajouter un bloc image au corps de la carte) :
 
 ```bash
-PNG=chemin/vers/capture.png   # le fichier produit par browser_screenshot
-
-# 1) créer le file_upload → récupère {id, upload_url}
-CREATE=$(curl -s -X POST -H "Authorization: Bearer $NOTION_TOKEN" -H "Notion-Version: 2022-06-28" -H "Content-Type: application/json" \
-  -d '{"filename":"preuve.png","content_type":"image/png"}' "https://api.notion.com/v1/file_uploads")
-FID=$(echo "$CREATE" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
-UPLOAD_URL=$(echo "$CREATE" | python3 -c 'import sys,json;print(json.load(sys.stdin)["upload_url"])')
-
-# 2) envoyer les octets (multipart, champ `file`) → status "uploaded"
-curl -s -X POST "$UPLOAD_URL" -H "Authorization: Bearer $NOTION_TOKEN" -H "Notion-Version: 2022-06-28" \
-  -F "file=@$PNG;type=image/png" >/dev/null
-
-# 3) référencer le file_upload dans un bloc image ajouté au corps de la carte
-curl -s -X PATCH -H "Authorization: Bearer $NOTION_TOKEN" -H "Notion-Version: 2022-06-28" -H "Content-Type: application/json" \
-  -d "{\"children\":[{\"object\":\"block\",\"type\":\"image\",\"image\":{\"type\":\"file_upload\",\"file_upload\":{\"id\":\"$FID\"}}}]}" \
-  "https://api.notion.com/v1/blocks/$NOTION_PAGE_ID/children"
+node scripts/notion-attach-image.mjs "$NOTION_PAGE_ID" capture.png --caption "Parcours X après ma feature"
+node scripts/notion-attach-image.mjs "$NOTION_PAGE_ID" capture.png --dry-run   # n'envoie rien, imprime ce qui serait fait
 ```
 
-Le fichier est ensuite hébergé **de façon permanente** par Notion. Dans le
-commentaire de handoff (§ 5), signale simplement que la capture est attachée à la
-carte (elle est dans le corps de la page, pas besoin de lien).
+`$NOTION_TOKEN` suffit (limite Notion : 5 Mo/fichier — une capture fait quelques
+dizaines/centaines de Ko). Le fichier est ensuite hébergé **de façon permanente**
+par Notion. Dans le commentaire de handoff (§ 5), signale simplement que la
+capture est attachée à la carte (elle est dans le corps de la page, pas besoin de
+lien).
 
 Pour un changement **backend/infra** sans surface visuelle, la preuve est le
 **résultat des vérifications** (`npm run build` / `npm run lint` / smoke test),
@@ -239,21 +233,33 @@ commentaire + récap. Non → rien.
 
 ## 5. Commentaire Notion de handoff — format riche
 
-### (a) Format — l'API commentaires de Notion
+### (a) Format — helper `notion-comment.mjs`
 
-**Il n'y a pas de helper `notion-comment.mjs` dans ce repo** (contrairement à
-spunto) : on poste via l'API commentaires brute.
+L'API `POST /v1/comments` de Notion ne prend pas du markdown mais un tableau
+`rich_text[]` de segments typés (gras/italique via `annotations`, lien via
+`text.link.url` en objet). **Ne ré-encode pas ce format à la main** : le helper
+**[`scripts/notion-comment.mjs`](../scripts/notion-comment.mjs)** (porté de
+spunto) construit le tableau à partir d'un markup lisible
+(`**gras**`, `*italique*`, `[texte](url)`, sauts de ligne, emoji) et poste sur la
+carte :
 
-- `POST /v1/comments` prend `{"parent": {"page_id": "…"}, "rich_text": [ … ]}` où
-  `rich_text` est un tableau de segments typés.
-- Segment texte simple : `{"type": "text", "text": {"content": "…"}}`.
-- Gras / italique : via `annotations` (`{"annotations": {"bold": true}}`).
-- Lien : `{"type": "text", "text": {"content": "…", "link": {"url": "https://…"}}}`
-  — l'URL est un **objet** `link: {url}`.
-- Sauts de ligne : `\n` dans `content`. Les emoji passent tels quels et
-  structurent visuellement.
+```bash
+# écris le message (avec le markup) dans un fichier, puis :
+node scripts/notion-comment.mjs "$NOTION_PAGE_ID" --file handoff.txt
+node scripts/notion-comment.mjs "$NOTION_PAGE_ID" --file handoff.txt --dry-run  # imprime le JSON sans poster
+cat handoff.txt | node scripts/notion-comment.mjs "$NOTION_PAGE_ID"             # ou via stdin
+```
 
-Exemple minimal (POST `/v1/comments`) :
+Seul ce markup est rendu cliquable ; une URL nue reste du texte simple. Écris
+donc les liens en `[libellé](url)` avec un **libellé humain**
+(`[spunto-lite#97](…/pull/97)`, `[Carte Notion](…)`).
+
+<details><summary>Repli : l'API brute (si le helper n'est pas dispo)</summary>
+
+`POST /v1/comments` avec `{"parent": {"page_id": "…"}, "rich_text": [ … ]}` où
+chaque segment est `{"type":"text","text":{"content":"…"}}` (gras via
+`annotations`, lien via `text.link.url` **objet**, saut de ligne = segment
+`"\n"`). Exemple :
 
 ```bash
 curl -s -X POST -H "Authorization: Bearer $NOTION_TOKEN" -H "Notion-Version: 2022-06-28" -H "Content-Type: application/json" \
@@ -268,6 +274,8 @@ curl -s -X POST -H "Authorization: Bearer $NOTION_TOKEN" -H "Notion-Version: 202
   }' \
   "https://api.notion.com/v1/comments"
 ```
+
+</details>
 
 #### Format des liens : identique en Notion et dans le récap Mattermost
 
