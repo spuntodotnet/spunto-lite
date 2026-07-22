@@ -283,6 +283,11 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
       `echo ${JSON.stringify(Buffer.from(sshConfig).toString("base64"))} | base64 -d > ${homeDir}/.ssh/config`,
       `chmod 600 ${homeDir}/.ssh/config`,
     )
+    // These files are created here as root; the final home chown only runs at the
+    // very end of setup. The dotfiles step (and postCreate) run as `vscode` before
+    // that, so hand ~/.ssh to vscode now — otherwise it can't read the keys and any
+    // git-over-SSH performed as the user fails with "identity file not accessible".
+    push(`chown -R ${username}:${username} ${homeDir}/.ssh`)
   }
 
   // ── 2b. Dotfiles (Codespaces-style) ──
