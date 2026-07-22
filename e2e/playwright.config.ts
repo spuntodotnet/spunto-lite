@@ -32,7 +32,7 @@ export default defineConfig({
     // Fast HTTP-only API suite — no browser, no Docker. Excludes the browser + worker specs.
     {
       name: "api",
-      testIgnore: [/worker-lifecycle\.spec\.ts/, /landing\.spec\.ts/, /projects-ui\.spec\.ts/],
+      testIgnore: [/worker-lifecycle\.spec\.ts/, /[\\/]feature-[^\\/]*\.spec\.ts$/, /landing\.spec\.ts/, /projects-ui\.spec\.ts/],
     },
     // Browser suite. Drives Chrome — locally a bundled Chromium, or (with CDP_ENDPOINT set)
     // browser-remote's shared Chrome over CDP. fullyParallel:false keeps each spec on one worker
@@ -47,13 +47,14 @@ export default defineConfig({
         deviceScaleFactor: 2,
       },
     },
-    // Real Docker worker lifecycle (spawn container → ready → stop → delete). Opt-in via
-    // E2E_DOCKER=1 (needs a reachable Docker socket + pulls a large devcontainer image on first
-    // run). Self-skips otherwise. Not run in CI.
+    // Real Docker worker lifecycle (spawn container → ready → stop → delete) and feature-conflict
+    // repros (feature-*.spec.ts — e.g. docker-in-docker + claude-code on node:24). Opt-in via
+    // E2E_DOCKER=1 (needs a reachable Docker socket + the `docker` CLI on the runner + pulls large
+    // images on first run). Self-skips otherwise. Not run in CI.
     {
       name: "worker-lifecycle",
-      testMatch: /worker-lifecycle\.spec\.ts/,
-      // First worker of a fresh project builds/pulls a devcontainer image (~2-5 min).
+      testMatch: [/worker-lifecycle\.spec\.ts/, /[\\/]feature-[^\\/]*\.spec\.ts$/],
+      // First worker of a fresh project builds the image + installs features over the network (minutes).
       timeout: 600_000,
     },
   ],

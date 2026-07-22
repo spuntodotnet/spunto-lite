@@ -65,6 +65,25 @@ cd e2e && E2E_BASE_URL=http://localhost:3900 E2E_DOCKER=1 npm run test:worker
 
 Without `E2E_DOCKER=1` the spec self-skips.
 
+### 5. Feature-conflict repro (real Docker)
+
+`tests/feature-*.spec.ts` reproduce feature-combination bugs on a real worker. Same opt-in as
+above (`E2E_DOCKER=1`) — they run in the `worker-lifecycle` project and also need the `docker`
+CLI on the runner (they inspect the worker container with `docker exec`).
+
+```bash
+cd e2e && E2E_BASE_URL=http://localhost:3900 E2E_DOCKER=1 npm run test:worker
+```
+
+- **`feature-docker-claude.spec.ts`** — the reported `docker-in-docker` + `claude-code` on
+  `node:24` bug. Spawns the worker, then checks — as the `vscode` user, across login/non-login
+  zsh and login bash — that both `claude` is on `PATH` and the Docker daemon is up and usable.
+  It logs `[repro] …` lines for each shell so you can see exactly which tool breaks in which
+  shell. Leading suspects: (1) the first-boot oh-my-zsh install uses `KEEP_ZSHRC=no`, which
+  overwrites `~/.zshrc` and drops the `export PATH="$HOME/.local/bin:$PATH"` line the claude
+  feature added at build time (so `claude` is missing in a non-login zsh); (2) Docker daemon
+  startup / `vscode` docker-group timing. The test's per-shell logs disambiguate the two.
+
 ## Environment variables
 
 | Var | Default | Meaning |
@@ -85,7 +104,8 @@ e2e/
     projects.spec.ts         (api)
     secrets.spec.ts          (api)
     settings.spec.ts         (api)
-    landing.spec.ts          (browser)
-    projects-ui.spec.ts      (browser)
+    landing.spec.ts              (browser)
+    projects-ui.spec.ts          (browser)
+    feature-docker-claude.spec.ts (worker-lifecycle, opt-in — dind+claude repro)
     worker-lifecycle.spec.ts (worker-lifecycle, opt-in)
 ```
