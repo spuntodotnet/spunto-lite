@@ -101,10 +101,14 @@ function resolveFeatures(features: ProjectFeature[]): ResolvedFeature[] {
 
 // ─── tmux + VS Code settings ──────────────────────────────────────────────────
 
+// NB: `set -as terminal-features` is NOT in here on purpose — that option only exists in
+// tmux >= 3.2, so on an older tmux (e.g. Debian bullseye ships 3.1c) it prints "Invalid option:
+// terminal-features" on every terminal open. It's appended separately, guarded by a version
+// check, when /etc/tmux.conf is written (see buildImageScript). Truecolor is already covered by
+// the `terminal-overrides ...:Tc` line below, which every supported tmux understands.
 const TMUX_CONF = [
   "set -g mouse on",
   "set -g set-clipboard on",
-  'set -as terminal-features ",screen-256color:clipboard"',
   "set -g history-limit 50000",
   "set -g base-index 1",
   "setw -g pane-base-index 1",
@@ -195,6 +199,16 @@ export function buildImageScript(params: {
     "  set -e",
     ")",
     `echo ${JSON.stringify(Buffer.from(TMUX_CONF).toString("base64"))} | base64 -d > /etc/tmux.conf`,
+    // Append `terminal-features` only when the installed tmux is >= 3.2 (the version that added
+    // the option). On older tmux (e.g. bullseye's 3.1c) appending it would make every terminal
+    // open print "Invalid option: terminal-features". Version parsed from `tmux -V`
+    // ("tmux 3.1c" → 3.1); if tmux is missing or the version can't be parsed, we skip it (safe).
+    "if command -v tmux >/dev/null 2>&1; then",
+    `  _TMUX_VER=$(tmux -V 2>/dev/null | grep -oE '[0-9]+\\.[0-9]+' | head -1)`,
+    `  if [ -n "$_TMUX_VER" ] && awk -v v="$_TMUX_VER" 'BEGIN{split(v,a,"."); exit !((a[1]+0)>3 || ((a[1]+0)==3 && (a[2]+0)>=2))}'; then`,
+    `    echo 'set -as terminal-features ",screen-256color:clipboard"' >> /etc/tmux.conf`,
+    "  fi",
+    "fi",
   ]
 
   const hasDinD = params.features.some((f) => f.id === "docker-in-docker") || !!params.dind
