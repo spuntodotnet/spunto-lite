@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `gcp_registry_key` text;

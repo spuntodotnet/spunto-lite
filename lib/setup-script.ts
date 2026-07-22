@@ -5,6 +5,7 @@
 // buildStartScript (every boot), assembled by buildWorkerScript.
 
 import type { ProjectFeature, Repository, SetupStatus } from "../db/schema"
+import { AVAILABLE_FEATURES } from "./catalogs"
 
 // ─── Shell helpers ────────────────────────────────────────────────────────────
 
@@ -85,7 +86,14 @@ function resolveFeatures(features: ProjectFeature[]): ResolvedFeature[] {
       console.warn(`[worker] Feature "${f.id}" has no ociRef, skipping`)
       continue
     }
-    const options = f.options && Object.keys(f.options).length > 0 ? f.options : undefined
+    // Re-merge the catalog defaults on top of the stored options (same as spunto's
+    // resolveFeatures). Project creation already bakes defaults in, but merging again here
+    // is the safety net that keeps e.g. docker-in-docker's `moby:false` (required on the
+    // node:24 / Debian-trixie base, where moby packages are unavailable) even for a feature
+    // that reached the DB without going through the create-time resolver (seed, migration,
+    // template, direct write). Without it, `moby` falls back to true and dockerd breaks.
+    const merged = { ...AVAILABLE_FEATURES.find((c) => c.id === f.id)?.defaultOptions, ...f.options }
+    const options = Object.keys(merged).length > 0 ? merged : undefined
     resolved.push({ id: f.id, script: buildFeatureInstallScript(f.ociRef, options) })
   }
   return resolved
@@ -132,6 +140,30 @@ export function buildImageScript(params: {
 }): { script: string; hasDinD: boolean } {
   const lines: string[] = [
     "set -e",
+    // Package-manager shim so the rest of this prebuild can install packages
+    // without caring which distro the base image is (Debian/Alpine/Fedora/…).
+    "mp_pkg_install() {",
+    "  if command -v apt-get >/dev/null 2>&1; then",
+    "    DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>&1 || return 1",
+    '    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" 2>&1',
+    '  elif command -v apk >/dev/null 2>&1; then apk add --no-cache "$@" 2>&1',
+    '  elif command -v dnf >/dev/null 2>&1; then dnf install -y "$@" 2>&1',
+    '  elif command -v yum >/dev/null 2>&1; then yum install -y "$@" 2>&1',
+    '  elif command -v pacman >/dev/null 2>&1; then pacman -Sy --noconfirm "$@" 2>&1',
+    '  else echo "[build] no supported package manager to install: $*" >&2; return 1; fi',
+    "}",
+    // Normalize a minimal base image (e.g. node:24) toward a devcontainer-like
+    // baseline. This prebuild runs as root, so install sudo + zsh here instead
+    // of assuming the image ships them: sudo makes the `vscode` NOPASSWD rule
+    // below actually usable (dotfiles/postCreate run as `vscode`, not root), and
+    // having zsh present lets the block further down set it as vscode's login
+    // shell. Best-effort — a failure must not abort the build.
+    "(",
+    "  set +e",
+    '  command -v sudo >/dev/null 2>&1 || { echo "[build] Installing sudo..."; mp_pkg_install sudo; }',
+    '  command -v zsh  >/dev/null 2>&1 || { echo "[build] Installing zsh...";  mp_pkg_install zsh; }',
+    "  set -e",
+    ")",
     "useradd -m -s /bin/bash vscode 2>/dev/null || true",
     "echo 'vscode ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers",
     "if command -v zsh >/dev/null 2>&1; then",
@@ -290,10 +322,76 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
     push(`chown -R ${username}:${username} ${homeDir}/.ssh`)
   }
 
-  // ── 2b. Dotfiles (Codespaces-style) ──
-  // Runs after credentials (so ~/.ssh/mp_user_key is ready for private clones) and
-  // before repo cloning — same order as the SetupStatus enum. Everything is best-effort
-  // (clone/install failures are logged, never fatal) and guarded by a first-boot marker.
+  // ── 2b. Shell setup ──
+  // Runs BEFORE dotfiles (same order as spunto/apps/api) so a user's dotfiles
+  // layer on top of the Spunto base: oh-my-zsh + theme + aliases + auto-cd. At this
+  // point the home is fresh (no .zshrc yet), so oh-my-zsh drops its default and we
+  // apply our tweaks unconditionally; the dotfiles step then appends or overrides.
+  const landInWorkspace = [
+    ``,
+    `if [ "$PWD" = "$HOME" ] && [ -d /workspace ]; then`,
+    `  __mp_dirs=$(find /workspace -mindepth 1 -maxdepth 1 -type d -not -name '.*' 2>/dev/null)`,
+    `  __mp_n=$(printf '%s\\n' "$__mp_dirs" | grep -c .)`,
+    `  if [ "$__mp_n" = 1 ]; then cd "$__mp_dirs" 2>/dev/null; else cd /workspace 2>/dev/null; fi`,
+    `  unset __mp_dirs __mp_n`,
+    `fi`,
+  ].join("\n")
+
+  // Put ~/.local/bin on PATH. devcontainer features that install per-user (e.g. claude-code →
+  // ~/.local/bin) add this line to the user's rc files at build time, but the oh-my-zsh install
+  // below runs with KEEP_ZSHRC=no and OVERWRITES ~/.zshrc, dropping the feature's line — so on a
+  // bare base (node:24, where we install zsh ourselves and make it the login shell) the terminal
+  // ends up without ~/.local/bin and `claude` isn't found. Re-adding it in the snippets we append
+  // AFTER the clobber makes it survive. (On spunto this never bites: its devcontainer base image
+  // already ships oh-my-zsh, so the KEEP_ZSHRC=no install is skipped and ~/.zshrc is never wiped.)
+  const localBinOnPath = `export PATH="$HOME/.local/bin:$PATH"`
+
+  const bashrcSnippet = [
+    ``,
+    localBinOnPath,
+    `__mp_ps1_git() { local b; b=$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null) || return; printf ' \\e[0;33m(%s)\\e[0m' "$b"; }`,
+    `PS1='\\n\\[\\e[0;2m\\]\\u@\\h\\[\\e[0m\\] \\[\\e[1;34m\\]\\w\\[\\e[0m\\]$(__mp_ps1_git)\\n\\[\\e[1;32m\\]❯\\[\\e[0m\\] '`,
+    `alias ll='ls -lah --color=auto'`,
+    `alias gs='git status'`,
+    `alias gd='git diff'`,
+    `alias gl='git log --oneline --graph --decorate -20'`,
+    landInWorkspace,
+  ].join("\n")
+
+  // zsh gets its own alias block (oh-my-zsh already provides the theme/prompt).
+  const zshrcAliasSnippet = [
+    ``,
+    localBinOnPath,
+    `setopt NO_BANG_HIST`,
+    `alias ll='ls -lah --color=auto'`,
+    `alias gs='git status'`,
+    `alias gd='git diff'`,
+    `alias gl='git log --oneline --graph --decorate -20'`,
+    landInWorkspace,
+  ].join("\n")
+
+  push(...banner("SETUP: SHELL"))
+  push(
+    `echo ${JSON.stringify(Buffer.from(bashrcSnippet).toString("base64"))} | base64 -d >> ${homeDir}/.bashrc`,
+    `if command -v zsh >/dev/null 2>&1; then`,
+    `  if [ ! -d "${homeDir}/.oh-my-zsh" ]; then`,
+    `    _OMZ_TMP=$(mktemp)`,
+    `    curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o "$_OMZ_TMP" 2>&1 || true`,
+    `    chmod 644 "$_OMZ_TMP"`,
+    `    su ${username} -c "HOME=${homeDir} RUNZSH=no CHSH=no KEEP_ZSHRC=no bash $_OMZ_TMP" 2>&1 || true`,
+    `    rm -f "$_OMZ_TMP"`,
+    `  fi`,
+    `  sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="af-magic"/' ${homeDir}/.zshrc 2>/dev/null || true`,
+    `  echo ${JSON.stringify(Buffer.from(zshrcAliasSnippet).toString("base64"))} | base64 -d >> ${homeDir}/.zshrc`,
+    `fi`,
+    `echo ${JSON.stringify(Buffer.from(landInWorkspace).toString("base64"))} | base64 -d >> ${homeDir}/.profile`,
+  )
+
+  // ── 2c. Dotfiles (Codespaces-style) ──
+  // Runs after the shell base (so dotfiles layer on top of it) and after credentials
+  // (so ~/.ssh/mp_user_key is ready for private clones), before repo cloning.
+  // Everything is best-effort (clone/install failures are logged, never fatal) and
+  // guarded by a first-boot marker.
   if (dotfilesRepo && dotfilesRepo.trim()) {
     const url = normalizeDotfilesUrl(dotfilesRepo)
     const sshPrefix = userSshPrivateKey
@@ -346,53 +444,6 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
       `fi`,
     )
   }
-
-  // ── 3. Shell setup ──
-  const landInWorkspace = [
-    ``,
-    `if [ "$PWD" = "$HOME" ] && [ -d /workspace ]; then`,
-    `  __mp_dirs=$(find /workspace -mindepth 1 -maxdepth 1 -type d -not -name '.*' 2>/dev/null)`,
-    `  __mp_n=$(printf '%s\\n' "$__mp_dirs" | grep -c .)`,
-    `  if [ "$__mp_n" = 1 ]; then cd "$__mp_dirs" 2>/dev/null; else cd /workspace 2>/dev/null; fi`,
-    `  unset __mp_dirs __mp_n`,
-    `fi`,
-  ].join("\n")
-
-  const bashrcSnippet = [
-    ``,
-    `__mp_ps1_git() { local b; b=$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null) || return; printf ' \\e[0;33m(%s)\\e[0m' "$b"; }`,
-    `PS1='\\n\\[\\e[0;2m\\]\\u@\\h\\[\\e[0m\\] \\[\\e[1;34m\\]\\w\\[\\e[0m\\]$(__mp_ps1_git)\\n\\[\\e[1;32m\\]❯\\[\\e[0m\\] '`,
-    `alias ll='ls -lah --color=auto'`,
-    `alias gs='git status'`,
-    `alias gd='git diff'`,
-    `alias gl='git log --oneline --graph --decorate -20'`,
-    landInWorkspace,
-  ].join("\n")
-
-  push(...banner("SETUP: SHELL"))
-  push(
-    `echo ${JSON.stringify(Buffer.from(bashrcSnippet).toString("base64"))} | base64 -d >> ${homeDir}/.bashrc`,
-    `if command -v zsh >/dev/null 2>&1; then`,
-    `  # Dotfiles run before this step and may install their own .zshrc (possibly as a`,
-    `  # symlink). Preserve it: detect it first, install oh-my-zsh with KEEP_ZSHRC=yes`,
-    `  # (keeps an existing .zshrc, still drops a sane default when there is none), and`,
-    `  # only apply our theme / auto-cd tweaks when we generated that default — never`,
-    `  # clobber a dotfiles-provided .zshrc.`,
-    `  _mp_dotfiles_zshrc=0; { [ -f "${homeDir}/.zshrc" ] || [ -h "${homeDir}/.zshrc" ]; } && _mp_dotfiles_zshrc=1`,
-    `  if [ ! -d "${homeDir}/.oh-my-zsh" ]; then`,
-    `    _OMZ_TMP=$(mktemp)`,
-    `    curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh -o "$_OMZ_TMP" 2>&1 || true`,
-    `    chmod 644 "$_OMZ_TMP"`,
-    `    su ${username} -c "HOME=${homeDir} RUNZSH=no CHSH=no KEEP_ZSHRC=yes bash $_OMZ_TMP" 2>&1 || true`,
-    `    rm -f "$_OMZ_TMP"`,
-    `  fi`,
-    `  if [ "$_mp_dotfiles_zshrc" = 0 ]; then`,
-    `    sed -i 's/ZSH_THEME="robbyrussell"/ZSH_THEME="af-magic"/' ${homeDir}/.zshrc 2>/dev/null || true`,
-    `    echo ${JSON.stringify(Buffer.from(landInWorkspace).toString("base64"))} | base64 -d >> ${homeDir}/.zshrc`,
-    `  fi`,
-    `fi`,
-    `echo ${JSON.stringify(Buffer.from(landInWorkspace).toString("base64"))} | base64 -d >> ${homeDir}/.profile`,
-  )
 
   // ── 4. Clone repos ──
   if (project.repositories.length > 0) push(...banner(`SETUP: CLONE REPOSITORIES (${project.repositories.length})`))

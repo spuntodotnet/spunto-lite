@@ -7,11 +7,13 @@
 > implémenter, tester, faire avancer la carte, ouvrir la PR — c'est **toi**,
 > l'agent, qui le pilotes en suivant ce fichier.
 >
-> Le repo est encore jeune : **pas de suite de tests automatisée, pas de scripts
-> `reset.sh`/`restart.sh`**. La vérification attendue est donc **`build` + `lint`
-> verts + un smoke test réel** de ce que tu as changé, avec **une preuve attachée
-> à la carte**. (Ce fichier suit le modèle du `docs/dev-workflow.md` de
-> `coderhammer/spunto`, adapté à l'outillage réellement disponible ici.)
+> Vérification attendue : **`build` + `lint` verts**, plus la **suite e2e** quand
+> ton changement touche l'API ou l'UI. Le repo a désormais une vraie suite
+> Playwright dans [`e2e/`](../e2e/README.md) (projet `api` HTTP-only + projet
+> `browser` pilotant `browser-remote` via CDP + `worker-lifecycle` opt-in) — voir
+> § 2 pour la lancer. Pas de scripts `reset.sh`/`restart.sh` en revanche. (Ce
+> fichier suit le modèle du `docs/dev-workflow.md` de `coderhammer/spunto`, adapté
+> à l'outillage réellement disponible ici.)
 >
 > Deux helpers sous [`scripts/`](../scripts/) — portés de spunto, sans aucune
 > dépendance (Node ≥ 18, `$NOTION_TOKEN` suffit) — automatisent le handoff :
@@ -20,11 +22,12 @@
 
 ## ✅ Check-list avant de passer la carte en `to be tested`
 
-Ces trois points ne sont **pas optionnels**. Ne fais pas avancer la carte tant
-que les trois ne sont pas vrais :
+Ces points ne sont **pas optionnels**. Ne fais pas avancer la carte tant qu'ils
+ne sont pas tous vrais :
 
 - [ ] **`npm run build` vert** — aucune erreur TypeScript / Next.
 - [ ] **`npm run lint` vert.**
+- [ ] **Suite e2e verte** dès que ton changement touche l'API ou l'UI (§ 2).
 - [ ] **Feature rejouée en vrai, de bout en bout** — pas un test partiel ni un
       screenshot d'une itération précédente — **avec une preuve attachée à la
       carte** : capture (feature UI) ou résultat de la vérification copié dans le
@@ -57,6 +60,7 @@ parle directement au socket Docker local. Persistance SQLite (Drizzle) sous
 | Générer une migration Drizzle | `npm run db:generate` (après avoir édité le schéma) |
 | Stack complète en conteneur | `docker compose up -d --build` (app sur le port **80**) |
 | Stack + navigateur de test | `docker compose --profile browser up -d --build` (ajoute `browser-remote`) |
+| Suite e2e Playwright (§ 2) | `cd e2e && npm run test:api` (host) · `docker compose --profile test run --rm e2e` (compose) |
 
 > **Dev vs « comme en prod ».** `npm run dev` (watch, hot reload) suffit pour
 > itérer vite pendant que tu codes. Mais **il n'y a pas de `reset.sh` ici** : pour
@@ -87,10 +91,13 @@ puis ouvrir l'app sur le port 80 du worker (§ « La stack »).
 
 ## 2. Vérifier (obligatoire avant de faire avancer la carte)
 
-Reprends les trois points de la check-list du haut — aucun n'est optionnel :
+Reprends les points de la check-list du haut — aucun n'est optionnel :
 
 - [ ] **`npm run build`** passe (aucune erreur TypeScript / Next).
 - [ ] **`npm run lint`** passe.
+- [ ] **Suite e2e verte** dès que ton changement touche l'API ou l'UI (voir
+      « Lancer la suite e2e » ci-dessous). Étends-la si ta feature ajoute une
+      route ou un écran.
 - [ ] **Smoke test réel de ta feature, de bout en bout**, sur la stack lancée
       (`docker compose up -d --build`) — pas un test partiel ni un screenshot
       d'une itération précédente. Pour une feature **UI**, pilote-la vraiment avec
@@ -98,17 +105,54 @@ Reprends les trois points de la check-list du haut — aucun n'est optionnel :
       (§ 3) ; pour un changement **backend**, le résultat de la vérification, copié
       dans le commentaire de handoff (§ 4).
 
-Si le build/lint échoue ou si le flux ne va pas jusqu'au bout, **ne fais pas
+Si le build/lint/e2e échoue ou si le flux ne va pas jusqu'au bout, **ne fais pas
 avancer la carte** : corrige et reprends cette étape.
 
 Le worker expose l'app sur le port 80 → le lien « App » du channel de la carte
 pointe dessus (voir `spuntoProjects.ts` côté `automations`).
 
+### Lancer la suite e2e
+
+Suite Playwright sous [`e2e/`](../e2e/README.md), calquée sur celle de spunto :
+projets `api` (HTTP-only), `browser` (UI, pilote `browser-remote` via CDP) et
+`worker-lifecycle` (spawn d'un vrai worker Docker, **opt-in**). spunto-lite n'a
+pas d'auth → pas de JWT à forger, les tests tapent l'API/l'UI ouvertes.
+
+**Rapide (API, sans navigateur)** — un port de test dédié + une base jetable :
+
+```bash
+# terminal 1 — l'app sur un port de test (SQLite, pas de Docker requis)
+PORT=3900 DATA_DIR=./.e2e-data npm run dev
+# terminal 2
+cd e2e && npm install
+E2E_BASE_URL=http://localhost:3900 npm run test:api      # exactement ce que fait la CI
+E2E_BASE_URL=http://localhost:3900 npm run test:browser  # UI, Chromium local (npx playwright install chromium une fois)
+```
+
+**Suite complète via `browser-remote`** (pas de download de navigateur, tout sur
+le réseau compose) :
+
+```bash
+docker compose up -d spunto-lite
+docker compose --profile test run --rm e2e               # api + browser, atteint l'app à http://spunto-lite
+```
+
+**Cycle de vie worker** (vrai Docker, opt-in — sinon le spec se skippe) :
+
+```bash
+cd e2e && E2E_BASE_URL=http://localhost:3900 E2E_DOCKER=1 npm run test:worker
+```
+
+Détail des projets, variables (`E2E_BASE_URL`, `CDP_ENDPOINT`, `E2E_DOCKER`) et
+repros de bugs : [`e2e/README.md`](../e2e/README.md).
+
 ## Tester l'UI avec les outils `browser_*` (Claude)
 
-Ce repo embarque un **serveur MCP** qui te donne un navigateur pilotable
-directement depuis Claude Code — pas de Playwright ni de script à écrire. Les
-outils sont exposés via [`.mcp.json`](../.mcp.json) (détail :
+Complément de la suite e2e (§ 2), pas un remplacement : la suite `browser`
+Playwright est la **vérification automatisée régressive**, les outils `browser_*`
+sont pour l'**exploration interactive** et la **capture de preuve** (§ 3) — tu
+pilotes toi-même le navigateur, sans écrire de spec. Ce repo embarque pour ça un
+**serveur MCP** exposé via [`.mcp.json`](../.mcp.json) (détail :
 [`mcp/README.md`](../mcp/README.md)) :
 
 | Outil | Rôle |
@@ -166,7 +210,7 @@ copié dans le commentaire de handoff — pas de capture à forcer.
 
 ## 4. Livrer
 
-Une fois la check-list du haut satisfaite (build + lint + smoke test réel +
+Une fois la check-list du haut satisfaite (build + lint + e2e + smoke test réel +
 preuve) :
 
 1. Commit ton travail sur la branche courante.
@@ -316,7 +360,7 @@ Capture du test attachée directement à la carte (bloc image dans le corps de l
 • Worker (code-server) : https://$WORKER_SLUG-code.spunto.net/?folder=%2Fworkspace%2Fspunto-lite
 
 ✔️ Vérifications
-npm run build ✅ · npm run lint ✅ · smoke test ✅
+npm run build ✅ · npm run lint ✅ · e2e ✅ · smoke test ✅
 ```
 
 > `$WORKER_SLUG` est une **vraie variable d'env** de ton shell — `echo

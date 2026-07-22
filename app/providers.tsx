@@ -3,7 +3,7 @@
 import { useState } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { ThemeProvider } from "next-themes"
-import { Toaster } from "sonner"
+import { SpuntoProvider } from "@spunto/design-system"
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -13,8 +13,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
       <QueryClientProvider client={queryClient}>
-        {children}
-        <Toaster position="bottom-right" richColors closeButton />
+        <SpuntoProvider toastPosition="bottom-right">{children}</SpuntoProvider>
       </QueryClientProvider>
     </ThemeProvider>
   )

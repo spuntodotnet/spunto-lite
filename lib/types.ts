@@ -71,7 +71,7 @@ export type ProjectImageBuild = {
 }
 
 export type SecretMeta = { id: string; name: string }
-export type Settings = { id: string; gitUserName: string | null; gitUserEmail: string | null; sshKeyPath: string | null; dotfilesRepo: string | null }
+export type Settings = { id: string; gitUserName: string | null; gitUserEmail: string | null; sshKeyPath: string | null; dotfilesRepo: string | null; gcpRegistryConfigured: boolean }
 export type HostKey = { name: string; hasPublic: boolean }
 
 export type DevImage = { id: string; label: string; image: string; description: string }
