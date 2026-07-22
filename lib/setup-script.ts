@@ -461,10 +461,23 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
 
   // ── 4. Clone repos ──
   if (project.repositories.length > 0) push(...banner(`SETUP: CLONE REPOSITORIES (${project.repositories.length})`))
+  // Generic "git" repo (e.g. GitLab): offer the user's global SSH key FIRST — the
+  // same key the dotfiles clone uses — then the per-project deploy key as a fallback.
+  // Why explicit `-i` rather than relying on ~/.ssh/config (which already lists both
+  // in this order): this clone runs as root, and ssh locates ~/.ssh/config via the
+  // *passwd-database* home of the running user (/root), NOT $HOME. So the user key in
+  // /home/vscode/.ssh/config is never read here, and without listing it explicitly the
+  // clone would only ever try the deploy key — the exact "mon repo GitLab n'utilise pas
+  // ma clé SSH" symptom. Listing user-then-deploy keeps deploy-key-only repos working
+  // (their key is offered second) while making a user-key-authorised repo just work.
+  const gitCloneIdentities = [
+    ...(userSshPrivateKey ? [`-i ${homeDir}/.ssh/mp_user_key`] : []),
+    ...(projectDeployKey ? [`-i ${homeDir}/.ssh/mp_deploy_key`] : []),
+  ].join(" ")
   project.repositories.forEach((r, i) => {
     const cloneCmd =
       r.provider === "git" && r.cloneUrl
-        ? `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${homeDir}/.ssh/mp_deploy_key" git clone ${shQuote(r.cloneUrl)} /workspace/${r.workspacePath}`
+        ? `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${gitCloneIdentities}" git clone ${shQuote(r.cloneUrl)} /workspace/${r.workspacePath}`
         : r.provider === "github" && userSshPrivateKey
         ? `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${homeDir}/.ssh/mp_user_key" git clone git@github.com:${r.project}.git /workspace/${r.workspacePath}`
         : `git clone https://github.com/${r.project} /workspace/${r.workspacePath}`
