@@ -1,7 +1,7 @@
 "use client"
 
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { toast } from "sonner"
+import { toast } from "@spunto/design-system"
 import { Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
