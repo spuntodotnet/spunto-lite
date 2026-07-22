@@ -1,0 +1,67 @@
+name: API tests
+
+# Runs the HTTP-only e2e suite (the `api` Playwright project: health, catalogs, projects,
+# secrets, settings) on every pull request. No Docker, no browsers — just the control plane
+# booted directly against a throwaway SQLite DB. The browser and worker-lifecycle projects are
+# not run here (they need browser-remote / a real Docker socket). Mark this job as a required
+# status check in branch protection to gate merges on it.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+# One run per branch; a new push cancels the previous run.
+concurrency:
+  group: api-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-tests:
+    name: e2e API tests
+    runs-on: ubuntu-latest
+    env:
+      PORT: "3900"
+      E2E_BASE_URL: http://localhost:3900
+      DATA_DIR: ${{ github.workspace }}/.e2e-data
+      DATA_ENCRYPTION_KEY: ci-e2e-encryption-key-not-used-anywhere-real
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            e2e/package-lock.json
+
+      - name: Install app deps
+        run: npm ci
+
+      - name: Install e2e deps
+        working-directory: e2e
+        run: npm ci
+
+      - name: Build app
+        run: npm run build
+
+      - name: Start control plane
+        run: |
+          mkdir -p "$DATA_DIR"
+          nohup npm run start > "$RUNNER_TEMP/app.log" 2>&1 &
+          echo "waiting for the app on :$PORT ..."
+          for i in $(seq 1 60); do
+            curl -s -o /dev/null "http://localhost:$PORT/api/health" && { echo "app up"; exit 0; }
+            sleep 1
+          done
+          echo "app did not become ready:"; cat "$RUNNER_TEMP/app.log"; exit 1
+
+      - name: Run API tests
+        working-directory: e2e
+        # The `api` project is HTTP-only — no browser download needed.
+        run: npx playwright test --project=api
+
+      - name: App log (on failure)
+        if: failure()
+        run: cat "$RUNNER_TEMP/app.log" || true
