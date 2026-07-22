@@ -129,6 +129,10 @@ export const settings = sqliteTable("settings", {
   // Personal dotfiles repo (Codespaces-style): "owner/repo" shorthand or full URL.
   // Cloned into ~/dotfiles on first boot of every worker and its install script run.
   dotfilesRepo: text("dotfiles_repo"),
+  // GCP service-account key (roles/artifactregistry.reader), AES-256-GCM encrypted.
+  // Control-plane credential used to pull private Artifact Registry / GCR base
+  // images — NOT injected into workers (unlike user/project secrets).
+  gcpRegistryKey: text("gcp_registry_key"),
 })
 
 export type Project = typeof projects.$inferSelect

@@ -1,6 +1,7 @@
 import Docker from "dockerode"
 import { existsSync } from "node:fs"
 import { hostname } from "node:os"
+import { getGcpRegistryKey, normalizeGcpKey } from "../services/settings"
 
 // Docker operations, ported/simplified from apps/agent/src/docker.ts. The control
 // plane talks straight to the local daemon — no remote agent, no OTLP telemetry
@@ -17,20 +18,13 @@ export const docker = new Docker({ socketPath: process.env.DOCKER_SOCKET || "/va
 // container. So instead of trying to borrow the host's docker auth, we take a
 // GCP service-account key (roles/artifactregistry.reader) directly and pass it
 // to the daemon explicitly — exactly what the `docker` CLI does after resolving
-// its helper. Provide it via GCP_SA_KEY, as raw JSON or base64-encoded JSON.
-// Unset → behaves as before (public images only).
+// its helper.
+//
+// Source of the key, in order: the encrypted value configured in the UI (Settings
+// → Container registry, stored in SQLite), then the GCP_SA_KEY env var as a
+// headless/CI fallback. Neither set → behaves as before (public images only).
 function gcpServiceAccountKey(): string | null {
-  const raw = process.env.GCP_SA_KEY?.trim()
-  if (!raw) return null
-  if (raw.startsWith("{")) return raw // raw JSON
-  try {
-    const decoded = Buffer.from(raw, "base64").toString("utf8").trim()
-    if (decoded.startsWith("{")) return decoded // base64-encoded JSON
-  } catch {
-    /* fall through */
-  }
-  console.warn("[docker] GCP_SA_KEY is set but is neither raw JSON nor base64-encoded JSON — ignoring")
-  return null
+  return getGcpRegistryKey() ?? normalizeGcpKey(process.env.GCP_SA_KEY)
 }
 
 // Registry hostname of an image ref: "europe-west1-docker.pkg.dev/p/r/i:t" → the
