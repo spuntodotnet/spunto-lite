@@ -1,12 +1,66 @@
 import Docker from "dockerode"
 import { existsSync } from "node:fs"
 import { hostname } from "node:os"
+import { getGcpRegistryKey, normalizeGcpKey } from "../services/settings"
 
 // Docker operations, ported/simplified from apps/agent/src/docker.ts. The control
-// plane talks straight to the local daemon — no remote agent, no registry auth
-// (public images only), no OTLP telemetry network.
+// plane talks straight to the local daemon — no remote agent, no OTLP telemetry
+// network. Private GCP Artifact Registry / GCR base images work via GCP_SA_KEY
+// (see getAuthForImage below); other registries are assumed public.
 
 export const docker = new Docker({ socketPath: process.env.DOCKER_SOCKET || "/var/run/docker.sock" })
+
+// ── Private-registry auth (GCP Artifact Registry / GCR) ───────────────────────
+//
+// dockerode does NOT read ~/.docker/config.json, and even if it did, a host that
+// ran `gcloud auth configure-docker` stores a *credential helper* (a dynamic
+// gcloud token), not a static credential we could reuse from inside this
+// container. So instead of trying to borrow the host's docker auth, we take a
+// GCP service-account key (roles/artifactregistry.reader) directly and pass it
+// to the daemon explicitly — exactly what the `docker` CLI does after resolving
+// its helper.
+//
+// Source of the key, in order: the encrypted value configured in the UI (Settings
+// → Container registry, stored in SQLite), then the GCP_SA_KEY env var as a
+// headless/CI fallback. Neither set → behaves as before (public images only).
+function gcpServiceAccountKey(): string | null {
+  return getGcpRegistryKey() ?? normalizeGcpKey(process.env.GCP_SA_KEY)
+}
+
+// Registry hostname of an image ref: "europe-west1-docker.pkg.dev/p/r/i:t" → the
+// first segment. Docker Hub short refs (no dot/colon in the first segment) → null.
+function registryHost(image: string): string | null {
+  const first = image.split("/")[0]
+  if (!first.includes(".") && !first.includes(":")) return null
+  return first
+}
+
+function isGcpRegistry(host: string): boolean {
+  return host.endsWith(".pkg.dev") || host === "gcr.io" || host.endsWith(".gcr.io")
+}
+
+type RegistryAuth = { username: string; password: string; serveraddress: string }
+
+// Auth for a plain `docker pull` (dockerode `authconfig`). Returns undefined for
+// public / non-GCP registries or when no SA key is configured.
+export function getAuthForImage(image: string): RegistryAuth | undefined {
+  const host = registryHost(image)
+  if (!host || !isGcpRegistry(host)) return undefined
+  const key = gcpServiceAccountKey()
+  if (!key) return undefined
+  return { username: "_json_key", password: key, serveraddress: host }
+}
+
+// Auth map for a `docker build` — the FROM base image is pulled by the daemon,
+// which takes a per-registry map via the X-Registry-Config header (dockerode
+// `registryconfig` build option), not a single authconfig.
+export function getRegistryConfigForImage(
+  image: string,
+): Record<string, { username: string; password: string }> | undefined {
+  const auth = getAuthForImage(image)
+  if (!auth) return undefined
+  return { [auth.serveraddress]: { username: auth.username, password: auth.password } }
+}
 
 export function workerNetworkName(workerId: string): string {
   return `mp-worker-${workerId}-net`
@@ -86,8 +140,9 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
   // Pull base image if missing.
   const imageExists = await docker.getImage(params.image).inspect().then(() => true).catch(() => false)
   if (!imageExists) {
+    const authconfig = getAuthForImage(params.image)
     await new Promise<void>((resolve, reject) => {
-      docker.pull(params.image, {}, (err, stream) => {
+      docker.pull(params.image, authconfig ? { authconfig } : {}, (err, stream) => {
         if (err) return reject(err)
         if (!stream) return reject(new Error(`docker pull returned no stream for ${params.image}`))
         docker.modem.followProgress(stream, (e) => (e ? reject(e) : resolve()))
@@ -393,20 +448,27 @@ export async function buildProjectImage(params: {
   const { Readable } = await import("node:stream")
   const contextStream = Readable.from(context)
 
+  // Auth for the FROM base image if it lives in a private GCP registry.
+  const registryconfig = getRegistryConfigForImage(params.baseImage)
+
   let buildError: string | null = null
   await new Promise<void>((resolve, reject) => {
-    docker.buildImage(contextStream as never, { t: params.imageRef, pull: "true" } as never, (err, stream) => {
-      if (err) return reject(err)
-      if (!stream) return reject(new Error("No build stream returned"))
-      docker.modem.followProgress(
-        stream,
-        (finalErr) => (finalErr || buildError ? reject(new Error(buildError ?? finalErr?.message ?? "Build failed")) : resolve()),
-        (event: { stream?: string; status?: string; error?: string }) => {
-          if (event.stream) params.onLog?.(event.stream)
-          if (event.status) params.onLog?.(event.status + "\n")
-          if (event.error) buildError = event.error
-        },
-      )
-    })
+    docker.buildImage(
+      contextStream as never,
+      { t: params.imageRef, pull: "true", ...(registryconfig ? { registryconfig } : {}) } as never,
+      (err, stream) => {
+        if (err) return reject(err)
+        if (!stream) return reject(new Error("No build stream returned"))
+        docker.modem.followProgress(
+          stream,
+          (finalErr) => (finalErr || buildError ? reject(new Error(buildError ?? finalErr?.message ?? "Build failed")) : resolve()),
+          (event: { stream?: string; status?: string; error?: string }) => {
+            if (event.stream) params.onLog?.(event.stream)
+            if (event.status) params.onLog?.(event.status + "\n")
+            if (event.error) buildError = event.error
+          },
+        )
+      },
+    )
   })
 }

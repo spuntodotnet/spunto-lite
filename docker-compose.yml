@@ -20,6 +20,10 @@ services:
       PORT: 80
       # Set a strong value to protect stored secrets. Defaults to an insecure dev key.
       DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-spunto-lite-dev-insecure-key}
+      # Optional headless/CI fallback for private GCP Artifact Registry / GCR base
+      # images. Prefer configuring this in the UI (Settings → Container registry),
+      # which stores it encrypted in the DB; the UI value wins over this env var.
+      GCP_SA_KEY: ${GCP_SA_KEY:-}
 
   # Navigateur pilotable pour tester l'UI de bout en bout (humain ou agent
   # Claude via le serveur MCP `mcp/server.js`, voir `.mcp.json` + `mcp/README.md`).
