@@ -9,7 +9,7 @@ import { buttonVariants } from "@/components/ui/button"
 import { Tooltip } from "@/components/ui/tooltip"
 import { workerBaseUrl } from "@/lib/worker-url"
 import type { Worker } from "@/lib/types"
-import { cfgFor, isSettingUp, phaseLabel, setupProgress, formatRelativeTime, GitStatusSummary, useWorkerMutations, type GitStatus } from "@/components/worker-card"
+import { cfgFor, isSettingUp, phaseLabel, setupProgress, formatRelativeTime, GitStatusSummary, useWorkerMutations, WorkerUpdateButton, type GitStatus } from "@/components/worker-card"
 
 function StatusCell({ worker }: { worker: Worker }) {
   const settingUp = isSettingUp(worker.state)
@@ -61,7 +61,7 @@ function RowActions({ worker, projectId }: { worker: Worker; projectId: string }
   )
 }
 
-export function WorkerTable({ workers, projectId }: { workers: Worker[]; projectId: string }) {
+export function WorkerTable({ workers, projectId, projectVersion }: { workers: Worker[]; projectId: string; projectVersion: number }) {
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden">
       <table className="w-full text-sm">
@@ -85,6 +85,7 @@ export function WorkerTable({ workers, projectId }: { workers: Worker[]; project
                   <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-mono leading-none bg-muted text-muted-foreground border-border">
                     v{w.projectVersion}
                   </span>
+                  <WorkerUpdateButton worker={w} projectId={projectId} latestVersion={projectVersion} />
                 </div>
               </td>
               <td className="px-4 py-2.5">

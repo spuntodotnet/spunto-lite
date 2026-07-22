@@ -80,7 +80,7 @@ export function WorkersPanel({ projectId, projectVersion }: { projectId: string;
           ))}
         </div>
       ) : (
-        <WorkerTable workers={workers} projectId={projectId} />
+        <WorkerTable workers={workers} projectId={projectId} projectVersion={projectVersion} />
       )}
     </div>
   )

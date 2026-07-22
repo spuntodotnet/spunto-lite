@@ -18,6 +18,7 @@ import {
   Play,
   Square,
   RotateCw,
+  ArrowUpCircle,
   Trash2,
   Code2,
   X,
@@ -72,6 +73,15 @@ export function isSettingUp(state: string) {
 }
 export function cfgFor(state: string): StatusCfg {
   return STATUS_CONFIG[state] ?? STATUS_CONFIG.pending
+}
+
+/**
+ * A worker is out of date when it was built from an older project config than
+ * the project's latest version. While it's (re)building we don't flag it — its
+ * version is already being bumped to the latest.
+ */
+export function isOutdated(worker: { projectVersion: number; state: string }, latestVersion: number): boolean {
+  return worker.projectVersion < latestVersion && !isSettingUp(worker.state)
 }
 
 // ─── Setup progress helpers ──────────────────────────────────────────────────
@@ -221,11 +231,40 @@ export function useWorkerMutations(projectId: string, workerId: string) {
   return { stop, start, rebuild, del }
 }
 
-function ActionsMenu({ worker, projectId }: { worker: Worker; projectId: string }) {
+/**
+ * Amber "Update to vN" pill shown when a worker runs an older config than the
+ * project's latest version. Clicking it triggers the existing rebuild, which
+ * re-spawns the container against the latest version (files are kept).
+ * Renders nothing when the worker is already up to date.
+ */
+export function WorkerUpdateButton({ worker, projectId, latestVersion }: { worker: Worker; projectId: string; latestVersion: number }) {
+  const { rebuild } = useWorkerMutations(projectId, worker.id)
+  if (!isOutdated(worker, latestVersion)) return null
+  return (
+    <Tooltip content={`Rebuild to update this workspace from v${worker.projectVersion} to the latest project config (v${latestVersion}). Your files are kept.`} side="top">
+      <button
+        type="button"
+        disabled={rebuild.isPending}
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          rebuild.mutate()
+        }}
+        className="inline-flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium leading-none text-amber-600 dark:text-amber-400 transition-colors hover:bg-amber-500/20 disabled:opacity-50"
+      >
+        {rebuild.isPending ? <LoaderIcon className="h-3 w-3 animate-spin" /> : <ArrowUpCircle className="h-3 w-3" />}
+        Update to v{latestVersion}
+      </button>
+    </Tooltip>
+  )
+}
+
+function ActionsMenu({ worker, projectId, latestVersion }: { worker: Worker; projectId: string; latestVersion: number }) {
   const [open, setOpen] = useState(false)
   const { stop, start, rebuild, del } = useWorkerMutations(projectId, worker.id)
   const running = worker.state === "ready"
   const stopped = worker.state === "stopped"
+  const outdated = isOutdated(worker, latestVersion)
 
   return (
     <div className="relative shrink-0">
@@ -254,6 +293,7 @@ function ActionsMenu({ worker, projectId }: { worker: Worker; projectId: string 
           )}
           <button onMouseDown={() => rebuild.mutate()} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-accent">
             <RotateCw className="h-3.5 w-3.5" /> Rebuild
+            {outdated && <span className="ml-auto text-[10px] font-medium text-amber-600 dark:text-amber-400">v{latestVersion} available</span>}
           </button>
           <div className="my-1 border-t border-border/60" />
           <button
@@ -340,6 +380,7 @@ export function WorkerCard({
               <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-mono leading-none bg-muted text-muted-foreground border-border">
                 v{worker.projectVersion}
               </span>
+              <WorkerUpdateButton worker={worker} projectId={projectId} latestVersion={projectVersion} />
               {worker.tags.map((tag) => {
                 const c = tagColor(tag)
                 return (
@@ -356,7 +397,7 @@ export function WorkerCard({
             </div>
           </div>
         </div>
-        <ActionsMenu worker={worker} projectId={projectId} />
+        <ActionsMenu worker={worker} projectId={projectId} latestVersion={projectVersion} />
       </div>
 
       {/* Setup progress */}

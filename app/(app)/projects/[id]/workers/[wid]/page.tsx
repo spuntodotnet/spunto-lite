@@ -25,6 +25,7 @@ import {
   X,
   Plus,
   AlertTriangle,
+  ArrowUpCircle,
 } from "lucide-react"
 import { chartColors } from "@spunto/design-system/colors"
 import { cn } from "@/lib/utils"
@@ -119,6 +120,7 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
   const status = worker.setupStatus
   const activeBuild = builds[0]
   const codeUrl = workerBaseUrl(worker.id)
+  const outdated = !!project && !settingUp && worker.projectVersion < project.currentVersion
 
   const controlPanel = (
     <div className="p-4 space-y-5">
@@ -126,6 +128,26 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
         <div className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-500">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
           <span className="font-mono truncate">{status.error}</span>
+        </div>
+      )}
+
+      {outdated && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-3">
+          <div className="flex items-start gap-2.5">
+            <ArrowUpCircle className="h-4 w-4 shrink-0 text-amber-500" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">Update available</p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-amber-700/80 dark:text-amber-400/80">
+                This workspace runs <span className="font-mono">v{worker.projectVersion}</span>, but the latest project config is <span className="font-mono">v{project!.currentVersion}</span>. Rebuild to update — your files are kept.
+              </p>
+              <button
+                onClick={() => act("rebuild", "Rebuilding…")}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-2.5 py-1.5 text-[11px] font-medium text-white transition-colors hover:bg-amber-600"
+              >
+                <RotateCw className="h-3 w-3" /> Update &amp; rebuild
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -223,7 +245,7 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
       <div>
         <SH>Info</SH>
         <div className="rounded-lg border border-border/50 bg-muted/20 divide-y divide-border/40">
-          <InfoRow label="Config version" value={`v${worker.projectVersion}`} mono />
+          <InfoRow label="Config version" value={outdated ? `v${worker.projectVersion} → v${project!.currentVersion}` : `v${worker.projectVersion}`} mono />
           <InfoRow label="Created" value={formatRelativeTime(worker.createdAt)} />
           {worker.containerId && <InfoRow label="Container" value={worker.containerId.slice(0, 12)} mono muted />}
           <InfoRow label="Node" value="local · Docker" mono />
