@@ -321,7 +321,7 @@ export function WorkerCard({
   const cockpitHref = `/projects/${projectId}/workers/${worker.id}`
 
   return (
-    <div className="rounded-xl border border-border bg-card overflow-hidden transition-colors hover:shadow-sm">
+    <div className="rounded-xl border border-border bg-card transition-colors hover:shadow-sm">
       {/* Header */}
       <div className="px-4 pt-3.5 pb-3 flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
@@ -397,7 +397,7 @@ export function WorkerCard({
       )}
 
       {/* Footer */}
-      <div className="px-3 py-2 border-t border-border/50 bg-muted/20 flex items-center gap-1.5">
+      <div className="px-3 py-2 border-t border-border/50 bg-muted/20 rounded-b-xl flex items-center gap-1.5">
         <Link href={cockpitHref} className={cn(buttonVariants({ variant: "default", size: "sm" }), "flex-1 h-7 text-xs gap-1.5")}>
           View <ChevronRight className="h-3.5 w-3.5" />
         </Link>
