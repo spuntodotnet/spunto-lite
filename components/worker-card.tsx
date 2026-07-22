@@ -3,7 +3,7 @@
 import { useState } from "react"
 import Link from "next/link"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { toast } from "sonner"
+import { toast } from "@spunto/design-system"
 import {
   Cpu,
   MemoryStick,

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { toast } from "sonner"
+import { toast } from "@spunto/design-system"
 import { KeyRound, User, FileCode2, Trash2, CheckCircle2 } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Settings, HostKey } from "@/lib/types"
