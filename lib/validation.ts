@@ -41,6 +41,7 @@ export const SettingsSchema = z.object({
   gitUserName: z.string().nullable().optional(),
   gitUserEmail: z.string().nullable().optional(),
   sshKeyPath: z.string().nullable().optional(),
+  dotfilesRepo: z.string().nullable().optional(),
 })
 
 export type CreateProjectInput = z.infer<typeof CreateProjectSchema>

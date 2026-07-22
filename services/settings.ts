@@ -7,7 +7,7 @@ const SINGLETON = "singleton"
 export function getSettings(): Settings {
   const row = db.select().from(settings).where(eq(settings.id, SINGLETON)).get()
   if (row) return row
-  const fresh: Settings = { id: SINGLETON, gitUserName: null, gitUserEmail: null, sshKeyPath: null }
+  const fresh: Settings = { id: SINGLETON, gitUserName: null, gitUserEmail: null, sshKeyPath: null, dotfilesRepo: null }
   db.insert(settings).values(fresh).run()
   return fresh
 }
