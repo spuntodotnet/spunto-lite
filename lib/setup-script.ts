@@ -5,6 +5,7 @@
 // buildStartScript (every boot), assembled by buildWorkerScript.
 
 import type { ProjectFeature, Repository, SetupStatus } from "../db/schema"
+import { AVAILABLE_FEATURES } from "./catalogs"
 
 // ─── Shell helpers ────────────────────────────────────────────────────────────
 
@@ -85,7 +86,14 @@ function resolveFeatures(features: ProjectFeature[]): ResolvedFeature[] {
       console.warn(`[worker] Feature "${f.id}" has no ociRef, skipping`)
       continue
     }
-    const options = f.options && Object.keys(f.options).length > 0 ? f.options : undefined
+    // Re-merge the catalog defaults on top of the stored options (same as spunto's
+    // resolveFeatures). Project creation already bakes defaults in, but merging again here
+    // is the safety net that keeps e.g. docker-in-docker's `moby:false` (required on the
+    // node:24 / Debian-trixie base, where moby packages are unavailable) even for a feature
+    // that reached the DB without going through the create-time resolver (seed, migration,
+    // template, direct write). Without it, `moby` falls back to true and dockerd breaks.
+    const merged = { ...AVAILABLE_FEATURES.find((c) => c.id === f.id)?.defaultOptions, ...f.options }
+    const options = Object.keys(merged).length > 0 ? merged : undefined
     resolved.push({ id: f.id, script: buildFeatureInstallScript(f.ociRef, options) })
   }
   return resolved
@@ -329,8 +337,18 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
     `fi`,
   ].join("\n")
 
+  // Put ~/.local/bin on PATH. devcontainer features that install per-user (e.g. claude-code →
+  // ~/.local/bin) add this line to the user's rc files at build time, but the oh-my-zsh install
+  // below runs with KEEP_ZSHRC=no and OVERWRITES ~/.zshrc, dropping the feature's line — so on a
+  // bare base (node:24, where we install zsh ourselves and make it the login shell) the terminal
+  // ends up without ~/.local/bin and `claude` isn't found. Re-adding it in the snippets we append
+  // AFTER the clobber makes it survive. (On spunto this never bites: its devcontainer base image
+  // already ships oh-my-zsh, so the KEEP_ZSHRC=no install is skipped and ~/.zshrc is never wiped.)
+  const localBinOnPath = `export PATH="$HOME/.local/bin:$PATH"`
+
   const bashrcSnippet = [
     ``,
+    localBinOnPath,
     `__mp_ps1_git() { local b; b=$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null) || return; printf ' \\e[0;33m(%s)\\e[0m' "$b"; }`,
     `PS1='\\n\\[\\e[0;2m\\]\\u@\\h\\[\\e[0m\\] \\[\\e[1;34m\\]\\w\\[\\e[0m\\]$(__mp_ps1_git)\\n\\[\\e[1;32m\\]❯\\[\\e[0m\\] '`,
     `alias ll='ls -lah --color=auto'`,
@@ -343,6 +361,7 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
   // zsh gets its own alias block (oh-my-zsh already provides the theme/prompt).
   const zshrcAliasSnippet = [
     ``,
+    localBinOnPath,
     `setopt NO_BANG_HIST`,
     `alias ll='ls -lah --color=auto'`,
     `alias gs='git status'`,
