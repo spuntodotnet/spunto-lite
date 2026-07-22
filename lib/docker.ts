@@ -2,28 +2,27 @@ import Docker from "dockerode"
 import { existsSync } from "node:fs"
 import { hostname } from "node:os"
 import { getGcpRegistryKey, normalizeGcpKey } from "../services/settings"
+import { gcpAccessTokenFromCredential } from "./gcp-token"
 
 // Docker operations, ported/simplified from apps/agent/src/docker.ts. The control
 // plane talks straight to the local daemon — no remote agent, no OTLP telemetry
-// network. Private GCP Artifact Registry / GCR base images work via GCP_SA_KEY
-// (see getAuthForImage below); other registries are assumed public.
+// network. Private GCP Artifact Registry / GCR base images work via a configured
+// GCP credential (see getAuthForImage below); other registries are assumed public.
 
 export const docker = new Docker({ socketPath: process.env.DOCKER_SOCKET || "/var/run/docker.sock" })
 
 // ── Private-registry auth (GCP Artifact Registry / GCR) ───────────────────────
 //
-// dockerode does NOT read ~/.docker/config.json, and even if it did, a host that
-// ran `gcloud auth configure-docker` stores a *credential helper* (a dynamic
-// gcloud token), not a static credential we could reuse from inside this
-// container. So instead of trying to borrow the host's docker auth, we take a
-// GCP service-account key (roles/artifactregistry.reader) directly and pass it
-// to the daemon explicitly — exactly what the `docker` CLI does after resolving
-// its helper.
+// dockerode does NOT read ~/.docker/config.json. So we resolve a GCP credential
+// ourselves and mint a short-lived OAuth2 access token, passing it to the daemon
+// as `oauth2accesstoken` — exactly what `docker-credential-gcloud` does on the
+// host. The credential can be a service-account key OR a gcloud user credential
+// (authorized_user / application_default_credentials.json), see lib/gcp-token.ts.
 //
-// Source of the key, in order: the encrypted value configured in the UI (Settings
-// → Container registry, stored in SQLite), then the GCP_SA_KEY env var as a
-// headless/CI fallback. Neither set → behaves as before (public images only).
-function gcpServiceAccountKey(): string | null {
+// Source of the credential, in order: the encrypted value configured in the UI
+// (Settings → Container registry, stored in SQLite), then the GCP_SA_KEY env var
+// as a headless/CI fallback. Neither → behaves as before (public images only).
+function gcpRegistryCredential(): string | null {
   return getGcpRegistryKey() ?? normalizeGcpKey(process.env.GCP_SA_KEY)
 }
 
@@ -42,22 +41,24 @@ function isGcpRegistry(host: string): boolean {
 type RegistryAuth = { username: string; password: string; serveraddress: string }
 
 // Auth for a plain `docker pull` (dockerode `authconfig`). Returns undefined for
-// public / non-GCP registries or when no SA key is configured.
-export function getAuthForImage(image: string): RegistryAuth | undefined {
+// public / non-GCP registries or when no credential is configured. Mints a fresh
+// access token from the configured GCP credential.
+export async function getAuthForImage(image: string): Promise<RegistryAuth | undefined> {
   const host = registryHost(image)
   if (!host || !isGcpRegistry(host)) return undefined
-  const key = gcpServiceAccountKey()
-  if (!key) return undefined
-  return { username: "_json_key", password: key, serveraddress: host }
+  const cred = gcpRegistryCredential()
+  if (!cred) return undefined
+  const token = await gcpAccessTokenFromCredential(cred)
+  return { username: "oauth2accesstoken", password: token, serveraddress: host }
 }
 
 // Auth map for a `docker build` — the FROM base image is pulled by the daemon,
 // which takes a per-registry map via the X-Registry-Config header (dockerode
 // `registryconfig` build option), not a single authconfig.
-export function getRegistryConfigForImage(
+export async function getRegistryConfigForImage(
   image: string,
-): Record<string, { username: string; password: string }> | undefined {
-  const auth = getAuthForImage(image)
+): Promise<Record<string, { username: string; password: string }> | undefined> {
+  const auth = await getAuthForImage(image)
   if (!auth) return undefined
   return { [auth.serveraddress]: { username: auth.username, password: auth.password } }
 }
@@ -140,7 +141,7 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
   // Pull base image if missing.
   const imageExists = await docker.getImage(params.image).inspect().then(() => true).catch(() => false)
   if (!imageExists) {
-    const authconfig = getAuthForImage(params.image)
+    const authconfig = await getAuthForImage(params.image)
     await new Promise<void>((resolve, reject) => {
       docker.pull(params.image, authconfig ? { authconfig } : {}, (err, stream) => {
         if (err) return reject(err)
@@ -449,7 +450,7 @@ export async function buildProjectImage(params: {
   const contextStream = Readable.from(context)
 
   // Auth for the FROM base image if it lives in a private GCP registry.
-  const registryconfig = getRegistryConfigForImage(params.baseImage)
+  const registryconfig = await getRegistryConfigForImage(params.baseImage)
 
   let buildError: string | null = null
   await new Promise<void>((resolve, reject) => {
