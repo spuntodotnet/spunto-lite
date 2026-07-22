@@ -166,7 +166,7 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
                     <span className="text-xs font-mono font-medium truncate">{repo.path.replace("/workspace/", "")}</span>
                   </div>
                   {running && (
-                    <a href={workerBaseUrl(worker.id)} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "h-6 px-2 text-[11px] gap-1 text-muted-foreground shrink-0")}>
+                    <a href={workerBaseUrl(worker.id, { folder: repo.path })} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "h-6 px-2 text-[11px] gap-1 text-muted-foreground shrink-0")}>
                       <Code2 className="h-3 w-3" /> Open
                     </a>
                   )}
