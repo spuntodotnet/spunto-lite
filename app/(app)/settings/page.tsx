@@ -174,9 +174,13 @@ export default function SettingsPage() {
           </CardTitle>
           <CardDescription>
             To use a <strong>private</strong> base image from Google Artifact Registry / GCR (e.g.{" "}
-            <code className="font-mono text-xs">europe-west1-docker.pkg.dev/…</code>), paste a service-account key with the{" "}
-            <code className="font-mono text-xs">roles/artifactregistry.reader</code> role. Stored encrypted; used only to
-            pull images, never injected into workers.
+            <code className="font-mono text-xs">europe-west1-docker.pkg.dev/…</code>), paste a GCP credential — either a{" "}
+            <strong>service-account key</strong> (<code className="font-mono text-xs">roles/artifactregistry.reader</code>)
+            or your own <strong>gcloud user credentials</strong> (
+            <code className="font-mono text-xs">~/.config/gcloud/application_default_credentials.json</code>, from{" "}
+            <code className="font-mono text-xs">gcloud auth application-default login</code>). We exchange it for a
+            short-lived token to pull, just like the host&apos;s credential helper. Stored encrypted; used only to pull
+            images, never injected into workers.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -197,17 +201,18 @@ export default function SettingsPage() {
             </div>
           )}
           <div className="space-y-2">
-            <Label htmlFor="gcp">{settings?.gcpRegistryConfigured ? "Replace key" : "Service-account key"}</Label>
+            <Label htmlFor="gcp">{settings?.gcpRegistryConfigured ? "Replace credential" : "GCP credential"}</Label>
             <Textarea
               id="gcp"
               value={gcpKey}
               onChange={(e) => setGcpKey(e.target.value)}
-              placeholder={'{\n  "type": "service_account",\n  ...\n}\n\n— or its base64 encoding (base64 -w0 sa-key.json)'}
+              placeholder={'{\n  "type": "service_account" | "authorized_user",\n  ...\n}\n\n— raw JSON or its base64 encoding'}
               className="font-mono text-xs min-h-28"
               spellCheck={false}
             />
             <p className="text-xs text-muted-foreground">
-              Accepts the raw JSON key file or its base64 encoding. Leave empty to keep the current one.
+              Accepts the raw JSON (service-account key or authorized_user credential) or its base64 encoding. Leave empty
+              to keep the current one.
             </p>
           </div>
         </CardContent>
