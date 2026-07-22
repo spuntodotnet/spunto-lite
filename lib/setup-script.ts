@@ -132,6 +132,30 @@ export function buildImageScript(params: {
 }): { script: string; hasDinD: boolean } {
   const lines: string[] = [
     "set -e",
+    // Package-manager shim so the rest of this prebuild can install packages
+    // without caring which distro the base image is (Debian/Alpine/Fedora/…).
+    "mp_pkg_install() {",
+    "  if command -v apt-get >/dev/null 2>&1; then",
+    "    DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>&1 || return 1",
+    '    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" 2>&1',
+    '  elif command -v apk >/dev/null 2>&1; then apk add --no-cache "$@" 2>&1',
+    '  elif command -v dnf >/dev/null 2>&1; then dnf install -y "$@" 2>&1',
+    '  elif command -v yum >/dev/null 2>&1; then yum install -y "$@" 2>&1',
+    '  elif command -v pacman >/dev/null 2>&1; then pacman -Sy --noconfirm "$@" 2>&1',
+    '  else echo "[build] no supported package manager to install: $*" >&2; return 1; fi',
+    "}",
+    // Normalize a minimal base image (e.g. node:24) toward a devcontainer-like
+    // baseline. This prebuild runs as root, so install sudo + zsh here instead
+    // of assuming the image ships them: sudo makes the `vscode` NOPASSWD rule
+    // below actually usable (dotfiles/postCreate run as `vscode`, not root), and
+    // having zsh present lets the block further down set it as vscode's login
+    // shell. Best-effort — a failure must not abort the build.
+    "(",
+    "  set +e",
+    '  command -v sudo >/dev/null 2>&1 || { echo "[build] Installing sudo..."; mp_pkg_install sudo; }',
+    '  command -v zsh  >/dev/null 2>&1 || { echo "[build] Installing zsh...";  mp_pkg_install zsh; }',
+    "  set -e",
+    ")",
     "useradd -m -s /bin/bash vscode 2>/dev/null || true",
     "echo 'vscode ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers",
     "if command -v zsh >/dev/null 2>&1; then",
