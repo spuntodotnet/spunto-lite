@@ -257,8 +257,6 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
       `mkdir -p ${homeDir}/.ssh`,
       `printf '%s' ${shQuote(userSshPrivateKey)} > ${homeDir}/.ssh/mp_user_key`,
       `chmod 600 ${homeDir}/.ssh/mp_user_key`,
-      `grep -qF "mp_user_key" ${homeDir}/.ssh/config 2>/dev/null || printf 'Host *\\n  IdentityFile ${homeDir}/.ssh/mp_user_key\\n  StrictHostKeyChecking no\\n  IdentitiesOnly yes\\n' >> ${homeDir}/.ssh/config`,
-      `chmod 600 ${homeDir}/.ssh/config`,
     )
   }
   if (projectDeployKey) {
@@ -267,6 +265,23 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
       `mkdir -p ${homeDir}/.ssh`,
       `printf '%s' ${shQuote(projectDeployKey)} > ${homeDir}/.ssh/mp_deploy_key`,
       `chmod 600 ${homeDir}/.ssh/mp_deploy_key`,
+    )
+  }
+  // Single ~/.ssh/config governing every host. The user's selected key is listed
+  // FIRST, so it is the default identity for all git-over-SSH (github, gitlab,
+  // dotfiles, manual clones); the per-project deploy key follows only as a fallback
+  // for repos that authorise it exclusively. No `IdentitiesOnly yes` — that would
+  // pin ssh to the single first key and stop it falling through user → deploy.
+  if (userSshPrivateKey || projectDeployKey) {
+    const identityFiles = [
+      ...(userSshPrivateKey ? [`  IdentityFile ${homeDir}/.ssh/mp_user_key`] : []),
+      ...(projectDeployKey ? [`  IdentityFile ${homeDir}/.ssh/mp_deploy_key`] : []),
+    ]
+    const sshConfig = ["Host *", "  StrictHostKeyChecking no", ...identityFiles, ""].join("\n")
+    push(
+      `mkdir -p ${homeDir}/.ssh`,
+      `echo ${JSON.stringify(Buffer.from(sshConfig).toString("base64"))} | base64 -d > ${homeDir}/.ssh/config`,
+      `chmod 600 ${homeDir}/.ssh/config`,
     )
   }
 
