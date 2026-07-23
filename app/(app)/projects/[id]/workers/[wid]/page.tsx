@@ -138,7 +138,7 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
             <div className="min-w-0 flex-1">
               <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">Update available</p>
               <p className="mt-0.5 text-[11px] leading-relaxed text-amber-700/80 dark:text-amber-400/80">
-                This workspace runs <span className="font-mono">v{worker.projectVersion}</span>, but the latest project config is <span className="font-mono">v{project!.currentVersion}</span>. Rebuild to update — your files are kept.
+                This workspace runs <span className="font-mono">v{worker.projectVersion}</span>, but the latest project config is <span className="font-mono">v{project!.currentVersion}</span>. Rebuild to update — your workspace is kept.
               </p>
               <button
                 onClick={() => act("rebuild", "Rebuilding…")}

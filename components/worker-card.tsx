@@ -234,21 +234,21 @@ export function useWorkerMutations(projectId: string, workerId: string) {
 /**
  * Amber "Update to vN" pill shown when a worker runs an older config than the
  * project's latest version. Clicking it triggers the existing rebuild, which
- * re-spawns the container against the latest version (files are kept).
- * Renders nothing when the worker is already up to date.
+ * re-spawns the container against the latest version (workspace is kept).
+ * Asks for confirmation first. Renders nothing when the worker is up to date.
  */
 export function WorkerUpdateButton({ worker, projectId, latestVersion }: { worker: Worker; projectId: string; latestVersion: number }) {
   const { rebuild } = useWorkerMutations(projectId, worker.id)
   if (!isOutdated(worker, latestVersion)) return null
   return (
-    <Tooltip content={`Rebuild to update this workspace from v${worker.projectVersion} to the latest project config (v${latestVersion}). Your files are kept.`} side="top">
+    <Tooltip content={`Rebuild to update this workspace from v${worker.projectVersion} to the latest project config (v${latestVersion}). Your workspace is kept.`} side="top">
       <button
         type="button"
         disabled={rebuild.isPending}
         onClick={(e) => {
           e.preventDefault()
           e.stopPropagation()
-          rebuild.mutate()
+          if (confirm(`Update this workspace to v${latestVersion}?\n\nThe container is recreated on the latest project config — only your workspace (its files) is kept.`)) rebuild.mutate()
         }}
         className="inline-flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium leading-none text-amber-600 dark:text-amber-400 transition-colors hover:bg-amber-500/20 disabled:opacity-50"
       >
