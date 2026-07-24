@@ -2,6 +2,35 @@
 
 import { useEffect, useRef } from "react"
 import { useQuery } from "@tanstack/react-query"
+import { Terminal, type TerminalHandle } from "@spunto/design-system"
+
+/**
+ * Renders a chunk of log text in the design-system `Terminal` (a read-only
+ * xterm surface — no `onData`, so stdin stays disabled) so ANSI colours from the
+ * container/build survive. `text` is the full, already-tailed snapshot: we clear
+ * and re-write it whenever it changes. Container/build logs are LF-terminated
+ * and xterm needs CRLF to return the cursor to column 0.
+ */
+export function LogTerminal({ text, placeholder = "No output yet…" }: { text: string; placeholder?: string }) {
+  const term = useRef<TerminalHandle>(null)
+
+  // react-query keeps the string reference stable while the buffer is unchanged,
+  // so this only fires on a real update — cheap enough to reprint the whole tail
+  // (and correct even once the tail window slides past its line cap).
+  useEffect(() => {
+    const t = term.current
+    if (!t) return
+    t.clear()
+    if (text) t.write(text.replace(/\r?\n/g, "\r\n"))
+    else t.write(`\x1b[2m${placeholder}\x1b[0m`)
+  }, [text, placeholder])
+
+  return (
+    <div className="h-full w-full min-h-0 min-w-0">
+      <Terminal ref={term} fontSize={12} options={{ webLinks: true }} />
+    </div>
+  )
+}
 
 /** Read-only, auto-scrolling log tail (polls a text endpoint). */
 export function LogsPanel({ url, refetchInterval = 2000 }: { url: string; refetchInterval?: number }) {
@@ -10,24 +39,5 @@ export function LogsPanel({ url, refetchInterval = 2000 }: { url: string; refetc
     queryFn: () => fetch(url).then((r) => r.text()),
     refetchInterval,
   })
-  const ref = useRef<HTMLPreElement>(null)
-  const stick = useRef(true)
-
-  useEffect(() => {
-    const el = ref.current
-    if (el && stick.current) el.scrollTop = el.scrollHeight
-  }, [data])
-
-  return (
-    <pre
-      ref={ref}
-      onScroll={(e) => {
-        const el = e.currentTarget
-        stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-      }}
-      className="h-full overflow-auto bg-[oklch(0.17_0.012_52)] text-zinc-200 text-xs font-mono p-3 rounded-lg whitespace-pre-wrap break-words"
-    >
-      {data || "No output yet…"}
-    </pre>
-  )
+  return <LogTerminal text={data} />
 }
