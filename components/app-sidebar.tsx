@@ -20,7 +20,7 @@ export function AppSidebar() {
         <div className="inline-flex items-center justify-center size-7 rounded-md bg-primary text-primary-foreground">
           <Flame className="size-4" />
         </div>
-        <span className="font-[family-name:var(--font-syne)] font-bold tracking-tight">Spunto Lite</span>
+        <span className="font-display font-bold tracking-tight">Spunto Lite</span>
       </Link>
       <nav className="flex-1 p-2 space-y-1">
         {NAV.map(({ href, label, icon: Icon }) => {

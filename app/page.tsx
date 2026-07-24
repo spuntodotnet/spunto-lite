@@ -8,7 +8,7 @@ export default function Home() {
         <div className="inline-flex items-center justify-center size-14 rounded-xl bg-primary text-primary-foreground mb-6">
           <Flame className="size-7" />
         </div>
-        <h1 className="font-[family-name:var(--font-syne)] text-4xl font-bold tracking-tight">
+        <h1 className="font-display text-4xl font-bold tracking-tight">
           Spunto&nbsp;Lite
         </h1>
         <p className="mt-3 text-muted-foreground">

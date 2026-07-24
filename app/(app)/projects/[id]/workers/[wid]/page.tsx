@@ -32,7 +32,7 @@ import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import type { Worker, Project, ProjectImageBuild, SetupStatus } from "@/lib/types"
 import { Button, buttonVariants } from "@/components/ui/button"
-import { LogsPanel } from "@/components/logs-panel"
+import { LogsPanel, LogTerminal } from "@/components/logs-panel"
 import { TerminalSessions } from "@/components/terminal-sessions"
 import {
   ResourceBars,
@@ -522,9 +522,5 @@ function BuildLogs({ projectId, building }: { projectId: string; building: boole
     queryFn: () => api.get<ProjectImageBuild[]>(`/api/projects/${projectId}/builds`),
     refetchInterval: building ? 1500 : false,
   })
-  return (
-    <pre className="h-full overflow-auto text-zinc-300 text-[11px] font-mono whitespace-pre-wrap break-words">
-      {builds[0]?.logs || "Building…"}
-    </pre>
-  )
+  return <LogTerminal text={builds[0]?.logs || ""} placeholder="Building…" />
 }

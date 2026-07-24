@@ -25,7 +25,7 @@ export default function ProjectsPage() {
     <div className="max-w-5xl mx-auto p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="font-[family-name:var(--font-syne)] text-2xl font-bold tracking-tight">Projects</h1>
+          <h1 className="font-display text-2xl font-bold tracking-tight">Projects</h1>
           <p className="text-sm text-muted-foreground mt-1">Devcontainer specs you can spawn workers from.</p>
         </div>
         <div className="flex items-center gap-2">

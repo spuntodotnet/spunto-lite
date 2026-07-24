@@ -142,7 +142,7 @@ export function ProjectForm({ initial }: { initial?: Project }) {
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">
       <div>
-        <h1 className="font-[family-name:var(--font-syne)] text-2xl font-bold tracking-tight">
+        <h1 className="font-display text-2xl font-bold tracking-tight">
           {editing ? `Edit ${initial!.name}` : "New project"}
         </h1>
         <p className="text-sm text-muted-foreground mt-1">

@@ -9,12 +9,8 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * App-specific font stacks. The design-system's `@theme inline` maps
- * --font-sans/--font-mono/--font-syne onto these vars, but leaves their
- * concrete values to the consuming app.
+ * Fonts are now carried entirely by the design-system: it ships the `@font-face`
+ * rules and defines the `--font-sans` / `--font-mono` / `--font-display` theme
+ * tokens itself (utilities `font-sans` / `font-mono` / `font-display`). Nothing
+ * to declare here anymore.
  */
-:root {
-  --font-geist-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-geist-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  --font-syne: "Syne", "Inter", ui-sans-serif, system-ui, sans-serif;
-}
