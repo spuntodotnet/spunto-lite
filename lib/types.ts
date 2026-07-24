@@ -70,6 +70,57 @@ export type ProjectImageBuild = {
   createdAt: string
 }
 
+// ─── Resources overview (cross-project) ──────────────────────────────────────
+
+export type ContainerStats = { cpuPercent: number; memUsageMb: number; memLimitMb: number; memPercent: number }
+
+export type WorkerResource = {
+  id: string
+  name: string
+  projectId: string
+  projectName: string
+  state: string
+  running: boolean
+  projectVersion: number
+  createdAt: string
+  stats: ContainerStats | null
+}
+
+export type VolumeResource = {
+  name: string
+  sizeBytes: number
+  kind: "workspace" | "docker" | "containerd" | "other"
+  workerId: string | null
+  workerName: string | null
+  projectName: string | null
+  inUse: boolean
+}
+
+export type ImageResource = {
+  ref: string
+  sizeBytes: number
+  containers: number
+  projectId: string | null
+  projectName: string | null
+  version: number | null
+}
+
+export type ResourcesOverview = {
+  totals: {
+    workersTotal: number
+    workersRunning: number
+    cpuPercent: number
+    memUsageMb: number
+    volumesCount: number
+    volumesSizeBytes: number
+    imagesCount: number
+    imagesSizeBytes: number
+  }
+  workers: WorkerResource[]
+  volumes: VolumeResource[]
+  images: ImageResource[]
+}
+
 export type SecretMeta = { id: string; name: string }
 export type Settings = { id: string; gitUserName: string | null; gitUserEmail: string | null; sshKeyPath: string | null; dotfilesRepo: string | null; gcpRegistryConfigured: boolean }
 export type HostKey = { name: string; hasPublic: boolean }

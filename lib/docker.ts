@@ -317,6 +317,37 @@ export async function getContainerStats(containerId: string) {
   }
 }
 
+// ─── System-wide resource usage (for the Resources overview) ──────────────────
+
+export type DfVolume = { name: string; sizeBytes: number; refCount: number }
+export type DfImage = { id: string; repoTags: string[]; sizeBytes: number; created: number; containers: number }
+
+/**
+ * One-shot `docker system df` — the daemon's own accounting of volume and image
+ * disk usage. Cheaper and more accurate than inspecting each object: sizes come
+ * straight from the daemon. `UsageData.Size` is -1 when the daemon hasn't
+ * computed it yet (we surface that as -1 so the UI can show "—").
+ */
+export async function getSystemDf(): Promise<{ volumes: DfVolume[]; images: DfImage[] }> {
+  const df = (await docker.df()) as unknown as {
+    Volumes?: { Name: string; UsageData?: { Size?: number; RefCount?: number } }[]
+    Images?: { Id: string; RepoTags?: string[] | null; Size?: number; Created?: number; Containers?: number }[]
+  }
+  const volumes = (df.Volumes ?? []).map((v) => ({
+    name: v.Name,
+    sizeBytes: v.UsageData?.Size ?? -1,
+    refCount: v.UsageData?.RefCount ?? -1,
+  }))
+  const images = (df.Images ?? []).map((i) => ({
+    id: i.Id,
+    repoTags: (i.RepoTags ?? []).filter((t) => t && t !== "<none>:<none>"),
+    sizeBytes: i.Size ?? 0,
+    created: i.Created ?? 0,
+    containers: i.Containers ?? 0,
+  }))
+  return { volumes, images }
+}
+
 /** Resolves a worker container's IP on its network, for the reverse proxy. */
 export async function resolveContainerIp(workerId: string): Promise<string | null> {
   const containers = await docker.listContainers({
