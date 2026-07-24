@@ -27,7 +27,9 @@ export function LogTerminal({ text, placeholder = "No output yet…" }: { text: 
 
   return (
     <div className="h-full w-full min-h-0 min-w-0">
-      <Terminal ref={term} fontSize={12} options={{ webLinks: true }} />
+      {/* Drop the DS Terminal's own border + padding: the logs surface sits flush
+          in its (already dark) panel, no framing needed. */}
+      <Terminal ref={term} className="border-0 p-0" fontSize={12} options={{ webLinks: true }} />
     </div>
   )
 }
