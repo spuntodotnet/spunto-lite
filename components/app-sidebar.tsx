@@ -2,11 +2,12 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Flame, FolderGit2, Settings, KeyRound } from "lucide-react"
+import { Flame, FolderGit2, Settings, KeyRound, Activity } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const NAV = [
   { href: "/projects", label: "Projects", icon: FolderGit2 },
+  { href: "/resources", label: "Resources", icon: Activity },
   { href: "/secrets", label: "Global secrets", icon: KeyRound },
   { href: "/settings", label: "Settings", icon: Settings },
 ]
