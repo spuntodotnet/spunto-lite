@@ -43,6 +43,31 @@ test.describe("project CRUD", () => {
     expect((await request.get(`/api/projects/${created.id}`)).status()).toBe(404)
   })
 
+  test("delete removes it from the list and is not repeatable", async ({ request }) => {
+    const created = await createProject(request, "e2e-delete")
+
+    const del = await request.delete(`/api/projects/${created.id}`)
+    expect(del.status()).toBe(204)
+
+    const list = await (await request.get("/api/projects")).json()
+    expect(list.map((p: { id: string }) => p.id)).not.toContain(created.id)
+
+    // Second delete on the now-missing project → 404 (same shape as GET).
+    expect((await request.delete(`/api/projects/${created.id}`)).status()).toBe(404)
+  })
+
+  test("deleting a project drops its versions and secrets", async ({ request }) => {
+    const created = await createProject(request, "e2e-delete-cascade", {
+      secrets: [{ name: "TOKEN", value: "s3cret" }],
+    })
+    expect((await (await request.get(`/api/projects/${created.id}/secrets`)).json()).length).toBe(1)
+
+    expect((await request.delete(`/api/projects/${created.id}`)).status()).toBe(204)
+    // FK cascades wipe the child rows — both collection routes now come back empty.
+    expect(await (await request.get(`/api/projects/${created.id}/versions`)).json()).toEqual([])
+    expect(await (await request.get(`/api/projects/${created.id}/secrets`)).json()).toEqual([])
+  })
+
   test("editing config records a new version", async ({ request }) => {
     const created = await createProject(request, "e2e-versions")
     try {

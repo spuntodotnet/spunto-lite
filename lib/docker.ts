@@ -233,6 +233,21 @@ export async function removeWorker(workerId: string, containerId: string | null)
   }
 }
 
+/**
+ * Removes every image built for a project (`mp-proj-<projectId>:v*`). Best effort:
+ * an image still referenced by a surviving container is simply left behind.
+ */
+export async function removeProjectImages(projectId: string): Promise<void> {
+  try {
+    const images = await docker.listImages({ filters: { reference: [`mp-proj-${projectId}:*`] } })
+    for (const img of images) {
+      try {
+        await docker.getImage(img.Id).remove({ force: true })
+      } catch {}
+    }
+  } catch {}
+}
+
 export async function getContainerState(containerId: string): Promise<"running" | "stopped" | "not_found" | "error"> {
   try {
     const info = await docker.getContainer(containerId).inspect()

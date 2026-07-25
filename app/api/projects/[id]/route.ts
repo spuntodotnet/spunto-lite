@@ -21,6 +21,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  deleteProject(id)
-  return new Response(null, { status: 204 })
+  const deleted = await deleteProject(id)
+  return deleted ? new Response(null, { status: 204 }) : notFound("Project not found")
 }

@@ -3,12 +3,14 @@ import { db } from "../db/index"
 import {
   projects,
   projectVersions,
+  workers,
   type Project,
   type ProjectFeature,
   type ProjectVersionConfig,
 } from "../db/schema"
 import { newId } from "../lib/id"
 import { encrypt, decrypt } from "../lib/crypto"
+import { removeWorker as removeWorkerContainer, removeProjectImages } from "../lib/docker"
 import { generateSSHKeyPair, derivePublicKey } from "../lib/ssh"
 import { AVAILABLE_FEATURES } from "../lib/catalogs"
 import type { CreateProjectInput, UpdateProjectInput } from "../lib/validation"
@@ -178,8 +180,23 @@ export function setFavorite(id: string, favorite: boolean): SerializedProject | 
   return serializeProject(getProjectRow(id)!)
 }
 
-export function deleteProject(id: string) {
+/**
+ * Deletes a project and everything it owns: its workers' containers, networks and
+ * volumes, the images built for it, then the row itself (versions, secrets, workers
+ * and build rows go with it through the FK cascades). Docker cleanup is best effort
+ * — a container that can't be removed never blocks the deletion.
+ * Returns false when the project doesn't exist.
+ */
+export async function deleteProject(id: string): Promise<boolean> {
+  const existing = getProjectRow(id)
+  if (!existing) return false
+
+  const rows = db.select().from(workers).where(eq(workers.projectId, id)).all()
+  for (const w of rows) await removeWorkerContainer(w.id, w.containerId).catch(() => {})
+  await removeProjectImages(id)
+
   db.delete(projects).where(eq(projects.id, id)).run()
+  return true
 }
 
 export function listVersions(projectId: string) {
