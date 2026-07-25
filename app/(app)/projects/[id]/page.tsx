@@ -25,7 +25,6 @@ import {
   Clipboard,
   Check,
   Cpu,
-  Trash2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
@@ -34,7 +33,6 @@ import { buttonVariants } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { WorkersPanel } from "@/components/workers-panel"
 import { SpawnWorkerButton } from "@/components/spawn-worker-button"
-import { DeleteProjectDialog } from "@/components/delete-project-dialog"
 
 function Eyebrow({ icon, children }: { icon?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -51,7 +49,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const qc = useQueryClient()
   const [versionsOpen, setVersionsOpen] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [deleteOpen, setDeleteOpen] = useState(false)
 
   const { data: project, isError } = useQuery({ queryKey: ["project", id], queryFn: () => api.get<Project>(`/api/projects/${id}`) })
   const { data: workers = [] } = useQuery({ queryKey: ["workers", id], queryFn: () => api.get<Worker[]>(`/api/projects/${id}/workers`), refetchInterval: 2500 })
@@ -77,13 +74,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["builds", id] }); toast.success("Pre-building image…") },
     onError: (e) => toast.error((e as Error).message),
   })
-
-  const onDeleted = () => {
-    // Drop this project's cached queries so the redirect doesn't refetch a dead id.
-    qc.removeQueries({ queryKey: ["project", id] })
-    qc.removeQueries({ queryKey: ["workers", id] })
-    router.push("/projects")
-  }
 
   if (isError) {
     router.push("/projects")
@@ -328,19 +318,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
                 <span className="font-medium font-mono">Docker · local</span>
               </div>
             </div>
-
-            {/* Danger zone */}
-            <div className="px-4 py-3 border-t border-border/60">
-              <button
-                onClick={() => setDeleteOpen(true)}
-                className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-destructive/30 px-3 py-2 text-xs text-destructive hover:bg-destructive/10 transition-colors"
-              >
-                <Trash2 className="h-3.5 w-3.5" /> Delete project
-              </button>
-              <p className="text-[10px] text-muted-foreground/60 mt-2 leading-relaxed">
-                Destroys the spec, its version history, secrets and every workspace it spawned.
-              </p>
-            </div>
           </div>
         </aside>
 
@@ -349,15 +326,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           <WorkersPanel projectId={id} projectVersion={project.currentVersion} />
         </div>
       </div>
-
-      <DeleteProjectDialog
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        projectId={id}
-        projectName={project.name}
-        workerCount={workers.length}
-        onDeleted={onDeleted}
-      />
     </div>
   )
 }

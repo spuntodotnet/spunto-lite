@@ -1,14 +1,12 @@
 "use client"
 
-import { useState } from "react"
 import Link from "next/link"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Star, Box, GitBranch, Container, Rocket, Trash2 } from "lucide-react"
+import { Plus, Star, Box, GitBranch, Container, Rocket } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Project } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { DeleteProjectDialog } from "@/components/delete-project-dialog"
 
 export default function ProjectsPage() {
   const qc = useQueryClient()
@@ -22,9 +20,6 @@ export default function ProjectsPage() {
       api.post(`/api/projects/${id}/favorite`, { favorite }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
   })
-
-  // The project the delete confirmation is open for, if any.
-  const [pendingDelete, setPendingDelete] = useState<Project | null>(null)
 
   return (
     <div className="max-w-5xl mx-auto p-6">
@@ -69,22 +64,13 @@ export default function ProjectsPage() {
                   <div className="font-medium truncate">{p.name}</div>
                   <div className="text-xs text-muted-foreground truncate">{p.description || p.image}</div>
                 </Link>
-                <div className="flex items-center shrink-0">
-                  <button
-                    onClick={() => favorite.mutate({ id: p.id, favorite: !p.favorite })}
-                    className="p-1 text-muted-foreground hover:text-amber-500"
-                    aria-label="Favorite"
-                  >
-                    <Star className={p.favorite ? "size-4 fill-amber-400 text-amber-400" : "size-4"} />
-                  </button>
-                  <button
-                    onClick={() => setPendingDelete(p)}
-                    className="p-1 text-muted-foreground/40 hover:text-destructive transition-colors"
-                    aria-label={`Delete project ${p.name}`}
-                  >
-                    <Trash2 className="size-4" />
-                  </button>
-                </div>
+                <button
+                  onClick={() => favorite.mutate({ id: p.id, favorite: !p.favorite })}
+                  className="p-1 text-muted-foreground hover:text-amber-500"
+                  aria-label="Favorite"
+                >
+                  <Star className={p.favorite ? "size-4 fill-amber-400 text-amber-400" : "size-4"} />
+                </button>
               </div>
               <div className="flex flex-wrap gap-1.5 mt-3">
                 <Badge variant="muted">
@@ -101,15 +87,6 @@ export default function ProjectsPage() {
             </div>
           ))}
         </div>
-      )}
-
-      {pendingDelete && (
-        <DeleteProjectDialog
-          open
-          onOpenChange={(open) => !open && setPendingDelete(null)}
-          projectId={pendingDelete.id}
-          projectName={pendingDelete.name}
-        />
       )}
     </div>
   )
