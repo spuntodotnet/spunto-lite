@@ -71,3 +71,8 @@ cd e2e && npm install && E2E_BASE_URL=http://localhost:3900 npm run test:api
 CI runs the API suite on every PR (`.github/workflows/e2e-api.yml`). See `e2e/README.md` for the
 browser suite, the compose `test` profile (browser-remote/CDP), and the opt-in worker-lifecycle
 project.
+
+## License
+
+[MIT](LICENSE) — fork it, run it commercially, vendor pieces of it; just keep the
+copyright notice.
