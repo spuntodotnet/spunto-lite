@@ -14,7 +14,8 @@ import { removeWorker as removeWorkerContainer, removeProjectImages } from "../l
 import { generateSSHKeyPair, derivePublicKey } from "../lib/ssh"
 import { AVAILABLE_FEATURES } from "../lib/catalogs"
 import type { CreateProjectInput, UpdateProjectInput } from "../lib/validation"
-import { setProjectSecret } from "./secrets"
+import { PROJECT_EXPORT_KIND, PROJECT_EXPORT_VERSION, type ProjectExport } from "../lib/project-export"
+import { setProjectSecret, listProjectSecrets } from "./secrets"
 
 /** Resolves each feature id against the catalog, baking in its ociRef/localScript. */
 function resolveFeatures(features: { id: string; options?: Record<string, string> }[]): ProjectFeature[] {
@@ -197,6 +198,38 @@ export async function deleteProject(id: string): Promise<boolean> {
 
   db.delete(projects).where(eq(projects.id, id)).run()
   return true
+}
+
+/**
+ * Builds the portable spec of a project (see `lib/project-export.ts`).
+ * Instance-scoped fields (id, version, favorite, deploy key) are left out, and
+ * secrets travel as **names only** — values are write-only and never exported.
+ */
+export function exportProject(id: string): ProjectExport | undefined {
+  const p = getProjectRow(id)
+  if (!p) return undefined
+  return {
+    kind: PROJECT_EXPORT_KIND,
+    version: PROJECT_EXPORT_VERSION,
+    exportedAt: new Date().toISOString(),
+    project: {
+      name: p.name,
+      // `?? undefined` so unset fields are omitted from the JSON rather than
+      // serialised as null — keeps the file directly re-postable to /api/projects.
+      description: p.description ?? undefined,
+      image: p.image,
+      // Drop ociRef/localScript: they're re-resolved from the catalog on import.
+      features: p.features.map((f) => ({ id: f.id, options: f.options })),
+      vscodeExtensions: p.vscodeExtensions,
+      prewarmImages: p.prewarmImages,
+      dind: p.dind,
+      postCreateCommand: p.postCreateCommand ?? undefined,
+      postStartCommand: p.postStartCommand ?? undefined,
+      repositories: p.repositories,
+      forwardPorts: p.forwardPorts,
+      secretNames: listProjectSecrets(id).map((s) => s.name),
+    },
+  }
 }
 
 export function listVersions(projectId: string) {
