@@ -46,6 +46,13 @@ to `127.0.0.1` automatically in Chrome/Edge/Firefox.
   new-project form) pre-fills the creation form from such a file. Secret
   **values** are never exported — only their names, so the form can lay out the
   rows to fill in.
+- **⌘K search** (Ctrl+K on non-Apple): the header palette
+  (`CommandPalette` from `@spunto/design-system`) jumps to projects, workers, the
+  services a worker exposes (code-server + forwarded ports), image builds, secret
+  *names* and project templates — plus the nav and a couple of actions. It pulls
+  the whole index from `GET /api/search` when it opens (SQLite only, no Docker
+  round-trip, so it's instant) and filters in the browser, accent- and
+  case-insensitively.
 
 ## Requirements
 

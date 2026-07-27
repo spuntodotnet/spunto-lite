@@ -121,6 +121,25 @@ export type ResourcesOverview = {
   images: ImageResource[]
 }
 
+// ─── ⌘K search index (see services/search.ts) ────────────────────────────────
+
+export type SearchKind = "project" | "worker" | "service" | "build" | "secret" | "template"
+
+export type SearchHit = {
+  id: string
+  kind: SearchKind
+  label: string
+  description?: string
+  meta?: string
+  keywords: string[]
+  /** In-app route. Absent on `service` hits, which don't live on this origin. */
+  href?: string
+  /** Worker-hosted target, resolved client-side by `workerBaseUrl()`. */
+  target?: { workerId: string; port?: number }
+}
+
+export type SearchIndex = { hits: SearchHit[]; generatedAt: string }
+
 export type SecretMeta = { id: string; name: string }
 export type Settings = { id: string; gitUserName: string | null; gitUserEmail: string | null; sshKeyPath: string | null; dotfilesRepo: string | null; gcpRegistryConfigured: boolean }
 export type HostKey = { name: string; hasPublic: boolean }
