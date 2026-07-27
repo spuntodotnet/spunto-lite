@@ -319,6 +319,12 @@ export type SetupScriptParams = {
   projectDeployKey?: string
   /** Personal dotfiles repo: "owner/repo" shorthand or a full http(s)/ssh/git@ URL. */
   dotfilesRepo?: string
+  /**
+   * Branch to check out for every repository, overriding each repo's own default.
+   * Chosen per worker at spawn time; empty/absent falls back to `repository.branch`,
+   * then to the remote's default (HEAD).
+   */
+  branch?: string
 }
 
 /** owner/repo → https://github.com/owner/repo; a full URL (http.../git@.../ssh://) is kept as-is. */
@@ -330,6 +336,7 @@ function normalizeDotfilesUrl(raw: string): string {
 
 export function buildSetupScript(params: SetupScriptParams): { script: string } {
   const { project, userInfo, userSshPrivateKey, userEnvSecrets, projectDeployKey, dotfilesRepo } = params
+  const workerBranch = params.branch?.trim() || undefined
   const homeDir = "/home/vscode"
   const username = "vscode"
 
@@ -537,21 +544,49 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
     ...(projectDeployKey ? [`-i ${homeDir}/.ssh/mp_deploy_key`] : []),
   ].join(" ")
   project.repositories.forEach((r, i) => {
-    const cloneCmd =
+    // Same credentials for the clone and for the fetch of an already-cloned repo.
+    const gitEnv =
       r.provider === "git" && r.cloneUrl
-        ? `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${gitCloneIdentities}" git clone ${shQuote(r.cloneUrl)} /workspace/${r.workspacePath}`
+        ? `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${gitCloneIdentities}" `
         : r.provider === "github" && userSshPrivateKey
-        ? `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${homeDir}/.ssh/mp_user_key" git clone git@github.com:${r.project}.git /workspace/${r.workspacePath}`
-        : `git clone https://github.com/${r.project} /workspace/${r.workspacePath}`
-    push("", `echo "--- Cloning ${r.project} (${i + 1}/${project.repositories.length}) ---"`)
+        ? `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${homeDir}/.ssh/mp_user_key" `
+        : ""
+    const cloneUrl =
+      r.provider === "git" && r.cloneUrl
+        ? r.cloneUrl
+        : r.provider === "github" && userSshPrivateKey
+        ? `git@github.com:${r.project}.git`
+        : `https://github.com/${r.project}`
+    // Worker-level branch wins over the repository's own default; neither = remote HEAD.
+    const branch = workerBranch ?? (r.branch?.trim() || undefined)
+    const dir = `/workspace/${r.workspacePath}`
+    const cloneCmd = `${gitEnv}git clone ${branch ? `--branch ${shQuote(branch)} ` : ""}${shQuote(cloneUrl)} ${dir}`
+    push("", `echo "--- Cloning ${r.project}${branch ? ` (branch ${branch})` : ""} (${i + 1}/${project.repositories.length}) ---"`)
     mp(mkStatus("cloning", reposAtClone(i, "cloning"), pc0, null))
     push(
-      `if [ ! -d "/workspace/${r.workspacePath}/.git" ]; then`,
-      `  ${cloneCmd}`,
+      `if [ ! -d "${dir}/.git" ]; then`,
+      // `|| { …; false; }` keeps the readable message *and* the failure: `set -e` +
+      // the ERR trap then flip the setup status to error instead of carrying on with
+      // an empty workspace. A typo'd branch dies here, right under its own log line.
+      `  ${cloneCmd} || { echo "ERROR: clone of ${r.project} failed${branch ? ` — does the branch '${branch}' exist on the remote?` : ""}"; false; }`,
       `else`,
       `  echo "${r.project}: already present, skipping clone"`,
-      `fi`,
     )
+    if (branch) {
+      // Existing workspace (rebuild keeps the /workspace volume): land on the requested
+      // branch rather than leaving the worker on whatever HEAD the volume carried, but
+      // never at the cost of local work — git refuses a clobbering checkout, and we only
+      // warn so a rebuild is not lost over it.
+      push(
+        `  _mp_cur=$(git -C ${dir} rev-parse --abbrev-ref HEAD 2>/dev/null || true)`,
+        `  if [ "$_mp_cur" != ${shQuote(branch)} ]; then`,
+        `    echo "${r.project}: switching from '$_mp_cur' to branch '${branch}'"`,
+        `    ${gitEnv}git -C ${dir} fetch origin ${shQuote(branch)} 2>&1 || echo "${r.project}: could not fetch '${branch}' from origin"`,
+        `    git -C ${dir} checkout ${shQuote(branch)} 2>&1 || echo "WARNING: ${r.project}: could not check out '${branch}' (local changes, or unknown branch) — left on '$_mp_cur'"`,
+        `  fi`,
+      )
+    }
+    push(`fi`)
     mp(mkStatus("cloning", reposAtClone(i, "done"), pc0, null))
   })
   if (project.repositories.length > 0) push("", `chown -R ${username}:${username} /workspace`)
