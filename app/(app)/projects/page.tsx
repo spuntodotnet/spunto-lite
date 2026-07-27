@@ -1,15 +1,21 @@
 "use client"
 
+import { useRef } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Plus, Star, Box, GitBranch, Container, Rocket } from "lucide-react"
+import { toast } from "@spunto/design-system"
+import { Plus, Star, Box, GitBranch, Container, Rocket, Upload } from "lucide-react"
 import { api } from "@/lib/api"
+import { PROJECT_IMPORT_HANDOFF_KEY, parseProjectExport } from "@/lib/project-export"
 import type { Project } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 
 export default function ProjectsPage() {
   const qc = useQueryClient()
+  const router = useRouter()
+  const fileInput = useRef<HTMLInputElement>(null)
   const { data: projects = [], isLoading } = useQuery({
     queryKey: ["projects"],
     queryFn: () => api.get<Project[]>("/api/projects"),
@@ -21,6 +27,18 @@ export default function ProjectsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
   })
 
+  /** Validate here, hand the spec to the creation form through sessionStorage. */
+  async function importFile(file: File) {
+    const text = await file.text()
+    try {
+      parseProjectExport(text)
+    } catch (e) {
+      return toast.error((e as Error).message)
+    }
+    sessionStorage.setItem(PROJECT_IMPORT_HANDOFF_KEY, text)
+    router.push("/projects/new")
+  }
+
   return (
     <div className="max-w-5xl mx-auto p-6">
       <div className="flex items-center justify-between mb-6">
@@ -29,6 +47,22 @@ export default function ProjectsPage() {
           <p className="text-sm text-muted-foreground mt-1">Devcontainer specs you can spawn workers from.</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => fileInput.current?.click()}>
+            <Upload /> Import
+          </Button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            aria-label="Import project JSON"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              // Reset so re-picking the same file fires `change` again.
+              e.target.value = ""
+              if (file) importFile(file)
+            }}
+          />
           <Link href="/projects/new-from-template">
             <Button variant="outline">
               <Rocket /> From template

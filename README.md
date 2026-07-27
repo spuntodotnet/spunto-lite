@@ -41,6 +41,11 @@ to `127.0.0.1` automatically in Chrome/Edge/Firefox.
   host daemon.
 - **SQLite** (via Drizzle) for projects/workers/secrets, in a Docker volume.
 - **`~/.ssh` mounted read-only** and injected into each worker for git identity.
+- **Projects are portable**: *Export* on a project downloads its spec as JSON
+  (`GET /api/projects/:id/export`), *Import* on the dashboard (or in the
+  new-project form) pre-fills the creation form from such a file. Secret
+  **values** are never exported — only their names, so the form can lay out the
+  rows to fill in.
 
 ## Requirements
 

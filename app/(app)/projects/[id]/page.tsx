@@ -25,6 +25,7 @@ import {
   Clipboard,
   Check,
   Cpu,
+  Download,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
@@ -98,6 +99,15 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           {project.dind && <Badge variant="outline" className="text-[11px] h-5 px-2 shrink-0 bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30">DinD</Badge>}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {/* Plain link: the route sets Content-Disposition, the browser downloads it. */}
+          <a
+            href={`/api/projects/${id}/export`}
+            download
+            title="Download this project's spec as JSON (secret values excluded)"
+            className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-1.5")}
+          >
+            <Download className="h-3.5 w-3.5" /> Export
+          </a>
           <SpawnWorkerButton projectId={id} />
         </div>
       </div>

@@ -13,8 +13,8 @@ stand up either.
 
 | Project | What | Browser? | Docker? |
 |---|---|---|---|
-| `api` | HTTP-only: health, catalogs, project CRUD + validation, secrets, settings | no | no |
-| `browser` | UI: landing + nav, dashboard renders a seeded project | yes | no |
+| `api` | HTTP-only: health, catalogs, project CRUD + validation, project export, secrets, settings | no | no |
+| `browser` | UI: landing + nav, dashboard renders a seeded project, project import pre-fills the form | yes | no |
 | `worker-lifecycle` | spawn a real worker container → ready → stop → delete | no | **yes** (opt-in) |
 
 ## Running
@@ -102,10 +102,12 @@ e2e/
     health.spec.ts           (api)
     catalogs.spec.ts         (api)
     projects.spec.ts         (api)
+    project-export.spec.ts   (api)
     secrets.spec.ts          (api)
     settings.spec.ts         (api)
     landing.spec.ts              (browser)
     projects-ui.spec.ts          (browser)
+    project-import-ui.spec.ts    (browser)
     feature-docker-claude.spec.ts (worker-lifecycle, opt-in — dind+claude repro)
     worker-lifecycle.spec.ts (worker-lifecycle, opt-in)
 ```

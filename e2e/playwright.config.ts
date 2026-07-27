@@ -32,14 +32,14 @@ export default defineConfig({
     // Fast HTTP-only API suite — no browser, no Docker. Excludes the browser + worker specs.
     {
       name: "api",
-      testIgnore: [/worker-lifecycle\.spec\.ts/, /[\\/]feature-[^\\/]*\.spec\.ts$/, /landing\.spec\.ts/, /projects-ui\.spec\.ts/, /resources-ui\.spec\.ts/],
+      testIgnore: [/worker-lifecycle\.spec\.ts/, /[\\/]feature-[^\\/]*\.spec\.ts$/, /landing\.spec\.ts/, /projects-ui\.spec\.ts/, /project-import-ui\.spec\.ts/, /resources-ui\.spec\.ts/],
     },
     // Browser suite. Drives Chrome — locally a bundled Chromium, or (with CDP_ENDPOINT set)
     // browser-remote's shared Chrome over CDP. fullyParallel:false keeps each spec on one worker
     // so tests in a file don't open concurrent CDP connections to the single shared browser.
     {
       name: "browser",
-      testMatch: [/landing\.spec\.ts/, /projects-ui\.spec\.ts/, /resources-ui\.spec\.ts/],
+      testMatch: [/landing\.spec\.ts/, /projects-ui\.spec\.ts/, /project-import-ui\.spec\.ts/, /resources-ui\.spec\.ts/],
       fullyParallel: false,
       // Desktop UI — test at a realistic laptop resolution rather than the 1280×720 default.
       use: {

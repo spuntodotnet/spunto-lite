@@ -1,11 +1,16 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useQuery } from "@tanstack/react-query"
 import { toast } from "@spunto/design-system"
-import { Plus, Trash2, X } from "lucide-react"
+import { Plus, Trash2, Upload, X } from "lucide-react"
 import { api } from "@/lib/api"
+import {
+  PROJECT_IMPORT_HANDOFF_KEY,
+  parseProjectExport,
+  type ProjectExport,
+} from "@/lib/project-export"
 import type { Project, Repository, DevImage, DevFeature, ExtensionSuggestion } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -61,6 +66,49 @@ export function ProjectForm({ initial }: { initial?: Project }) {
   const [dind, setDind] = useState(initial?.dind ?? false)
   const [secrets, setSecrets] = useState<SecretDraft[]>([])
   const [saving, setSaving] = useState(false)
+  const [imported, setImported] = useState<string | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
+
+  /** Overwrites every field with an imported spec. Secrets come back as empty rows. */
+  function applyImport({ project: p }: ProjectExport) {
+    setName(p.name)
+    setDescription(p.description ?? "")
+    setImage(p.image)
+    setRepos(p.repositories.map((r) => ({ ...r, id: r.id ?? crypto.randomUUID() })))
+    setSelectedFeatures(p.features.map((f) => ({ id: f.id, version: f.options?.version })))
+    setExts(p.vscodeExtensions)
+    setPostCreate(p.postCreateCommand ?? "")
+    setPostStart(p.postStartCommand ?? "")
+    setForwardPorts(p.forwardPorts.join(", "))
+    setPrewarm(p.prewarmImages.join(", "))
+    setDind(p.dind)
+    setSecrets(p.secretNames.map((n) => ({ name: n, value: "" })))
+    setImported(p.name)
+  }
+
+  // Import started from the dashboard: the file was already read and validated
+  // there, then handed over through sessionStorage across the navigation.
+  useEffect(() => {
+    if (editing) return
+    const stashed = sessionStorage.getItem(PROJECT_IMPORT_HANDOFF_KEY)
+    if (!stashed) return
+    sessionStorage.removeItem(PROJECT_IMPORT_HANDOFF_KEY)
+    try {
+      applyImport(parseProjectExport(stashed))
+    } catch (e) {
+      toast.error((e as Error).message)
+    }
+    // Runs once, on mount — the handoff is consumed immediately.
+  }, [])
+
+  async function importFile(file: File) {
+    try {
+      applyImport(parseProjectExport(await file.text()))
+      toast.success("Project spec imported — review and create")
+    } catch (e) {
+      toast.error((e as Error).message)
+    }
+  }
 
   const featureOf = (id: string) => features.find((f) => f.id === id)
 
@@ -141,14 +189,43 @@ export function ProjectForm({ initial }: { initial?: Project }) {
 
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6">
-      <div>
-        <h1 className="font-display text-2xl font-bold tracking-tight">
-          {editing ? `Edit ${initial!.name}` : "New project"}
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Define a devcontainer-style spec. Workers spawn from it as isolated Docker containers.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display text-2xl font-bold tracking-tight">
+            {editing ? `Edit ${initial!.name}` : "New project"}
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Define a devcontainer-style spec. Workers spawn from it as isolated Docker containers.
+          </p>
+        </div>
+        {!editing && (
+          <>
+            <Button variant="outline" size="sm" className="shrink-0" onClick={() => fileInput.current?.click()}>
+              <Upload /> Import JSON
+            </Button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              aria-label="Import project JSON"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                // Reset so re-picking the same file fires `change` again.
+                e.target.value = ""
+                if (file) importFile(file)
+              }}
+            />
+          </>
+        )}
       </div>
+
+      {imported && (
+        <p className="text-sm text-muted-foreground rounded-lg border border-border bg-muted/40 px-3 py-2">
+          Fields pre-filled from the export of <span className="font-medium text-foreground">{imported}</span>.
+          {secrets.length > 0 && " Secret values aren't exported — fill them in below."}
+        </p>
+      )}
 
       <Section title="Identity">
         <div className="space-y-2">
