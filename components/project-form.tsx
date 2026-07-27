@@ -4,14 +4,22 @@ import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useQuery } from "@tanstack/react-query"
 import { toast } from "@spunto/design-system"
-import { Plus, Trash2, Upload, X } from "lucide-react"
+import { BadgeCheck, Loader2, Plus, Search, Trash2, Upload, X } from "lucide-react"
 import { api } from "@/lib/api"
+import { EXTENSION_ID_HINT, isExtensionId } from "@/lib/extensions"
 import {
   PROJECT_IMPORT_HANDOFF_KEY,
   parseProjectExport,
   type ProjectExport,
 } from "@/lib/project-export"
-import type { Project, Repository, DevImage, DevFeature, ExtensionSuggestion } from "@/lib/types"
+import type {
+  Project,
+  Repository,
+  DevImage,
+  DevFeature,
+  ExtensionLookup,
+  ExtensionSuggestion,
+} from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -45,9 +53,25 @@ export function ProjectForm({ initial }: { initial?: Project }) {
     queryKey: ["features"],
     queryFn: () => api.get<DevFeature[]>("/api/features"),
   })
-  const { data: extensions = [] } = useQuery({
-    queryKey: ["extensions"],
-    queryFn: () => api.get<ExtensionSuggestion[]>("/api/extensions"),
+  // Extension picker: empty query → the curated suggestions, otherwise a live
+  // Open VSX search. Same registry code-server installs from, so anything listed
+  // here is installable (see lib/open-vsx.ts).
+  const [extQuery, setExtQuery] = useState("")
+  const [extSearch, setExtSearch] = useState("")
+  useEffect(() => {
+    const t = setTimeout(() => setExtSearch(extQuery.trim()), 300)
+    return () => clearTimeout(t)
+  }, [extQuery])
+
+  const {
+    data: extensions = [],
+    isFetching: extLoading,
+    error: extError,
+  } = useQuery({
+    queryKey: ["extensions", extSearch],
+    queryFn: () =>
+      api.get<ExtensionSuggestion[]>(`/api/extensions${extSearch ? `?q=${encodeURIComponent(extSearch)}` : ""}`),
+    placeholderData: (prev) => prev,
   })
 
   const [name, setName] = useState(initial?.name ?? "")
@@ -59,6 +83,7 @@ export function ProjectForm({ initial }: { initial?: Project }) {
   )
   const [exts, setExts] = useState<string[]>(initial?.vscodeExtensions ?? [])
   const [extInput, setExtInput] = useState("")
+  const [checkingExt, setCheckingExt] = useState(false)
   const [postCreate, setPostCreate] = useState(initial?.postCreateCommand ?? "")
   const [postStart, setPostStart] = useState(initial?.postStartCommand ?? "")
   const [forwardPorts, setForwardPorts] = useState((initial?.forwardPorts ?? []).join(", "))
@@ -131,10 +156,41 @@ export function ProjectForm({ initial }: { initial?: Project }) {
     setRepos((r) => r.filter((x) => x.id !== id))
   }
 
-  function addExt() {
+  function toggleExt(id: string) {
+    setExts((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
+  }
+
+  /**
+   * Adds a hand-typed id, but only after checking it: shape first, then
+   * existence in the registry. The point is to say "unknown extension" here and
+   * now rather than let the user find out from a build log ten minutes later.
+   * If the registry itself can't be reached we add it anyway with a warning —
+   * a network blip shouldn't block a valid id.
+   */
+  async function addExt() {
     const v = extInput.trim()
-    if (v && !exts.includes(v)) setExts((e) => [...e, v])
-    setExtInput("")
+    if (!v) return
+    if (!isExtensionId(v)) return toast.error(`Invalid id "${v}". ${EXTENSION_ID_HINT}`)
+    if (exts.includes(v)) {
+      setExtInput("")
+      return toast.info(`${v} is already in the list`)
+    }
+    setCheckingExt(true)
+    try {
+      const verdict = await api.get<ExtensionLookup>(`/api/extensions?id=${encodeURIComponent(v)}`)
+      if (!verdict.found) {
+        return toast.error(`"${v}" doesn't exist on Open VSX — code-server wouldn't be able to install it`)
+      }
+      setExts((e) => [...e, v])
+      setExtInput("")
+      toast.success(`Added ${verdict.extension?.label ?? v}`)
+    } catch (e) {
+      setExts((cur) => [...cur, v])
+      setExtInput("")
+      toast.warning(`Couldn't verify "${v}" against Open VSX (${(e as Error).message}) — added without checking`)
+    } finally {
+      setCheckingExt(false)
+    }
   }
 
   function buildPayload() {
@@ -171,6 +227,10 @@ export function ProjectForm({ initial }: { initial?: Project }) {
   async function submit() {
     if (!name.trim()) return toast.error("Name is required")
     if (!image.trim()) return toast.error("Base image is required")
+    // The API rejects these too; catching them here points at the offending chip
+    // instead of surfacing a raw validation error.
+    const badExts = exts.filter((id) => !isExtensionId(id))
+    if (badExts.length) return toast.error(`Invalid extension id: ${badExts.join(", ")}. ${EXTENSION_ID_HINT}`)
     setSaving(true)
     try {
       const payload = buildPayload()
@@ -351,21 +411,68 @@ export function ProjectForm({ initial }: { initial?: Project }) {
         </div>
       </Section>
 
-      <Section title="VS Code extensions" description="Pre-installed into code-server.">
-        <div className="flex flex-wrap gap-2">
-          {extensions.map((e) => (
-            <button
-              key={e.id}
-              type="button"
-              onClick={() => setExts((cur) => (cur.includes(e.id) ? cur.filter((x) => x !== e.id) : [...cur, e.id]))}
-              className={`rounded-md border px-2 py-1 text-xs transition-colors ${
-                exts.includes(e.id) ? "border-primary bg-primary/10 text-primary" : "border-border hover:bg-accent"
-              }`}
-            >
-              {e.label}
-            </button>
-          ))}
+      <Section
+        title="VS Code extensions"
+        description="Searched on and installed from Open VSX — the registry code-server resolves extension ids against."
+      >
+        <div className="space-y-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              className="h-8 pl-8 text-xs"
+              placeholder="Search Open VSX (e.g. prettier, python, docker)…"
+              aria-label="Search VS Code extensions"
+              value={extQuery}
+              onChange={(e) => setExtQuery(e.target.value)}
+            />
+            {extLoading && (
+              <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 size-3.5 animate-spin text-muted-foreground" />
+            )}
+          </div>
+
+          {extError ? (
+            <p className="text-xs text-destructive">
+              {(extError as Error).message}. Type the id by hand below if you know it.
+            </p>
+          ) : extensions.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No extension matches “{extSearch}” on Open VSX.</p>
+          ) : (
+            <>
+              {!extSearch && <p className="text-xs text-muted-foreground">Popular picks — search above for anything else.</p>}
+              <div className="max-h-64 overflow-y-auto rounded-lg border border-border divide-y divide-border">
+                {extensions.map((e) => {
+                  const selected = exts.includes(e.id)
+                  return (
+                    <button
+                      key={e.id}
+                      type="button"
+                      onClick={() => toggleExt(e.id)}
+                      aria-pressed={selected}
+                      className={`w-full text-left px-3 py-2 transition-colors ${
+                        selected ? "bg-primary/10" : "hover:bg-accent"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-xs font-medium truncate ${selected ? "text-primary" : ""}`}>{e.label}</span>
+                        {e.verified && <BadgeCheck className="size-3 shrink-0 text-primary/70" aria-label="Verified publisher" />}
+                        {typeof e.downloads === "number" && (
+                          <span className="ml-auto shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                            {formatDownloads(e.downloads)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] font-mono text-muted-foreground truncate">{e.id}</div>
+                      {e.description && (
+                        <div className="text-[11px] text-muted-foreground/70 truncate">{e.description}</div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </>
+          )}
         </div>
+
         <div className="flex gap-2">
           <Input
             className="h-8 font-mono text-xs"
@@ -374,22 +481,34 @@ export function ProjectForm({ initial }: { initial?: Project }) {
             onChange={(e) => setExtInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addExt())}
           />
-          <Button variant="outline" size="sm" onClick={addExt}>
+          <Button variant="outline" size="sm" onClick={addExt} disabled={checkingExt}>
+            {checkingExt ? <Loader2 className="animate-spin" /> : null}
             Add
           </Button>
         </div>
+
         {exts.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {exts.map((id) => (
-              <Badge key={id} variant="secondary" className="font-mono">
+              <Badge
+                key={id}
+                variant={isExtensionId(id) ? "secondary" : "destructive"}
+                className="font-mono"
+                title={isExtensionId(id) ? id : `${id} — ${EXTENSION_ID_HINT}`}
+              >
                 {id}
-                <button onClick={() => setExts((c) => c.filter((x) => x !== id))} className="ml-1">
+                <button onClick={() => setExts((c) => c.filter((x) => x !== id))} className="ml-1" aria-label={`Remove ${id}`}>
                   <X className="size-3" />
                 </button>
               </Badge>
             ))}
           </div>
         )}
+
+        <p className="text-xs text-muted-foreground">
+          Extensions are baked into the project image at build time. Changing this list bumps the project version, so
+          existing workers only pick it up once rebuilt on the new image.
+        </p>
       </Section>
 
       <Section title="Lifecycle" description="Run inside the container, in the repo dir.">
@@ -475,6 +594,13 @@ export function ProjectForm({ initial }: { initial?: Project }) {
       </div>
     </div>
   )
+}
+
+/** 53830876 → "53.8M" — download counts are only there to rank, not to be read precisely. */
+function formatDownloads(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`
+  return String(n)
 }
 
 function deriveLabel(urlOrPath: string): string {

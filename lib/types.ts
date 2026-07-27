@@ -134,7 +134,26 @@ export type DevFeature = {
   description: string
   options?: { name: string; default: string; description: string }[]
 }
-export type ExtensionSuggestion = { id: string; label: string }
+/** An extension as served by /api/extensions (curated defaults or Open VSX search hits). */
+export type ExtensionSuggestion = {
+  id: string
+  label: string
+  publisher: string
+  description?: string
+  downloads?: number
+  verified?: boolean
+  url?: string
+}
+
+/** Verdict of /api/extensions?id=… for a hand-typed identifier. */
+export type ExtensionLookup = {
+  id: string
+  /** Shape check: `publisher.extension-id`. */
+  valid: boolean
+  /** Whether Open VSX actually knows it. */
+  found: boolean
+  extension: ExtensionSuggestion | null
+}
 export type Template = {
   id: string
   name: string

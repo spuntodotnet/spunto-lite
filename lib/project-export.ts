@@ -7,7 +7,7 @@
 // secret *names* travel, so the import can lay out the rows to fill in.
 
 import { z } from "zod"
-import { FeatureInputSchema, RepositorySchema } from "./validation"
+import { ExtensionIdSchema, FeatureInputSchema, RepositorySchema } from "./validation"
 
 export const PROJECT_EXPORT_KIND = "spunto-lite/project"
 export const PROJECT_EXPORT_VERSION = 1
@@ -25,7 +25,7 @@ export const ProjectExportSchema = z.object({
     description: z.string().nullable().optional(),
     image: z.string().min(1),
     features: z.array(FeatureInputSchema).default([]),
-    vscodeExtensions: z.array(z.string()).default([]),
+    vscodeExtensions: z.array(ExtensionIdSchema).default([]),
     prewarmImages: z.array(z.string()).default([]),
     dind: z.boolean().default(false),
     postCreateCommand: z.string().nullable().optional(),

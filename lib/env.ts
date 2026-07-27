@@ -14,3 +14,10 @@ export const HOST_SSH_DIR = process.env.HOST_SSH_DIR || "/host-ssh"
 
 /** Port the custom server listens on (serves app + reverse-proxies workers). */
 export const PORT = Number(process.env.PORT || 80)
+
+/**
+ * Extension registry the "VS Code extensions" picker searches. It must stay the
+ * registry code-server installs from (Open VSX by default) so that "findable in
+ * the UI" implies "installable in the worker" — see lib/open-vsx.ts.
+ */
+export const OPEN_VSX_API = (process.env.OPEN_VSX_API || "https://open-vsx.org/api").replace(/\/+$/, "")

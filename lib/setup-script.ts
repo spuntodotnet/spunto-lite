@@ -6,6 +6,7 @@
 
 import type { ProjectFeature, Repository, SetupStatus } from "../db/schema"
 import { AVAILABLE_FEATURES } from "./catalogs"
+import { EXTENSION_FAILED_MARKER } from "./extensions"
 
 // ─── Shell helpers ────────────────────────────────────────────────────────────
 
@@ -135,6 +136,56 @@ function defaultVscodeUserSettings(projectName?: string): Record<string, unknown
   }
 }
 
+// ─── VS Code extensions (prebuild) ────────────────────────────────────────────
+
+// Installs one extension and *reports* the outcome. Two things it does that the
+// previous bare `set +e; code-server --install-extension …; set -e` did not:
+//
+//  1. it never swallows a failure — every miss is printed with the
+//     EXTENSION_FAILED_MARKER prefix, which the project page greps out of the
+//     build log to flag the extension in the UI;
+//  2. it checks the extension actually landed on disk. code-server doesn't
+//     reliably exit non-zero on an unknown id, so exit code alone lets a
+//     "Extension 'x' not found" scroll past as a success.
+//
+// A failed extension still doesn't break the build — it's a nice-to-have, not a
+// prerequisite — but it is now impossible to miss in the logs.
+const EXTENSION_INSTALLER = [
+  "MP_EXT_FAILED=''",
+  "mp_install_extension() {",
+  '  _ext="$1"',
+  "  if ! command -v code-server >/dev/null 2>&1; then",
+  `    echo "${EXTENSION_FAILED_MARKER} $_ext — code-server isn't installed in this image, so no extension can be pre-installed."`,
+  '    MP_EXT_FAILED="$MP_EXT_FAILED $_ext"',
+  "    return 0",
+  "  fi",
+  '  echo "[build] Installing extension: $_ext"',
+  "  set +e",
+  '  code-server --extensions-dir /opt/mp-extensions --install-extension "$_ext" 2>&1',
+  "  _rc=$?",
+  "  set -e",
+  // VS Code lays extensions out as <publisher>.<name>-<version>/ (lowercased).
+  `  _dir=$(find /opt/mp-extensions -maxdepth 1 -iname "$_ext-*" 2>/dev/null | head -1)`,
+  '  if [ "$_rc" -ne 0 ] || [ -z "$_dir" ]; then',
+  `    echo "${EXTENSION_FAILED_MARKER} $_ext (exit $_rc) — not installed."`,
+  `    echo "[build]   Extensions are resolved against Open VSX (https://open-vsx.org/extension/\${_ext%%.*}/\${_ext#*.}). Ids copied from the Microsoft Marketplace often don't exist there. Continuing without it."`,
+  '    MP_EXT_FAILED="$MP_EXT_FAILED $_ext"',
+  "  else",
+  '    echo "[build] Extension installed: $_ext"',
+  "  fi",
+  "}",
+]
+
+const EXTENSION_INSTALL_SUMMARY = [
+  'if [ -n "$MP_EXT_FAILED" ]; then',
+  `  echo "[build] WARNING: VS Code extension(s) that failed to install:$MP_EXT_FAILED"`,
+  // Left in the image so the worker can tell what's missing without the build log.
+  `  echo "$MP_EXT_FAILED" | tr ' ' '\\n' | sed '/^$/d' > /etc/mp-extension-failures`,
+  "else",
+  '  echo "[build] All VS Code extensions installed"',
+  "fi",
+]
+
 // ─── 1. buildImageScript (prebuild) ───────────────────────────────────────────
 
 export function buildImageScript(params: {
@@ -181,9 +232,23 @@ export function buildImageScript(params: {
     "export _CONTAINER_USER=vscode",
     "export _CONTAINER_USER_HOME=/home/vscode",
     "",
+    // `curl … | sh` used to hide two failures at once: the pipeline's exit status
+    // is the shell's, so a missing curl (minimal bases like node:*-slim don't ship
+    // one) left the image with no code-server at all — and every later
+    // `--install-extension` then died with "command not found", swallowed by the
+    // old `set +e`. Install curl if needed, and say so loudly when it still fails.
     'if ! command -v code-server >/dev/null 2>&1; then',
     '  echo "[build] Installing code-server..."',
+    "  (",
+    "    set +e",
+    '    command -v curl >/dev/null 2>&1 || { echo "[build] Installing curl (needed to fetch code-server)..."; mp_pkg_install curl ca-certificates; }',
+    "    set -e",
+    "  )",
+    "  set +e",
     '  curl -fsSL https://code-server.dev/install.sh | sh -s -- --method standalone --prefix /usr/local',
+    "  set -e",
+    '  command -v code-server >/dev/null 2>&1 \\',
+    '    || echo "[build] WARNING: code-server could not be installed — the workspace IDE and any VS Code extension below will be missing from this image."',
     'fi',
     "(",
     "  set +e",
@@ -228,14 +293,11 @@ export function buildImageScript(params: {
   )
 
   if (params.vscodeExtensions && params.vscodeExtensions.length > 0) {
-    lines.push("", 'echo "[build] Installing VS Code extensions..."', "mkdir -p /opt/mp-extensions")
+    lines.push("", 'echo "[build] Installing VS Code extensions..."', "mkdir -p /opt/mp-extensions", ...EXTENSION_INSTALLER)
     for (const ext of params.vscodeExtensions) {
-      lines.push(
-        `set +e`,
-        `code-server --extensions-dir /opt/mp-extensions --install-extension ${JSON.stringify(ext)} 2>&1`,
-        `set -e`,
-      )
+      lines.push(`mp_install_extension ${shQuote(ext)}`)
     }
+    lines.push(...EXTENSION_INSTALL_SUMMARY)
   }
 
   lines.push("", "chown -R vscode:vscode /home/vscode 2>/dev/null || true", 'echo "[build] Image build complete"')
@@ -594,7 +656,11 @@ export function buildStartScript(params: StartScriptParams): { script: string; h
     "done",
   )
 
-  // Copy prebuilt extensions
+  // Copy the extensions baked into the image at build time. Runs on every boot,
+  // `-n` so an extension the user installed themselves from inside code-server
+  // is never clobbered. Consequence worth knowing: editing a project's extension
+  // list bumps its version, so the new set only reaches a worker once it runs on
+  // the freshly built image — i.e. after a spawn or a **rebuild**, not a restart.
   push(
     "",
     'if [ -d /opt/mp-extensions ] && [ "$(ls -A /opt/mp-extensions 2>/dev/null)" ]; then',

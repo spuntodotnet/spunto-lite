@@ -1,6 +1,8 @@
 // Curated catalogs for the project spec form. Ported from Spunto's
 // modules/images + modules/features, trimmed to the local use case.
 
+import type { ExtensionSuggestion } from "./open-vsx"
+
 export type DevImage = { id: string; label: string; image: string; description: string }
 
 export const AVAILABLE_IMAGES: DevImage[] = [
@@ -113,15 +115,21 @@ export const AVAILABLE_FEATURES: DevFeature[] = [
   },
 ]
 
-export type ExtensionSuggestion = { id: string; label: string }
-
+// Default state of the extension picker, shown until the user types a query —
+// `/api/extensions?q=` then searches Open VSX for real (lib/open-vsx.ts).
+//
+// Every id below is published on Open VSX, the registry code-server installs
+// from; that's the bar for being listed here. Re-check with:
+//   curl -s https://open-vsx.org/api/<publisher>/<name> | head -c 200
+// (a 404 means the id only exists on the Microsoft Marketplace — drop it or
+// swap it for the Open VSX equivalent).
 export const SUGGESTED_EXTENSIONS: ExtensionSuggestion[] = [
-  { id: "esbenp.prettier-vscode", label: "Prettier" },
-  { id: "dbaeumer.vscode-eslint", label: "ESLint" },
-  { id: "ms-python.python", label: "Python" },
-  { id: "golang.go", label: "Go" },
-  { id: "rust-lang.rust-analyzer", label: "rust-analyzer" },
-  { id: "bradlc.vscode-tailwindcss", label: "Tailwind CSS IntelliSense" },
-  { id: "eamodio.gitlens", label: "GitLens" },
-  { id: "ms-azuretools.vscode-docker", label: "Docker" },
-]
+  { id: "esbenp.prettier-vscode", label: "Prettier - Code formatter", publisher: "esbenp" },
+  { id: "dbaeumer.vscode-eslint", label: "ESLint", publisher: "dbaeumer" },
+  { id: "ms-python.python", label: "Python", publisher: "ms-python" },
+  { id: "golang.go", label: "Go", publisher: "golang" },
+  { id: "rust-lang.rust-analyzer", label: "rust-analyzer", publisher: "rust-lang" },
+  { id: "bradlc.vscode-tailwindcss", label: "Tailwind CSS IntelliSense", publisher: "bradlc" },
+  { id: "eamodio.gitlens", label: "GitLens — Git supercharged", publisher: "eamodio" },
+  { id: "ms-azuretools.vscode-docker", label: "Docker", publisher: "ms-azuretools" },
+].map((e) => ({ ...e, url: `https://open-vsx.org/extension/${e.id.replace(".", "/")}` }))
