@@ -26,9 +26,11 @@ import {
   Check,
   Cpu,
   Download,
+  TriangleAlert,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
+import { parseFailedExtensions } from "@/lib/extensions"
 import type { Project, Worker, ProjectVersion, ProjectImageBuild, SecretMeta } from "@/lib/types"
 import { buttonVariants } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -86,6 +88,9 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const imageShort = project.image.split("/").pop() ?? project.image
   const currentBuild = builds.find((b) => b.version === project.currentVersion)
   const isBuilding = currentBuild?.state === "building"
+  // An extension that failed to install doesn't fail the build — it would
+  // otherwise vanish silently, so read the verdict back out of the build log.
+  const failedExts = new Set(currentBuild ? parseFailedExtensions(currentBuild.logs) : [])
 
   return (
     <div className="flex flex-col gap-4 h-full p-5 md:p-6">
@@ -206,13 +211,33 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               <div className="px-4 py-3 border-b border-border/60">
                 <Eyebrow>VS Code extensions</Eyebrow>
                 <div className="flex flex-wrap gap-1.5">
-                  {project.vscodeExtensions.map((ext) => (
-                    <div key={ext} title={ext} className="flex items-center gap-1 bg-primary/10 text-primary rounded-md px-2 py-1 text-[11px] font-mono">
-                      <Puzzle className="h-3 w-3 shrink-0" />
-                      {ext.split(".").pop()}
-                    </div>
-                  ))}
+                  {project.vscodeExtensions.map((ext) => {
+                    const failed = failedExts.has(ext)
+                    return (
+                      <div
+                        key={ext}
+                        title={failed ? `${ext} — failed to install during the v${project.currentVersion} build` : ext}
+                        className={cn(
+                          "flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-mono",
+                          failed ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary",
+                        )}
+                      >
+                        {failed ? <TriangleAlert className="h-3 w-3 shrink-0" /> : <Puzzle className="h-3 w-3 shrink-0" />}
+                        {ext.split(".").pop()}
+                      </div>
+                    )
+                  })}
                 </div>
+                {failedExts.size > 0 && (
+                  <p className="mt-2 text-[11px] leading-relaxed text-destructive">
+                    {failedExts.size} extension{failedExts.size > 1 ? "s" : ""} failed to install in the v
+                    {project.currentVersion} image — code-server resolves ids against{" "}
+                    <a href="https://open-vsx.org" target="_blank" rel="noreferrer" className="underline">
+                      Open VSX
+                    </a>
+                    , where ids copied from the Microsoft Marketplace often don&apos;t exist.
+                  </p>
+                )}
               </div>
             )}
 
