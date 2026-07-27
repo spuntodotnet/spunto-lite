@@ -577,12 +577,15 @@ export function buildSetupScript(params: SetupScriptParams): { script: string } 
       // branch rather than leaving the worker on whatever HEAD the volume carried, but
       // never at the cost of local work — git refuses a clobbering checkout, and we only
       // warn so a rebuild is not lost over it.
+      // `safe.directory`: setup runs as root while /workspace belongs to vscode, and
+      // git refuses to touch a repo it sees as someone else's ("dubious ownership").
+      const git = `git -c safe.directory=${dir} -C ${dir}`
       push(
-        `  _mp_cur=$(git -C ${dir} rev-parse --abbrev-ref HEAD 2>/dev/null || true)`,
+        `  _mp_cur=$(${git} rev-parse --abbrev-ref HEAD 2>/dev/null || true)`,
         `  if [ "$_mp_cur" != ${shQuote(branch)} ]; then`,
         `    echo "${r.project}: switching from '$_mp_cur' to branch '${branch}'"`,
-        `    ${gitEnv}git -C ${dir} fetch origin ${shQuote(branch)} 2>&1 || echo "${r.project}: could not fetch '${branch}' from origin"`,
-        `    git -C ${dir} checkout ${shQuote(branch)} 2>&1 || echo "WARNING: ${r.project}: could not check out '${branch}' (local changes, or unknown branch) — left on '$_mp_cur'"`,
+        `    ${gitEnv}${git} fetch origin ${shQuote(branch)} 2>&1 || echo "${r.project}: could not fetch '${branch}' from origin"`,
+        `    ${git} checkout ${shQuote(branch)} 2>&1 || echo "WARNING: ${r.project}: could not check out '${branch}' (local changes, or unknown branch) — left on '$_mp_cur'"`,
         `  fi`,
       )
     }

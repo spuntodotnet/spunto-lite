@@ -219,10 +219,28 @@ export async function refreshWorker(w: Worker): Promise<Worker> {
   const cState = await getContainerState(w.containerId).catch(() => "error" as const)
 
   if (cState === "not_found") {
-    if (w.state !== "error") db.update(workers).set({ state: "stopped", containerId: null }).where(eq(workers.id, w.id)).run()
+    if (w.state === "error") return w
+    db.update(workers).set({ state: "stopped", containerId: null }).where(eq(workers.id, w.id)).run()
     return { ...w, state: "stopped", containerId: null }
   }
   if (cState === "stopped") {
+    // A failed setup is terminal: don't let the next poll relabel it "stopped".
+    if (w.state === "error") return w
+    // A container that dies *during* setup didn't stop, it failed — a branch that
+    // doesn't exist on the remote, a clone that can't authenticate. Its status file
+    // is unreadable once the container is gone (`docker exec` needs it running), so
+    // derive the failure from the state we were in: `stopWorker` writes "stopped"
+    // before the container actually goes down, so a user-requested stop never lands here.
+    const diedSettingUp = w.state === "pending" || w.state === "building" || w.state === "starting"
+    if (diedSettingUp) {
+      const setup: SetupStatus = {
+        ...(w.setupStatus ?? { phase: "error", repos: [], postCreate: null, postStart: null }),
+        phase: "error",
+        error: w.setupStatus?.error ?? "Setup exited before the workspace was ready — see the logs",
+      }
+      db.update(workers).set({ state: "error", setupStatus: setup }).where(eq(workers.id, w.id)).run()
+      return { ...w, state: "error", setupStatus: setup }
+    }
     if (w.state !== "stopped") db.update(workers).set({ state: "stopped" }).where(eq(workers.id, w.id)).run()
     return { ...w, state: "stopped" }
   }
