@@ -7,6 +7,7 @@ export type Repository = {
   project: string
   workspacePath: string
   cloneUrl?: string
+  branch?: string
 }
 
 export type ProjectFeature = { id: string; options?: Record<string, string>; ociRef?: string; localScript?: string }
@@ -47,6 +48,8 @@ export type Worker = {
   containerId: string | null
   state: WorkerState
   setupStatus: SetupStatus | null
+  /** Branch requested at creation, checked out instead of the remote default. */
+  branch: string | null
   projectVersion: number
   tags: string[]
   createdAt: string

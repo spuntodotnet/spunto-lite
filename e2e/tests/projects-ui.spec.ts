@@ -59,6 +59,28 @@ test.describe("projects dashboard", () => {
     await expect(page.getByRole("main").getByRole("button", { name: /delete/i })).toHaveCount(0)
   })
 
+  test("New workspace spawns on the branch typed in the form", async ({ page, request }) => {
+    await page.goto(`/projects/${projectId}`)
+    await page.getByRole("button", { name: "New workspace" }).first().click()
+
+    // Named: toasts are role="dialog" too, and one fires on success.
+    const dialog = page.getByRole("dialog", { name: "New workspace" })
+    await expect(dialog).toBeVisible()
+    await dialog.getByLabel("Name").fill("e2e-ui-worker")
+    await dialog.getByLabel("Branch").fill("release/1.2")
+    await dialog.getByRole("button", { name: "Create" }).click()
+    await expect(dialog).toBeHidden()
+
+    // The container spawn needs Docker and may fail in the background; what this
+    // asserts is that the form's branch reached the worker row.
+    await expect
+      .poll(async () => {
+        const list = await (await request.get(`/api/projects/${projectId}/workers`)).json()
+        return list.find((w: { name: string }) => w.name === "e2e-ui-worker")?.branch
+      })
+      .toBe("release/1.2")
+  })
+
   test("the empty-state 'New project' CTA is reachable", async ({ page }) => {
     await page.goto("/projects/new")
     await expect(page).toHaveURL(/\/projects\/new$/)

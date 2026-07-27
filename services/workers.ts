@@ -90,7 +90,12 @@ export function listBuilds(projectId: string) {
 
 // ─── Worker script assembly ───────────────────────────────────────────────────
 
-function buildFullScript(project: Project): string {
+/**
+ * `branch` is the worker's own checkout target: `buildFullScript` reads the *current*
+ * project row (not the version snapshot), so a per-worker branch can only travel
+ * through this argument, never through `project.repositories`.
+ */
+function buildFullScript(project: Project, branch?: string | null): string {
   const settings = getSettings()
   const secrets = resolveSecretsForSpawn(project.id)
   const userSshPrivateKey = readHostPrivateKey(settings.sshKeyPath) ?? undefined
@@ -108,6 +113,7 @@ function buildFullScript(project: Project): string {
     userEnvSecrets: secrets,
     projectDeployKey,
     dotfilesRepo: settings.dotfilesRepo ?? undefined,
+    branch: branch ?? undefined,
   })
 
   const { script: start } = buildStartScript({
@@ -145,13 +151,13 @@ function spawnEnv(project: Project, workerId: string): string[] {
 // ─── Spawn pipeline ───────────────────────────────────────────────────────────
 
 /** Fire-and-forget: build the image (if needed) then create/start the container. */
-async function runSpawnPipeline(workerId: string, project: Project, version: number) {
+async function runSpawnPipeline(workerId: string, project: Project, version: number, branch?: string | null) {
   try {
     setWorkerState(workerId, "building")
     const image = await ensureProjectImage(project, version)
 
     setWorkerState(workerId, "starting")
-    const script = buildFullScript(project)
+    const script = buildFullScript(project, branch)
     const env = spawnEnv(project, workerId)
 
     const { containerId } = await spawnContainer({
@@ -176,7 +182,7 @@ function setWorkerState(workerId: string, state: string) {
   db.update(workers).set({ state }).where(eq(workers.id, workerId)).run()
 }
 
-export function spawnWorker(projectId: string, name?: string): Worker {
+export function spawnWorker(projectId: string, name?: string, branch?: string): Worker {
   const project = getProjectRow(projectId)
   if (!project) throw new Error("Project not found")
   const id = newShortId()
@@ -188,12 +194,13 @@ export function spawnWorker(projectId: string, name?: string): Worker {
     containerId: null,
     state: "pending",
     setupStatus: { phase: "pending", repos: [], postCreate: null, postStart: null },
+    branch: branch?.trim() || null,
     projectVersion: project.currentVersion,
     tags: [],
     createdAt: new Date(),
   }
   db.insert(workers).values(row).run()
-  void runSpawnPipeline(id, project, project.currentVersion)
+  void runSpawnPipeline(id, project, project.currentVersion, row.branch)
   return row
 }
 
@@ -212,10 +219,28 @@ export async function refreshWorker(w: Worker): Promise<Worker> {
   const cState = await getContainerState(w.containerId).catch(() => "error" as const)
 
   if (cState === "not_found") {
-    if (w.state !== "error") db.update(workers).set({ state: "stopped", containerId: null }).where(eq(workers.id, w.id)).run()
+    if (w.state === "error") return w
+    db.update(workers).set({ state: "stopped", containerId: null }).where(eq(workers.id, w.id)).run()
     return { ...w, state: "stopped", containerId: null }
   }
   if (cState === "stopped") {
+    // A failed setup is terminal: don't let the next poll relabel it "stopped".
+    if (w.state === "error") return w
+    // A container that dies *during* setup didn't stop, it failed — a branch that
+    // doesn't exist on the remote, a clone that can't authenticate. Its status file
+    // is unreadable once the container is gone (`docker exec` needs it running), so
+    // derive the failure from the state we were in: `stopWorker` writes "stopped"
+    // before the container actually goes down, so a user-requested stop never lands here.
+    const diedSettingUp = w.state === "pending" || w.state === "building" || w.state === "starting"
+    if (diedSettingUp) {
+      const setup: SetupStatus = {
+        ...(w.setupStatus ?? { phase: "error", repos: [], postCreate: null, postStart: null }),
+        phase: "error",
+        error: w.setupStatus?.error ?? "Setup exited before the workspace was ready — see the logs",
+      }
+      db.update(workers).set({ state: "error", setupStatus: setup }).where(eq(workers.id, w.id)).run()
+      return { ...w, state: "error", setupStatus: setup }
+    }
     if (w.state !== "stopped") db.update(workers).set({ state: "stopped" }).where(eq(workers.id, w.id)).run()
     return { ...w, state: "stopped" }
   }
@@ -287,8 +312,10 @@ export async function deleteWorker(id: string): Promise<void> {
 /**
  * Removes the container but KEEPS the workspace volume, then respawns against
  * the project's current version. The `/workspace` volume (git clone, uncommitted
- * work) survives; the setup script's idempotent clone guard skips re-cloning.
- * Use `deleteWorker` to also wipe the volumes.
+ * work) survives; the setup script's idempotent clone guard skips re-cloning. A
+ * worker created on a branch keeps it: the guard's else-branch checks it out again
+ * (best-effort — local work is never clobbered). Use `deleteWorker` to also wipe
+ * the volumes.
  */
 export async function rebuildWorker(id: string): Promise<Worker | undefined> {
   const w = getWorkerRow(id)
@@ -300,6 +327,6 @@ export async function rebuildWorker(id: string): Promise<Worker | undefined> {
     .set({ containerId: null, state: "pending", projectVersion: project.currentVersion, setupStatus: { phase: "pending", repos: [], postCreate: null, postStart: null } })
     .where(eq(workers.id, id))
     .run()
-  void runSpawnPipeline(id, project, project.currentVersion)
+  void runSpawnPipeline(id, project, project.currentVersion, w.branch)
   return getWorkerRow(id)
 }

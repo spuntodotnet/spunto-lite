@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useQuery } from "@tanstack/react-query"
-import { Clock, Code2, ChevronRight, Trash2 } from "lucide-react"
+import { Clock, Code2, ChevronRight, GitBranch, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import { buttonVariants } from "@/components/ui/button"
@@ -86,6 +86,11 @@ export function WorkerTable({ workers, projectId, projectVersion }: { workers: W
                     v{w.projectVersion}
                   </span>
                   <WorkerUpdateButton worker={w} projectId={projectId} latestVersion={projectVersion} />
+                  {w.branch && (
+                    <span className="flex items-center gap-1 text-[11px] font-mono text-muted-foreground/60" title={`Created on branch ${w.branch}`}>
+                      <GitBranch className="h-3 w-3" /> {w.branch}
+                    </span>
+                  )}
                 </div>
               </td>
               <td className="px-4 py-2.5">

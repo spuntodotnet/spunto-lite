@@ -18,6 +18,8 @@ export const RepositorySchema = z.object({
   workspacePath: z.string(),
   // Raw clone URL for generic ("git") repos, e.g. git@gitlab.com:group/repo.git
   cloneUrl: z.string().optional(),
+  // Default branch to clone; absent/empty = the remote's default (HEAD).
+  branch: z.string().optional(),
 })
 
 export const SecretInputSchema = z.object({

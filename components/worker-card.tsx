@@ -394,6 +394,16 @@ export function WorkerCard({
               <span className="flex items-center gap-1 text-[11px] text-muted-foreground/60">
                 <Clock className="h-3 w-3" /> {formatRelativeTime(worker.createdAt)}
               </span>
+              {/* Branch asked for at creation — what was cloned, as opposed to the
+                  live chips below which show where each repo actually sits now. */}
+              {worker.branch && (
+                <span
+                  className="flex items-center gap-1 text-[11px] font-mono text-muted-foreground/60"
+                  title={`Created on branch ${worker.branch}`}
+                >
+                  <GitBranch className="h-3 w-3" /> {worker.branch}
+                </span>
+              )}
             </div>
           </div>
         </div>

@@ -9,6 +9,8 @@ export type Repository = {
   project: string // display label, e.g. "owner/repo"
   workspacePath: string
   cloneUrl?: string
+  /** Default branch to check out. Empty/absent = the remote's default (HEAD). */
+  branch?: string
 }
 
 export type ProjectFeature = {
@@ -103,6 +105,10 @@ export const workers = sqliteTable("workers", {
   // pending | building | starting | ready | stopped | error
   state: text("state").notNull().default("pending"),
   setupStatus: text("setup_status", { mode: "json" }).$type<SetupStatus | null>(),
+  // Branch checked out at clone time, overriding each repository's own default.
+  // Null = the remote's default branch. Persisted so a rebuild (which keeps the
+  // /workspace volume) still knows which branch this worker was created for.
+  branch: text("branch"),
   projectVersion: integer("project_version").notNull().default(1),
   tags: text("tags", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),

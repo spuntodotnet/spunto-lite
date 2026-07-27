@@ -215,6 +215,7 @@ export function ProjectForm({ initial }: { initial?: Project }) {
           project: r.provider === "git" ? r.project || deriveLabel(r.cloneUrl || "") : r.project.trim(),
           workspacePath: r.workspacePath.trim() || deriveLabel(r.project || r.cloneUrl || "app"),
           cloneUrl: r.provider === "git" ? r.cloneUrl?.trim() : undefined,
+          branch: r.branch?.trim() || undefined,
         })),
       forwardPorts: forwardPorts
         .split(",")
@@ -325,7 +326,10 @@ export function ProjectForm({ initial }: { initial?: Project }) {
         </div>
       </Section>
 
-      <Section title="Repositories" description="Cloned into /workspace at spawn.">
+      <Section
+        title="Repositories"
+        description="Cloned into /workspace at spawn. Leave the branch empty for the remote's default — each workspace can override it at creation."
+      >
         <div className="space-y-3">
           {repos.map((r) => (
             <div key={r.id} className="rounded-lg border border-border p-3 space-y-2">
@@ -351,21 +355,29 @@ export function ProjectForm({ initial }: { initial?: Project }) {
                   <Trash2 className="size-4" />
                 </Button>
               </div>
-              {r.provider === "git" ? (
+              <div className="flex items-center gap-2">
+                {r.provider === "git" ? (
+                  <Input
+                    className="h-8 flex-1 font-mono text-xs"
+                    placeholder="git@gitlab.com:group/repo.git"
+                    value={r.cloneUrl ?? ""}
+                    onChange={(e) => updateRepo(r.id, { cloneUrl: e.target.value })}
+                  />
+                ) : (
+                  <Input
+                    className="h-8 flex-1 font-mono text-xs"
+                    placeholder="owner/repo"
+                    value={r.project}
+                    onChange={(e) => updateRepo(r.id, { project: e.target.value })}
+                  />
+                )}
                 <Input
-                  className="h-8 font-mono text-xs"
-                  placeholder="git@gitlab.com:group/repo.git"
-                  value={r.cloneUrl ?? ""}
-                  onChange={(e) => updateRepo(r.id, { cloneUrl: e.target.value })}
+                  className="h-8 w-44 font-mono text-xs"
+                  placeholder="branch (default)"
+                  value={r.branch ?? ""}
+                  onChange={(e) => updateRepo(r.id, { branch: e.target.value })}
                 />
-              ) : (
-                <Input
-                  className="h-8 font-mono text-xs"
-                  placeholder="owner/repo"
-                  value={r.project}
-                  onChange={(e) => updateRepo(r.id, { project: e.target.value })}
-                />
-              )}
+              </div>
             </div>
           ))}
           <Button variant="outline" size="sm" onClick={addRepo}>
