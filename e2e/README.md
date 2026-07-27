@@ -105,9 +105,13 @@ e2e/
     project-export.spec.ts   (api)
     secrets.spec.ts          (api)
     settings.spec.ts         (api)
+    resources.spec.ts        (api)
+    search.spec.ts           (api)   # ⌘K palette index
     landing.spec.ts              (browser)
     projects-ui.spec.ts          (browser)
     project-import-ui.spec.ts    (browser)
+    resources-ui.spec.ts         (browser)
+    command-palette-ui.spec.ts   (browser)
     feature-docker-claude.spec.ts (worker-lifecycle, opt-in — dind+claude repro)
     worker-lifecycle.spec.ts (worker-lifecycle, opt-in)
 ```
