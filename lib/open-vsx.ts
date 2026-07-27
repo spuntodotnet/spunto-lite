@@ -20,6 +20,10 @@ export type ExtensionSuggestion = {
   downloads?: number
   /** Open VSX "verified publisher" flag. */
   verified?: boolean
+  /** Latest published version, e.g. "11.0.0". */
+  version?: string
+  /** The extension's own icon on Open VSX — what `ExtensionCard` draws. */
+  iconUrl?: string
   /** Registry page, for a "view on Open VSX" link. */
   url?: string
 }
@@ -37,6 +41,9 @@ type OpenVsxExtension = {
   downloadCount?: number
   verified?: boolean
   deprecated?: boolean
+  version?: string
+  /** `/-/search` flattens the icon here; `/{namespace}/{name}` nests it under `files`. */
+  files?: { icon?: string | null } | null
 }
 
 function toSuggestion(e: OpenVsxExtension): ExtensionSuggestion | null {
@@ -48,6 +55,10 @@ function toSuggestion(e: OpenVsxExtension): ExtensionSuggestion | null {
     description: e.description || undefined,
     downloads: e.downloadCount,
     verified: e.verified,
+    version: e.version,
+    // Passed through rather than dropped: the picker's cards draw the real icon,
+    // and it's already in the payload the registry answered with.
+    iconUrl: e.files?.icon ?? undefined,
     url: `https://open-vsx.org/extension/${e.namespace}/${e.name}`,
   }
 }

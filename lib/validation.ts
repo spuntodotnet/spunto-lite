@@ -30,6 +30,12 @@ export const SecretInputSchema = z.object({
 export const FeatureInputSchema = z.object({
   id: z.string(),
   options: z.record(z.string(), z.string()).optional(),
+  /**
+   * OCI reference for a feature that isn't in the catalog — what the form's
+   * "custom OCI ref" field adds. Ignored for a catalog id, whose ref is always
+   * resolved server-side (see `resolveFeatures`).
+   */
+  ociRef: z.string().optional(),
 })
 
 export const CreateProjectSchema = z.object({

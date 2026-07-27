@@ -11,18 +11,23 @@ function jsonFile(payload: unknown) {
   return { name: "spec.spunto-project.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(payload)) }
 }
 
-/** The form's fields, after an import — asserted identically from both entry points. */
+/**
+ * The form's fields, after an import — asserted identically from both entry points.
+ * Ids and field names are the design system's (`@spunto/design-system/projects`); the
+ * base image is a catalog chip rather than a text input, so it's read off the build
+ * manifest, which recaps the value the form actually holds.
+ */
 async function expectPrefilled(page: Page, name: string) {
-  await expect(page.locator("#name")).toHaveValue(name)
-  await expect(page.locator("#desc")).toHaveValue("imported spec")
-  await expect(page.locator("#image")).toHaveValue(IMAGE)
-  await expect(page.locator("#ports")).toHaveValue("3000, 8080")
-  await expect(page.locator("#prewarm")).toHaveValue("node:24")
-  await expect(page.locator("#pc")).toHaveValue("npm ci")
-  await expect(page.locator("#ps")).toHaveValue("npm run dev")
-  // Secret names travel, values don't — the row is laid out empty to fill in.
-  await expect(page.getByPlaceholder("UPPER_SNAKE_CASE")).toHaveValue("TOKEN")
-  await expect(page.getByPlaceholder("value")).toHaveValue("")
+  await expect(page.locator("#project-name")).toHaveValue(name)
+  await expect(page.locator("#project-description")).toHaveValue("imported spec")
+  await expect(page.getByRole("main").getByText(IMAGE.split("/").pop()!).first()).toBeVisible()
+  await expect(page.locator('input[name="forwardPorts"]')).toHaveValue("3000, 8080")
+  await expect(page.locator('textarea[name="prewarmImages"]')).toHaveValue("node:24")
+  await expect(page.locator("#post-create")).toHaveValue("npm ci")
+  await expect(page.locator("#post-start")).toHaveValue("npm run dev")
+  // Secret names travel, values don't. A secret is write-only, so there's no
+  // half-filled row to lay out: the banner names the ones to type back in.
+  await expect(page.getByText(/Secret values aren.t exported/)).toContainText("TOKEN")
 }
 
 test.describe("project import", () => {
@@ -71,10 +76,10 @@ test.describe("project import", () => {
   test("an imported spec can be created as a new project", async ({ page, request }) => {
     await page.goto("/projects/new")
     await page.getByLabel("Import project JSON").setInputFiles(jsonFile(exported))
-    await expect(page.locator("#name")).toHaveValue(name)
+    await expect(page.locator("#project-name")).toHaveValue(name)
 
     const clonedName = `${name}-clone`
-    await page.locator("#name").fill(clonedName)
+    await page.locator("#project-name").fill(clonedName)
     await page.getByRole("button", { name: "Create project" }).click()
     await expect(page).toHaveURL(/\/projects\/[a-z0-9]+$/)
 
@@ -86,7 +91,7 @@ test.describe("project import", () => {
       expect(created.image).toBe(IMAGE)
       expect(created.forwardPorts).toEqual([3000, 8080])
       expect(created.postStartCommand).toBe("npm run dev")
-      // The empty secret row is dropped — no value, nothing to store.
+      // An export carries secret *names* only, so there's nothing to store.
       expect(await (await request.get(`/api/projects/${created.id}/secrets`)).json()).toEqual([])
     } finally {
       await request.delete(`/api/projects/${created.id}`)
@@ -98,6 +103,6 @@ test.describe("project import", () => {
     await page.getByLabel("Import project JSON").setInputFiles(jsonFile({ hello: "world" }))
 
     await expect(page.getByText("Not a spunto-lite project export")).toBeVisible()
-    await expect(page.locator("#name")).toHaveValue("")
+    await expect(page.locator("#project-name")).toHaveValue("")
   })
 })

@@ -164,6 +164,9 @@ export type ExtensionSuggestion = {
   description?: string
   downloads?: number
   verified?: boolean
+  /** Latest published version, and the extension's own icon on Open VSX. */
+  version?: string
+  iconUrl?: string
   url?: string
 }
 
