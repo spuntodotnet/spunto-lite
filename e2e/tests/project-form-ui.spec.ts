@@ -45,8 +45,10 @@ test.describe("project form → stored project", () => {
 
     await page.locator("#post-create").fill("npm ci")
     await page.locator("#post-start").fill("npm run dev")
-    await page.locator('input[name="forwardPorts"]').fill("3000, 8080")
-    await page.locator('textarea[name="prewarmImages"]').fill("node:24")
+    // Ports and prewarm images are deliberately not in `sections` — the form has
+    // no field for them at all, folded or not.
+    await expect(page.locator('input[name="forwardPorts"]')).toHaveCount(0)
+    await expect(page.locator('textarea[name="prewarmImages"]')).toHaveCount(0)
     await page.getByRole("switch").click()
 
     await page.getByLabel("Secret name").fill("TOKEN")
@@ -67,11 +69,12 @@ test.describe("project form → stored project", () => {
       description: "driven by playwright",
       image: "mcr.microsoft.com/devcontainers/python:3.12",
       vscodeExtensions: ["esbenp.prettier-vscode"],
-      prewarmImages: ["node:24"],
       dind: true,
       postCreateCommand: "npm ci",
       postStartCommand: "npm run dev",
-      forwardPorts: [3000, 8080],
+      // Nothing to type them in, so nothing is stored.
+      forwardPorts: [],
+      prewarmImages: [],
     })
     // The feature carries the version typed in the form; its OCI ref is resolved server-side.
     expect(stored.features).toEqual([
@@ -184,6 +187,10 @@ test.describe("project form → stored project", () => {
     await expect(page.getByRole("button", { name: /Advanced options/ })).toHaveAttribute("aria-expanded", "true")
     await expect(page.locator("#post-create")).toHaveValue("go mod download")
     await expect(page.getByLabel("Branch for acme/infra")).toHaveValue("main")
+    // This project has ports and prewarmed images, and the form shows neither.
+    // They must still come back out of a save untouched — hidden, not dropped.
+    await expect(page.locator('input[name="forwardPorts"]')).toHaveCount(0)
+    await expect(page.locator('textarea[name="prewarmImages"]')).toHaveCount(0)
 
     await page.locator("#project-name").fill(`${name}-renamed`)
     await page.getByRole("button", { name: "Save changes" }).click()

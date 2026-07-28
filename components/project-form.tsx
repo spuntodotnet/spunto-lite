@@ -42,17 +42,26 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
 /**
- * Creating shows every section Lite has — including the runtime knobs the
- * dashboard only reveals when editing, because in Lite a project *is* its
- * devcontainer spec and there's no second screen to tune them on.
+ * Sections Lite doesn't show. Anything absent from `sections` doesn't exist in
+ * the form — but the value still carries it, and `toProjectPayload` still sends
+ * it, so a project that already has forwarded ports or prewarmed images keeps
+ * them through an edit. Hidden, not dropped: the API, the setup script and the
+ * import/export format are untouched.
  */
-const CREATE_FORM_SECTIONS: ProjectFormSectionId[] = EDIT_SECTIONS
+const HIDDEN_SECTIONS: ProjectFormSectionId[] = ["ports", "prewarm"]
+
 /**
- * Editing drops `secrets`: the edit page has its own `SecretsCard` below the
+ * Creating shows the rest — including docker-in-docker, which the dashboard only
+ * reveals when editing, because in Lite a project *is* its devcontainer spec and
+ * there's no second screen to tune it on.
+ */
+const CREATE_FORM_SECTIONS: ProjectFormSectionId[] = EDIT_SECTIONS.filter((s) => !HIDDEN_SECTIONS.includes(s))
+/**
+ * Editing also drops `secrets`: the edit page has its own `SecretsCard` below the
  * form, which lists and deletes what's already stored — things the form's
  * write-only list can't do.
  */
-const EDIT_FORM_SECTIONS: ProjectFormSectionId[] = EDIT_SECTIONS.filter((s) => s !== "secrets")
+const EDIT_FORM_SECTIONS: ProjectFormSectionId[] = CREATE_FORM_SECTIONS.filter((s) => s !== "secrets")
 
 /** What an import pre-filled, for the banner above the form. */
 type ImportedSpec = { name: string; secretNames: string[]; formKey: number }

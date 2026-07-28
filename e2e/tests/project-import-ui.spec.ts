@@ -21,8 +21,10 @@ async function expectPrefilled(page: Page, name: string) {
   await expect(page.locator("#project-name")).toHaveValue(name)
   await expect(page.locator("#project-description")).toHaveValue("imported spec")
   await expect(page.getByRole("main").getByText(IMAGE.split("/").pop()!).first()).toBeVisible()
-  await expect(page.locator('input[name="forwardPorts"]')).toHaveValue("3000, 8080")
-  await expect(page.locator('textarea[name="prewarmImages"]')).toHaveValue("node:24")
+  // Ports and prewarm images have no field in Lite's form. The imported values
+  // still travel — the creation test below asserts them on the stored project.
+  await expect(page.locator('input[name="forwardPorts"]')).toHaveCount(0)
+  await expect(page.locator('textarea[name="prewarmImages"]')).toHaveCount(0)
   await expect(page.locator("#post-create")).toHaveValue("npm ci")
   await expect(page.locator("#post-start")).toHaveValue("npm run dev")
   // Secret names travel, values don't. A secret is write-only, so there's no
@@ -89,7 +91,10 @@ test.describe("project import", () => {
     expect(created).toBeTruthy()
     try {
       expect(created.image).toBe(IMAGE)
+      // Neither of these has a field in the form: they came from the file, rode
+      // along in the form's value, and reached the API all the same.
       expect(created.forwardPorts).toEqual([3000, 8080])
+      expect(created.prewarmImages).toEqual(["node:24"])
       expect(created.postStartCommand).toBe("npm run dev")
       // An export carries secret *names* only, so there's nothing to store.
       expect(await (await request.get(`/api/projects/${created.id}/secrets`)).json()).toEqual([])
