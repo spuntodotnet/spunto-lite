@@ -46,6 +46,19 @@ jobs:
       - name: Build app
         run: npm run build
 
+      # Garde-fou de non-régression. `next build` évalue les modules de route dans
+      # plusieurs workers en parallèle : si la base se rouvre à l'import du module
+      # (cf. db/index.ts), ils la convertissent en WAL en même temps et le build casse
+      # en SQLITE_BUSY sur une machine lente — c'est ce qui cassait le build amd64
+      # émulé de l'image multi-arch. Un build ne doit jamais ouvrir la base.
+      - name: Le build ne doit pas avoir touché la base
+        run: |
+          if [ -e "$DATA_DIR/spunto-lite.db" ]; then
+            echo "::error::le build a ouvert la base ($DATA_DIR/spunto-lite.db) — voir le commentaire dans db/index.ts"
+            exit 1
+          fi
+          echo "OK — aucune base créée par le build"
+
       - name: Start control plane
         run: |
           mkdir -p "$DATA_DIR"
