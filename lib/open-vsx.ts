@@ -1,35 +1,16 @@
-// Open VSX registry client — the *same* registry code-server resolves
-// `--install-extension <id>` against (see buildImageScript in lib/setup-script.ts).
+// Open VSX registry client — the registry code-server resolves
+// `--install-extension <id>` against out of the box (see buildImageScript in
+// lib/setup-script.ts).
 //
 // Keeping search and install on one registry is the point: an extension the
-// picker can find is an extension the build can install. The Microsoft
-// Marketplace is deliberately NOT queried — its catalog is larger but code-server
-// can't install from it without an explicit EXTENSIONS_GALLERY configuration, so
-// searching it would hand back ids that silently fail at build time.
+// picker can find is an extension the build can install. Which registry that is
+// isn't decided here — lib/extension-registry.ts picks between this client and
+// the gallery client depending on EXTENSIONS_GALLERY, and hands the same choice
+// to code-server so the two can't drift apart.
 
 import { OPEN_VSX_API } from "./env"
-import { parseExtensionId } from "./extensions"
-
-export type ExtensionSuggestion = {
-  /** publisher.extension-id, as passed to `code-server --install-extension`. */
-  id: string
-  /** Human-readable name, e.g. "Prettier - Code formatter". */
-  label: string
-  publisher: string
-  description?: string
-  downloads?: number
-  /** Open VSX "verified publisher" flag. */
-  verified?: boolean
-  /** Latest published version, e.g. "11.0.0". */
-  version?: string
-  /** The extension's own icon on Open VSX — what `ExtensionCard` draws. */
-  iconUrl?: string
-  /** Registry page, for a "view on Open VSX" link. */
-  url?: string
-}
-
-/** Registry call that couldn't be completed (network, timeout, 5xx). */
-export class RegistryError extends Error {}
+import { RegistryError, parseExtensionId } from "./extensions"
+import type { ExtensionSuggestion } from "./types"
 
 const TIMEOUT_MS = 8000
 

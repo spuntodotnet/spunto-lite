@@ -1,6 +1,6 @@
 import { SUGGESTED_EXTENSIONS } from "@/lib/catalogs"
+import { lookupExtension, searchExtensions, withRegistryUrls, RegistryError } from "@/lib/extension-registry"
 import { isExtensionId } from "@/lib/extensions"
-import { lookupExtension, searchExtensions, RegistryError } from "@/lib/open-vsx"
 import { json } from "@/lib/http"
 
 export const dynamic = "force-dynamic"
@@ -12,7 +12,9 @@ function registryDown(e: unknown) {
 }
 
 /**
- * Three read modes, all against Open VSX (the registry code-server installs from):
+ * Three read modes, all against the active registry — Open VSX by default, or
+ * the gallery in EXTENSIONS_GALLERY, i.e. whichever one the workers' code-server
+ * installs from (see lib/extension-registry.ts):
  *   - `?q=<text>`  → search results
  *   - `?id=<pub.name>` → existence verdict for a hand-typed id
  *   - no param     → the curated suggestions, i.e. the picker's default state
@@ -33,7 +35,7 @@ export async function GET(req: Request) {
   }
 
   const q = searchParams.get("q")?.trim()
-  if (!q) return json(SUGGESTED_EXTENSIONS)
+  if (!q) return json(withRegistryUrls(SUGGESTED_EXTENSIONS))
   try {
     return json(await searchExtensions(q))
   } catch (e) {

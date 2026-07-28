@@ -1,6 +1,13 @@
 // Pure helpers around VS Code extension identifiers. No I/O — safe to import
-// from client components and from zod schemas (see lib/open-vsx.ts for the
-// registry client that actually talks to Open VSX).
+// from client components and from zod schemas (see lib/extension-registry.ts
+// for the clients that actually talk to a registry).
+
+/**
+ * Registry call that couldn't be completed (network, timeout, 5xx). Shared by
+ * both registry clients so callers can tell "we couldn't ask" apart from a real
+ * "no such extension" verdict, whichever gallery is configured.
+ */
+export class RegistryError extends Error {}
 
 /**
  * `publisher.extension-name`, the identifier code-server resolves against the

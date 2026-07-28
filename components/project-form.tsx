@@ -35,6 +35,7 @@ import type {
   DevImage,
   DevFeature,
   ExtensionLookup,
+  ExtensionRegistryInfo,
   ExtensionSuggestion,
 } from "@/lib/types"
 import { Button } from "@/components/ui/button"
@@ -71,7 +72,7 @@ type ImportedSpec = { name: string; secretNames: string[]; formKey: number }
  * `@spunto/design-system/projects` — the catalogs, the pickers, the numbered
  * sections, the advanced fold and the build manifest all come from the package.
  * What stays here is what the package deliberately doesn't know: Lite's routes,
- * its catalogs' data, its Open VSX endpoints, and the two fields of its project
+ * its catalogs' data, its extension-registry endpoints, and the two fields of its project
  * model the package's `ProjectFormValue` has no room for (see `extras` below).
  */
 export function ProjectForm({ initial }: { initial?: Project }) {
@@ -91,8 +92,18 @@ export function ProjectForm({ initial }: { initial?: Project }) {
     queryKey: ["features"],
     queryFn: () => api.get<DevFeature[]>("/api/features"),
   })
+  // Which registry the picker is actually talking to — Open VSX by default, or
+  // whatever EXTENSIONS_GALLERY points at. Only used to name it in the messages
+  // below, so they can't claim "Open VSX" while the search hits somewhere else
+  // (see lib/extension-registry.ts).
+  const { data: registry } = useQuery({
+    queryKey: ["extension-registry"],
+    queryFn: () => api.get<ExtensionRegistryInfo>("/api/extensions/registry"),
+    staleTime: Infinity,
+  })
+  const registryName = registry?.name ?? "the extension registry"
 
-  // Ids the Open VSX search handed back this session. Anything in here provably
+  // Ids the registry search handed back this session. Anything in here provably
   // exists, so it skips the verification below.
   const searched = useRef(new Set<string>())
 
@@ -125,15 +136,16 @@ export function ProjectForm({ initial }: { initial?: Project }) {
       const verdict = await api.get<ExtensionLookup>(`/api/extensions?id=${encodeURIComponent(id)}`)
       if (verdict.found) return
       setValue((cur) => ({ ...cur, vscodeExtensions: cur.vscodeExtensions.filter((x) => x !== id) }))
-      toast.error(`"${id}" doesn't exist on Open VSX — code-server wouldn't be able to install it`)
+      toast.error(`"${id}" doesn't exist on ${registryName} — code-server wouldn't be able to install it`)
     } catch (e) {
-      toast.warning(`Couldn't verify "${id}" against Open VSX (${(e as Error).message}) — added without checking`)
+      toast.warning(`Couldn't verify "${id}" against ${registryName} (${(e as Error).message}) — added without checking`)
     }
   }
 
   /**
-   * The picker's search callback. Open VSX is the same registry code-server
-   * installs from, so anything it returns is installable (see lib/open-vsx.ts).
+   * The picker's search callback. Whichever registry the control plane is
+   * configured with is the one code-server installs from, so anything it returns
+   * is installable (see lib/extension-registry.ts).
    */
   async function searchExtensions(query: string): Promise<VscodeExtensionEntry[]> {
     const hits = await api.get<ExtensionSuggestion[]>(`/api/extensions?q=${encodeURIComponent(query)}`)

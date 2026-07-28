@@ -156,7 +156,17 @@ export type DevFeature = {
   description: string
   options?: { name: string; default: string; description: string }[]
 }
-/** An extension as served by /api/extensions (curated defaults or Open VSX search hits). */
+/** Which registry /api/extensions is resolving ids against, so the UI can name it. */
+export type ExtensionRegistryInfo = {
+  /** Display name — "Open VSX", or the configured gallery's host. */
+  name: string
+  /** Registry homepage, for "view on <name>" links. */
+  homeUrl?: string
+  /** True when EXTENSIONS_GALLERY overrides the Open VSX default. */
+  custom: boolean
+}
+
+/** An extension as served by /api/extensions (curated defaults or registry search hits). */
 export type ExtensionSuggestion = {
   id: string
   label: string
@@ -175,7 +185,7 @@ export type ExtensionLookup = {
   id: string
   /** Shape check: `publisher.extension-id`. */
   valid: boolean
-  /** Whether Open VSX actually knows it. */
+  /** Whether the active registry actually knows it. */
   found: boolean
   extension: ExtensionSuggestion | null
 }

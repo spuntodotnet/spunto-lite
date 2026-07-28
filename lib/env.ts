@@ -16,8 +16,25 @@ export const HOST_SSH_DIR = process.env.HOST_SSH_DIR || "/host-ssh"
 export const PORT = Number(process.env.PORT || 80)
 
 /**
- * Extension registry the "VS Code extensions" picker searches. It must stay the
- * registry code-server installs from (Open VSX by default) so that "findable in
- * the UI" implies "installable in the worker" — see lib/open-vsx.ts.
+ * Extension registry the "VS Code extensions" picker searches when no custom
+ * gallery is configured. It must stay the registry code-server installs from so
+ * that "findable in the UI" implies "installable in the worker" — see
+ * lib/open-vsx.ts.
  */
 export const OPEN_VSX_API = (process.env.OPEN_VSX_API || "https://open-vsx.org/api").replace(/\/+$/, "")
+
+/**
+ * Custom VS Code extension gallery, in the JSON shape code-server expects in its
+ * own `EXTENSIONS_GALLERY` variable:
+ *
+ *   EXTENSIONS_GALLERY='{"serviceUrl":"https://gallery.example.com/_apis/public/gallery","itemUrl":"https://gallery.example.com/items"}'
+ *
+ * Set on the control plane, it drives *all three* places an extension id is
+ * resolved — the picker's search, the `--install-extension` calls in the image
+ * build, and the code-server running in each worker — so the three can't drift
+ * apart. Left unset, everything falls back to Open VSX. Which gallery to point
+ * it at is the operator's call: nothing in this repo assumes a particular one.
+ * Parsed and validated in lib/extension-registry.ts; kept raw here because the
+ * string is also what gets handed to code-server.
+ */
+export const EXTENSIONS_GALLERY_RAW = process.env.EXTENSIONS_GALLERY?.trim() || null

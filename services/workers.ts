@@ -3,6 +3,7 @@ import { db } from "../db/index"
 import { workers, projectImageBuilds, type Worker, type Project, type SetupStatus } from "../db/schema"
 import { newId, newShortId } from "../lib/id"
 import { BASE_DOMAIN } from "../lib/env"
+import { CODE_SERVER_EXTENSIONS_GALLERY } from "../lib/extension-registry"
 import {
   buildImageScript,
   buildSetupScript,
@@ -144,6 +145,10 @@ function spawnEnv(project: Project, workerId: string): string[] {
     `WORKER_SLUG=worker-${workerId}`,
     `BASE_DOMAIN=${BASE_DOMAIN}`,
     `PUBLIC_PROTOCOL=http`,
+    // The code-server loop exports this itself (lib/setup-script.ts), but having
+    // it on the container too means a `code-server --install-extension` typed by
+    // hand in the worker's terminal resolves against the same registry.
+    ...(CODE_SERVER_EXTENSIONS_GALLERY ? [`EXTENSIONS_GALLERY=${CODE_SERVER_EXTENSIONS_GALLERY}`] : []),
     ...Object.entries(secrets).map(([k, v]) => `${k}=${v}`),
   ]
 }
