@@ -24,6 +24,11 @@ services:
       # images. Prefer configuring this in the UI (Settings → Container registry),
       # which stores it encrypted in the DB; the UI value wins over this env var.
       GCP_SA_KEY: ${GCP_SA_KEY:-}
+      # Optional: search and install VS Code extensions from a custom gallery
+      # instead of Open VSX. Same JSON code-server takes; switches the extension
+      # picker, the image build and every worker's code-server together. Put the
+      # value in `.env` (gitignored) — see `.env.example`.
+      EXTENSIONS_GALLERY: ${EXTENSIONS_GALLERY:-}
 
   # Navigateur pilotable pour tester l'UI de bout en bout (humain ou agent
   # Claude via le serveur MCP `mcp/server.js`, voir `.mcp.json` + `mcp/README.md`).

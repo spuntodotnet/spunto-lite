@@ -31,7 +31,14 @@ import {
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import { parseFailedExtensions } from "@/lib/extensions"
-import type { Project, Worker, ProjectVersion, ProjectImageBuild, SecretMeta } from "@/lib/types"
+import type {
+  Project,
+  Worker,
+  ProjectVersion,
+  ProjectImageBuild,
+  SecretMeta,
+  ExtensionRegistryInfo,
+} from "@/lib/types"
 import { buttonVariants } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { WorkersPanel } from "@/components/workers-panel"
@@ -62,6 +69,12 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     queryFn: () => api.get<ProjectImageBuild[]>(`/api/projects/${id}/builds`),
     refetchInterval: 3000,
   })
+  const { data: registry } = useQuery({
+    queryKey: ["extension-registry"],
+    queryFn: () => api.get<ExtensionRegistryInfo>("/api/extensions/registry"),
+    staleTime: Infinity,
+  })
+  const registryName = registry?.name ?? "the extension registry"
 
   const restore = useMutation({
     mutationFn: (version: number) => api.post(`/api/projects/${id}/versions/${version}/restore`),
@@ -232,10 +245,14 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
                   <p className="mt-2 text-[11px] leading-relaxed text-destructive">
                     {failedExts.size} extension{failedExts.size > 1 ? "s" : ""} failed to install in the v
                     {project.currentVersion} image — code-server resolves ids against{" "}
-                    <a href="https://open-vsx.org" target="_blank" rel="noreferrer" className="underline">
-                      Open VSX
-                    </a>
-                    , where ids copied from the Microsoft Marketplace often don&apos;t exist.
+                    {registry?.homeUrl ? (
+                      <a href={registry.homeUrl} target="_blank" rel="noreferrer" className="underline">
+                        {registry.name}
+                      </a>
+                    ) : (
+                      registryName
+                    )}
+                    , where these ids aren&apos;t published.
                   </p>
                 )}
               </div>

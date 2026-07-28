@@ -46,6 +46,22 @@ to `127.0.0.1` automatically in Chrome/Edge/Firefox.
   new-project form) pre-fills the creation form from such a file. Secret
   **values** are never exported — only their names, so the form can lay out the
   rows to fill in.
+- **Extension registry is configurable**: the extension picker searches
+  [Open VSX](https://open-vsx.org) by default. Set `EXTENSIONS_GALLERY` on the
+  control plane — the same JSON blob code-server takes — and the picker, the
+  `--install-extension` calls in the image build *and* the code-server inside
+  every worker all switch to that gallery together, so what you can find stays
+  what you can install:
+  ```bash
+  docker run -d --name spunto-lite -p 80:80 \
+    -e EXTENSIONS_GALLERY='{"serviceUrl":"https://gallery.example.com/_apis/public/gallery","itemUrl":"https://gallery.example.com/items"}' \
+    … ghcr.io/spuntodotnet/spunto-lite:latest
+  ```
+  Add an optional `"productTarget"` key when the gallery serves more than one
+  product's catalog and you want results scoped to the editor's. Project images
+  are cached per version, so **rebuild** a project for its pre-installed
+  extensions to be re-resolved against a gallery you just changed. Which gallery
+  you point this at, and under which terms, is yours to decide.
 - **⌘K search** (Ctrl+K on non-Apple): the header palette
   (`CommandPalette` from `@spunto/design-system`) jumps to projects, workers, the
   services a worker exposes (code-server + forwarded ports), image builds, secret

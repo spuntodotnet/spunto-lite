@@ -1,7 +1,7 @@
 // Curated catalogs for the project spec form. Ported from Spunto's
 // modules/images + modules/features, trimmed to the local use case.
 
-import type { ExtensionSuggestion } from "./open-vsx"
+import type { ExtensionSuggestion } from "./types"
 
 export type DevImage = { id: string; label: string; image: string; description: string }
 
@@ -116,13 +116,16 @@ export const AVAILABLE_FEATURES: DevFeature[] = [
 ]
 
 // Default state of the extension picker, shown until the user types a query —
-// `/api/extensions?q=` then searches Open VSX for real (lib/open-vsx.ts).
+// `/api/extensions?q=` then searches the active registry for real
+// (lib/extension-registry.ts).
 //
-// Every id below is published on Open VSX, the registry code-server installs
-// from; that's the bar for being listed here. Re-check with:
+// Ids only, no registry URLs: the picker is registry-agnostic, so the route
+// attaches links for whichever registry is configured (`withRegistryUrls`). The
+// bar for being listed here is being published on Open VSX — the default
+// registry, and the narrower catalog of the two. Re-check with:
 //   curl -s https://open-vsx.org/api/<publisher>/<name> | head -c 200
-// (a 404 means the id only exists on the Microsoft Marketplace — drop it or
-// swap it for the Open VSX equivalent).
+// (a 404 means the id isn't on Open VSX — drop it or swap it for the equivalent
+// that is, so the defaults stay installable without any extra configuration).
 export const SUGGESTED_EXTENSIONS: ExtensionSuggestion[] = [
   { id: "esbenp.prettier-vscode", label: "Prettier - Code formatter", publisher: "esbenp" },
   { id: "dbaeumer.vscode-eslint", label: "ESLint", publisher: "dbaeumer" },
@@ -132,4 +135,4 @@ export const SUGGESTED_EXTENSIONS: ExtensionSuggestion[] = [
   { id: "bradlc.vscode-tailwindcss", label: "Tailwind CSS IntelliSense", publisher: "bradlc" },
   { id: "eamodio.gitlens", label: "GitLens — Git supercharged", publisher: "eamodio" },
   { id: "ms-azuretools.vscode-docker", label: "Docker", publisher: "ms-azuretools" },
-].map((e) => ({ ...e, url: `https://open-vsx.org/extension/${e.id.replace(".", "/")}` }))
+]

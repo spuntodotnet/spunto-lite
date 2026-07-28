@@ -6,6 +6,7 @@
 
 import type { ProjectFeature, Repository, SetupStatus } from "../db/schema"
 import { AVAILABLE_FEATURES } from "./catalogs"
+import { CODE_SERVER_EXTENSIONS_GALLERY, registryInfo } from "./extension-registry"
 import { EXTENSION_FAILED_MARKER } from "./extensions"
 
 // ─── Shell helpers ────────────────────────────────────────────────────────────
@@ -150,7 +151,23 @@ function defaultVscodeUserSettings(projectName?: string): Record<string, unknown
 //
 // A failed extension still doesn't break the build — it's a nice-to-have, not a
 // prerequisite — but it is now impossible to miss in the logs.
-const EXTENSION_INSTALLER = [
+/**
+ * `export EXTENSIONS_GALLERY=…` lines, or nothing when the default (Open VSX)
+ * registry is in play. Emitted into the generated scripts rather than relied on
+ * from the ambient environment: `docker build` doesn't inherit the daemon's env
+ * at all, and the code-server loop runs under `su`, which is free to strip it.
+ */
+function galleryExport(): string[] {
+  if (!CODE_SERVER_EXTENSIONS_GALLERY) return []
+  return [`export EXTENSIONS_GALLERY=${shQuote(CODE_SERVER_EXTENSIONS_GALLERY)}`]
+}
+
+/** Registry name, flattened to something safe to echo from a shell script. */
+function registryLabel(): string {
+  return registryInfo().name.replace(/[^\w .:/-]/g, "") || "the configured registry"
+}
+
+const extensionInstaller = () => [
   "MP_EXT_FAILED=''",
   "mp_install_extension() {",
   '  _ext="$1"',
@@ -168,7 +185,7 @@ const EXTENSION_INSTALLER = [
   `  _dir=$(find /opt/mp-extensions -maxdepth 1 -iname "$_ext-*" 2>/dev/null | head -1)`,
   '  if [ "$_rc" -ne 0 ] || [ -z "$_dir" ]; then',
   `    echo "${EXTENSION_FAILED_MARKER} $_ext (exit $_rc) — not installed."`,
-  `    echo "[build]   Extensions are resolved against Open VSX (https://open-vsx.org/extension/\${_ext%%.*}/\${_ext#*.}). Ids copied from the Microsoft Marketplace often don't exist there. Continuing without it."`,
+  `    echo "[build]   Extensions are resolved against ${registryLabel()}; an id that isn't published there can't be installed. Continuing without it."`,
   '    MP_EXT_FAILED="$MP_EXT_FAILED $_ext"',
   "  else",
   '    echo "[build] Extension installed: $_ext"',
@@ -293,7 +310,15 @@ export function buildImageScript(params: {
   )
 
   if (params.vscodeExtensions && params.vscodeExtensions.length > 0) {
-    lines.push("", 'echo "[build] Installing VS Code extensions..."', "mkdir -p /opt/mp-extensions", ...EXTENSION_INSTALLER)
+    lines.push(
+      "",
+      'echo "[build] Installing VS Code extensions..."',
+      "mkdir -p /opt/mp-extensions",
+      // Must precede the first install: this is what makes `--install-extension`
+      // resolve ids against the configured gallery instead of the default one.
+      ...galleryExport(),
+      ...extensionInstaller(),
+    )
     for (const ext of params.vscodeExtensions) {
       lines.push(`mp_install_extension ${shQuote(ext)}`)
     }
@@ -723,6 +748,9 @@ export function buildStartScript(params: StartScriptParams): { script: string; h
   const codeServerLoop = [
     "#!/bin/bash",
     "export SHELL=$(command -v zsh 2>/dev/null || echo /bin/bash)",
+    // Makes the extensions view inside the worker's editor search the same
+    // registry the picker and the image build used.
+    ...galleryExport(),
     "while true; do",
     '  VSCODE_PROXY_URI="${PUBLIC_PROTOCOL}://${WORKER_SLUG}-{{port}}.${BASE_DOMAIN}" \\',
     "    PORT=8080 code-server --bind-addr 0.0.0.0:8080 --auth none /workspace 2>&1",
