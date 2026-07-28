@@ -34,7 +34,9 @@ export default function EditProjectPage({ params }: { params: Promise<{ id: stri
   return (
     <>
       <ProjectForm initial={project} />
-      <div className="max-w-3xl mx-auto px-6 -mt-4 pb-10 space-y-4">
+      {/* Same width as the form above it, which the design system lays out as
+          two columns (sections + build manifest) as soon as it has the room. */}
+      <div className="mx-auto -mt-2 max-w-6xl space-y-4 px-6 pb-10">
         <SecretsCard
           title="Project secrets"
           description="Injected as env vars into every worker of this project."
