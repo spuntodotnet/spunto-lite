@@ -94,8 +94,8 @@ automatically in Chrome/Edge/Firefox.
 Each worker gets its own `mp-worker-<id>-workspace` volume on `/workspace`. Two
 workers of the same project therefore re-download their dependencies and
 regenerate their artifacts separately. A project can declare **shared volumes**
-in the *Shared volumes* section of the project form (under the advanced fold) to
-stop that: a name and a mount path, e.g. `pnpm-store` →
+in the *Shared volumes* section of the project form (inside *Advanced options*)
+to stop that: a name and a mount path, e.g. `pnpm-store` →
 `/home/vscode/.local/share/pnpm/store`.
 
 - Backed by a named Docker volume `mp-proj-<projectId>-<name>`, **created on

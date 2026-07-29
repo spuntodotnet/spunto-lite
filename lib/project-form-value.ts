@@ -6,9 +6,9 @@
 // /api/projects is one readable object rather than a dozen `useState`s read at
 // submit time, and so a test can assert the payload directly.
 //
-// Lite's model is *not* the dashboard's: it keeps four repository providers and a
-// per-repo branch, where the package models `github | git` and no branch. Where
-// the two disagree, this module keeps Lite's data intact — see `LiteRepo`.
+// Lite's model is *not* the dashboard's: it keeps four repository providers where
+// the package models `github | git`. Where the two disagree, this module keeps
+// Lite's data intact — see `LiteRepo`.
 
 import {
   toProjectFormValue,
@@ -26,17 +26,16 @@ import type { Project, ProjectFeature, Repository, SharedVolume } from "./types"
 export const DEFAULT_IMAGE = "mcr.microsoft.com/devcontainers/javascript-node:20"
 
 /**
- * A repo row as Lite carries it: the package's `ProjectRepo` plus the two things
- * Lite's model has and the package's doesn't.
+ * A repo row as Lite carries it: the package's `ProjectRepo` (which models the
+ * branch itself since 0.15) plus the one thing Lite's model has and the
+ * package's doesn't.
  *
- * Both ride along as extra properties on the same object rather than in a
+ * It rides along as an extra property on the same object rather than in a
  * side-map keyed by row id: `RepoList` is fully controlled and patches a row with
  * a spread, so whatever it doesn't know about survives the round trip, and the
  * form value stays the single source of truth (import, edit, submit all read it).
  */
 export type LiteRepo = ProjectRepo & {
-  /** Branch to clone; empty/absent = the remote's default. */
-  branch?: string
   /**
    * Set only for a stored `gitlab` / `bitbucket` row. The package offers two
    * providers, so those edit like a GitHub one (both address `owner/repo`) — but
@@ -47,12 +46,16 @@ export type LiteRepo = ProjectRepo & {
 
 /**
  * The form value as Lite carries it: the package's `ProjectFormValue` plus the
- * one field of Lite's project the package has no room for. Same trick as
- * `LiteRepo` — `ProjectForm` patches its value with a spread, so a key it knows
- * nothing about survives every edit and the value stays the single source of
- * truth (import, edit, submit all read it).
+ * one field of Lite's project the package has no room for.
+ *
+ * Extending the value is a documented contract of the package, not a trick — the
+ * form only ever patches at the spread, and `ProjectForm<LiteFormValue>` (it
+ * infers from `value`) makes every callback, including a custom section's
+ * `render`, speak this type with no cast at the boundary.
  */
-export type LiteFormValue = ProjectFormValue & { sharedVolumes: SharedVolume[] }
+export interface LiteFormValue extends ProjectFormValue {
+  sharedVolumes: SharedVolume[]
+}
 
 /** The body POSTed to /api/projects and PATCHed to /api/projects/:id. */
 export type ProjectPayload = {
@@ -156,9 +159,8 @@ function toFormFeature(f: Pick<ProjectFeature, "id" | "options"> & { ociRef?: st
  * form used to build — same trims, same "empty means absent", same filters — so
  * creating and editing a project write exactly what they wrote before.
  */
-export function toProjectPayload(value: ProjectFormValue): ProjectPayload {
+export function toProjectPayload(value: LiteFormValue): ProjectPayload {
   const repos = value.repositories as LiteRepo[]
-  const sharedVolumes = (value as LiteFormValue).sharedVolumes ?? []
   return {
     name: value.name.trim(),
     description: value.description.trim() || undefined,
@@ -192,7 +194,7 @@ export function toProjectPayload(value: ProjectFormValue): ProjectPayload {
     // numbers; the API caps at 65535, so the bound is enforced here too.
     forwardPorts: value.forwardPorts.filter((n) => Number.isInteger(n) && n > 0 && n < 65536),
     // A row the user added and hasn't filled in isn't a volume yet.
-    sharedVolumes: sharedVolumes
+    sharedVolumes: value.sharedVolumes
       .filter((v) => v.name.trim() || v.mountPath.trim())
       .map((v) => ({ name: v.name.trim(), mountPath: v.mountPath.trim() })),
     secrets: value.secrets.filter((s) => s.name && s.value).map(({ name, value: v }) => ({ name, value: v })),
