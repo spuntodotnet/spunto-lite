@@ -56,6 +56,9 @@ automatically in Chrome/Edge/Firefox.
   value. Lifecycle is its own (start/stop/restart/logs, live CPU/RAM): a service
   outlives the worker, and the project, that needed it. Details and the
   network-design trade-off: [`docs/shared-services.md`](docs/shared-services.md).
+- **Shared volumes**: a project can declare volumes mounted into **every** worker
+  it spawns, on top of each worker's private `/workspace` — a pnpm store, `~/.m2`,
+  a `~/.cache`, a heavy dataset, a build-artifact directory. See below.
 - **Projects are portable**: *Export* on a project downloads its spec as JSON
   (`GET /api/projects/:id/export`), *Import* on the dashboard (or in the
   new-project form) pre-fills the creation form from such a file. Secret
@@ -85,6 +88,37 @@ automatically in Chrome/Edge/Firefox.
   the whole index from `GET /api/search` when it opens (SQLite only, no Docker
   round-trip, so it's instant) and filters in the browser, accent- and
   case-insensitively.
+
+## Shared volumes
+
+Each worker gets its own `mp-worker-<id>-workspace` volume on `/workspace`. Two
+workers of the same project therefore re-download their dependencies and
+regenerate their artifacts separately. A project can declare **shared volumes**
+in the *Shared volumes* section of the project form (inside *Advanced options*)
+to stop that: a name and a mount path, e.g. `pnpm-store` →
+`/home/vscode/.local/share/pnpm/store`.
+
+- Backed by a named Docker volume `mp-proj-<projectId>-<name>`, **created on
+  demand** by the first worker that needs it and reused by every later one.
+- Mounted in **every** worker of the project, alongside its private `/workspace`.
+- **Lifecycle**: survives deleting a worker and rebuilding one (unlike
+  `mp-worker-*` volumes, which a delete wipes). It's destroyed **only** with the
+  project, behind an explicit confirmation in the delete dialog — your data
+  lives in there.
+- Visible on the **Resources** page with `kind: "shared"`, its owning project,
+  its size and how many workspaces mount it.
+- The declaration is versioned like the rest of the project config, so restoring
+  a version and exporting/importing a project carry it. Only the declaration
+  travels in an export — never the data.
+- **`/workspace` and its sub-paths are refused** as mount points: they'd shadow
+  the worker's own volume and break the setup script's idempotent clone. Same for
+  `/var/lib/docker`, `/var/lib/containerd` and the kernel filesystems.
+
+> **Concurrency is not managed.** Several workers write into the same volume at
+> the same time and **nothing locks**. That's fine for what this is for — package
+> caches, datasets, fixtures, build artifacts, read-mostly data. It is *not* a
+> place for a shared SQLite database, a lockfile two processes rewrite, or
+> anything needing a single writer.
 
 ## Requirements
 

@@ -40,6 +40,7 @@ const VOLUME_KIND_LABEL: Record<string, string> = {
   workspace: "Workspace",
   docker: "Docker (DinD)",
   containerd: "containerd (DinD)",
+  shared: "Shared (project)",
   service: "Service data",
   other: "Other",
 }
@@ -302,12 +303,35 @@ export default function ResourcesPage() {
                         <td className="px-4 py-2 font-mono text-[11px] text-muted-foreground truncate max-w-[240px]" title={v.name}>
                           {v.name}
                         </td>
-                        <td className="px-4 py-2 text-xs">{VOLUME_KIND_LABEL[v.kind] ?? v.kind}</td>
+                        <td className="px-4 py-2 text-xs">
+                          {VOLUME_KIND_LABEL[v.kind] ?? v.kind}
+                          {v.kind === "shared" && v.mountPath && (
+                            <span className="ml-1.5 font-mono text-[11px] text-muted-foreground">{v.mountPath}</span>
+                          )}
+                        </td>
                         <td className="px-4 py-2 text-xs">
                           {v.kind === "service" ? (
                             <Link href="/services" className="inline-flex items-center gap-0.5 hover:text-primary truncate">
                               {v.serviceSlug ?? "orphaned service"} <ChevronRight className="size-3" />
                             </Link>
+                          ) : v.kind === "shared" ? (
+                            // A shared volume belongs to a project, not to one
+                            // workspace: name its owner and how many mount it.
+                            <span className="truncate">
+                              {v.projectId && v.projectName ? (
+                                <Link href={`/projects/${v.projectId}`} className="hover:text-primary">
+                                  {v.projectName}
+                                </Link>
+                              ) : (
+                                <span className="text-muted-foreground">(deleted project)</span>
+                              )}
+                              <span className="text-muted-foreground">
+                                {" · "}
+                                {v.mountedBy === null
+                                  ? "—"
+                                  : `${v.mountedBy} workspace${v.mountedBy === 1 ? "" : "s"}`}
+                              </span>
+                            </span>
                           ) : v.workerId ? (
                             <span className="truncate">
                               {v.workerName ?? v.workerId}

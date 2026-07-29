@@ -8,12 +8,11 @@ import {
   EDIT_SECTIONS,
   ProjectForm as DesignSystemProjectForm,
   type ProjectFeatureSelection,
+  type ProjectFormCustomSection,
   type ProjectFormSectionId,
-  type ProjectFormValue,
-  type ProjectRepo,
 } from "@spunto/design-system/projects"
 import type { DevcontainerFeatureEntry, VscodeExtensionEntry } from "@spunto/design-system/devcontainer"
-import { Upload } from "lucide-react"
+import { HardDrive, Plus, Trash2, Upload } from "lucide-react"
 import { api } from "@/lib/api"
 import { EXTENSION_ID_HINT, isExtensionId } from "@/lib/extensions"
 import {
@@ -23,8 +22,9 @@ import {
   toProjectPayload,
   validateProjectPayload,
   withUniqueRepoIds,
-  type LiteRepo,
+  type LiteFormValue,
 } from "@/lib/project-form-value"
+import { isDeclaredVolume, SHARED_VOLUME_NAME_HINT } from "@/lib/shared-volumes"
 import {
   PROJECT_IMPORT_HANDOFF_KEY,
   parseProjectExport,
@@ -37,6 +37,7 @@ import type {
   ExtensionLookup,
   ExtensionRegistryInfo,
   ExtensionSuggestion,
+  SharedVolume,
 } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -52,11 +53,32 @@ import { Label } from "@/components/ui/label"
 const HIDDEN_SECTIONS: ProjectFormSectionId[] = ["ports", "prewarm"]
 
 /**
+ * Lite's own section (see `SHARED_VOLUMES_SECTION`). An id the package doesn't
+ * know is a first-class section since 0.15: it lands where this id lands in
+ * `sections`, numbered and folded like the rest.
+ */
+const SHARED_VOLUMES: ProjectFormSectionId = "sharedVolumes"
+
+/**
+ * The three sections that decide what a worker *is* stay in front; everything
+ * else — Lite's own section included — is tuning, and folds.
+ *
+ * Spelled out rather than "the package's default plus mine": its default is
+ * internal, so a section it grows next would silently land in front of the fold
+ * instead of inside it. Derived from `sections` here, so that can't happen.
+ */
+const PRIMARY_SECTIONS: ProjectFormSectionId[] = ["identity", "image", "repositories"]
+const advancedFor = (sections: ProjectFormSectionId[]) => sections.filter((s) => !PRIMARY_SECTIONS.includes(s))
+
+/**
  * Creating shows the rest — including docker-in-docker, which the dashboard only
  * reveals when editing, because in Lite a project *is* its devcontainer spec and
  * there's no second screen to tune it on.
  */
-const CREATE_FORM_SECTIONS: ProjectFormSectionId[] = EDIT_SECTIONS.filter((s) => !HIDDEN_SECTIONS.includes(s))
+const CREATE_FORM_SECTIONS: ProjectFormSectionId[] = [
+  ...EDIT_SECTIONS.filter((s) => !HIDDEN_SECTIONS.includes(s)),
+  SHARED_VOLUMES,
+]
 /**
  * Editing also drops `secrets`: the edit page has its own `SecretsCard` below the
  * form, which lists and deletes what's already stored — things the form's
@@ -72,14 +94,17 @@ type ImportedSpec = { name: string; secretNames: string[]; formKey: number }
  * `@spunto/design-system/projects` — the catalogs, the pickers, the numbered
  * sections, the advanced fold and the build manifest all come from the package.
  * What stays here is what the package deliberately doesn't know: Lite's routes,
- * its catalogs' data, its extension-registry endpoints, and the two fields of its project
- * model the package's `ProjectFormValue` has no room for (see `extras` below).
+ * its catalogs' data, its extension-registry endpoints, and the fields of its
+ * project model the package's `ProjectFormValue` has no room for — appended
+ * inside the relevant section through `extras` when they belong to one (a
+ * feature's version), or declared as a section of Lite's own when they don't
+ * (`customSections`, see `SHARED_VOLUMES_SECTION`).
  */
 export function ProjectForm({ initial }: { initial?: Project }) {
   const router = useRouter()
   const editing = !!initial
 
-  const [value, setValue] = useState<ProjectFormValue>(() =>
+  const [value, setValue] = useState<LiteFormValue>(() =>
     initial ? fromProject(initial) : newProjectFormValue(),
   )
   const [saving, setSaving] = useState(false)
@@ -113,7 +138,7 @@ export function ProjectForm({ initial }: { initial?: Project }) {
    *  - a hand-typed extension id is checked — shape now, existence right after;
    *  - repo row ids are kept unique (see `withUniqueRepoIds`).
    */
-  function handleChange(next: ProjectFormValue) {
+  function handleChange(next: LiteFormValue) {
     const added = next.vscodeExtensions.filter((id) => !value.vscodeExtensions.includes(id))
     const malformed = added.filter((id) => !isExtensionId(id))
     if (malformed.length) {
@@ -191,7 +216,7 @@ export function ProjectForm({ initial }: { initial?: Project }) {
     }
   }
 
-  async function submit(submitted: ProjectFormValue) {
+  async function submit(submitted: LiteFormValue) {
     const payload = toProjectPayload(submitted)
     const invalid = validateProjectPayload(payload)
     if (invalid) {
@@ -268,19 +293,15 @@ export function ProjectForm({ initial }: { initial?: Project }) {
         onChange={handleChange}
         onSubmit={submit}
         sections={editing ? EDIT_FORM_SECTIONS : CREATE_FORM_SECTIONS}
+        advancedSections={advancedFor(editing ? EDIT_FORM_SECTIONS : CREATE_FORM_SECTIONS)}
         images={images}
         features={features}
         onSearchExtensions={searchExtensions}
+        customSections={[SHARED_VOLUMES_SECTION]}
         // Lite has no GitHub App and no repo combobox of its own, so the package's
         // `<input list>` + `<datalist>` fallback is exactly right — `renderRepoField`
         // stays unset rather than wrapping a plain input in a slot.
         extras={{
-          repositories: (
-            <RepoBranches
-              repos={value.repositories}
-              onChange={(repositories) => handleChange({ ...value, repositories })}
-            />
-          ),
           features: (
             <FeatureVersions
               selections={value.features}
@@ -308,35 +329,120 @@ export function ProjectForm({ initial }: { initial?: Project }) {
 }
 
 /**
- * The branch each repository is cloned on. Lite's `Repository` has one and the
- * package's `ProjectRepo` doesn't, so it gets a row under the package's repo list
- * instead of a hand-drawn section of its own: the day `RepoList` grows a branch
- * field, this component is the only thing to delete.
+ * Volumes mounted in *every* worker of the project, on top of each worker's own
+ * `/workspace` — a pnpm store, `~/.m2`, a dataset, a build-artifact directory.
+ *
+ * A section of Lite's own, described here and drawn by the package's chrome
+ * (`customSections`, since 0.15): it gets its place in `sections`, its number in
+ * the shared sequence, its line in the closed fold's summary and its row in the
+ * build manifest — none of which a hand-rolled card rendered after the form
+ * could have. Generic over `LiteFormValue`, so `render`/`summary`/`manifestRow`
+ * read `sharedVolumes` with no cast at the boundary.
+ *
+ * Deliberately no client-side path guard beyond the hint: the API is the one
+ * that decides (`lib/shared-volumes.ts`), and duplicating the rule here is how
+ * the two drift apart. A rejected path comes back as the form's error line.
  */
-function RepoBranches({ repos, onChange }: { repos: ProjectRepo[]; onChange: (repos: ProjectRepo[]) => void }) {
-  const rows = repos as LiteRepo[]
-  if (rows.length === 0) return null
+const SHARED_VOLUMES_SECTION: ProjectFormCustomSection<LiteFormValue> = {
+  id: SHARED_VOLUMES,
+  title: "Shared volumes",
+  hint: "Persistent, mounted in every workspace of this project",
+  icon: HardDrive,
+  accent: "run",
+  // Both count what would actually be saved, not the rows on screen: a blank row
+  // the user just added is dropped on submit (see `isDeclaredVolume`).
+  summary: ({ sharedVolumes }) => {
+    const n = sharedVolumes.filter(isDeclaredVolume).length
+    return n ? `${n} shared volume${n > 1 ? "s" : ""}` : null
+  },
+  manifestRow: ({ sharedVolumes }) => {
+    const n = sharedVolumes.filter(isDeclaredVolume).length
+    return { label: "volumes", value: `${n}`, done: n > 0 }
+  },
+  render: (value, patch) => (
+    <SharedVolumeRows
+      volumes={value.sharedVolumes}
+      onChange={(sharedVolumes) => patch({ sharedVolumes })}
+    />
+  ),
+}
+
+/** The rows themselves — the body of the section above. */
+function SharedVolumeRows({
+  volumes,
+  onChange,
+}: {
+  volumes: SharedVolume[]
+  onChange: (volumes: SharedVolume[]) => void
+}) {
+  const patch = (index: number, field: keyof SharedVolume, v: string) =>
+    onChange(volumes.map((vol, i) => (i === index ? { ...vol, [field]: v } : vol)))
+
   return (
-    <div className="mt-4 space-y-2 border-t border-dashed border-border pt-3">
-      <Label className="text-xs text-muted-foreground">Branch to clone — empty for the remote&apos;s default</Label>
-      {rows.map((repo) => (
-        <div key={repo.id} className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-            {repo.project || repo.cloneUrl || "new repository"}
-          </span>
-          <Input
-            className="h-8 w-44 font-mono text-xs"
-            placeholder="default"
-            aria-label={`Branch for ${repo.project || repo.cloneUrl || "new repository"}`}
-            value={repo.branch ?? ""}
-            onChange={(e) =>
-              onChange(rows.map((r) => (r.id === repo.id ? { ...r, branch: e.target.value } : r)))
-            }
-          />
-        </div>
-      ))}
-      <p className="text-xs text-muted-foreground">Each workspace can override it at creation.</p>
-    </div>
+      <div className="space-y-3">
+        {volumes.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
+              <span className="w-40 shrink-0">Name</span>
+              <span className="min-w-0 flex-1">Mount path in every workspace</span>
+              <span className="w-8 shrink-0" />
+            </div>
+            {volumes.map((vol, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Input
+                  className="h-8 w-40 font-mono text-xs"
+                  placeholder="pnpm-store"
+                  aria-label={`Shared volume ${i + 1} name`}
+                  value={vol.name}
+                  onChange={(e) => patch(i, "name", e.target.value)}
+                />
+                <Input
+                  className="h-8 min-w-0 flex-1 font-mono text-xs"
+                  placeholder="/home/vscode/.local/share/pnpm/store"
+                  aria-label={`Shared volume ${i + 1} mount path`}
+                  value={vol.mountPath}
+                  onChange={(e) => patch(i, "mountPath", e.target.value)}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 w-8 shrink-0 px-0 text-muted-foreground"
+                  aria-label={`Remove shared volume ${i + 1}`}
+                  onClick={() => onChange(volumes.filter((_, x) => x !== i))}
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {volumes.length === 0 && (
+          <p className="rounded-md border border-dashed border-border bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
+            None. Every workspace downloads its own dependencies and rebuilds its own artifacts — add a volume to
+            share a package cache, a dataset or a build directory between them.
+          </p>
+        )}
+
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8"
+          onClick={() => onChange([...volumes, { name: "", mountPath: "" }])}
+        >
+          <Plus className="size-3.5" /> Add shared volume
+        </Button>
+
+        <p className="text-xs text-muted-foreground">
+          Created on first use, kept when a workspace is deleted or rebuilt, and only destroyed with the project.{" "}
+          {SHARED_VOLUME_NAME_HINT}; the mount path must sit outside <code>/workspace</code>, which is each
+          workspace&apos;s own volume. Workers write into it{" "}
+          <span className="font-medium">concurrently and unsynchronised</span> — good for caches, datasets and
+          artifacts, not for a shared SQLite database or a lockfile two workers rewrite.
+        </p>
+      </div>
   )
 }
 

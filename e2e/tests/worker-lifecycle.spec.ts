@@ -73,3 +73,63 @@ test.describe("worker lifecycle (Docker)", () => {
     workerId = "" // deleted; skip afterAll cleanup
   })
 })
+
+// The point of a shared volume is that it outlives the workers: it's created by the first spawn
+// that needs it, mounted by every worker of the project, and NOT wiped when a worker is deleted —
+// only when the project is. All observed through /api/resources, so no docker CLI is needed.
+test.describe("shared volumes (Docker)", () => {
+  test.skip(!RUN, "Set E2E_DOCKER=1 to run — needs a real Docker socket and pulls a large image.")
+
+  let projectId = ""
+  let workerId = ""
+
+  async function sharedVolume(request: APIRequestContext, name: string) {
+    const { volumes } = await (await request.get("/api/resources")).json()
+    return volumes.find((v: { name: string }) => v.name === `mp-proj-${projectId}-${name}`)
+  }
+
+  test.afterAll(async ({ request }) => {
+    if (workerId) await request.delete(`/api/workers/${workerId}`).catch(() => {})
+    if (projectId) await request.delete(`/api/projects/${projectId}`).catch(() => {})
+  })
+
+  test("created on first spawn, survives the worker, dies with the project", async ({ request }) => {
+    const project = await request.post("/api/projects", {
+      data: {
+        name: `e2e-shared-vol-${Date.now()}`,
+        image: IMAGE,
+        sharedVolumes: [{ name: "cache", mountPath: "/home/vscode/.cache/e2e" }],
+      },
+    })
+    expect(project.status(), await project.text()).toBe(201)
+    projectId = (await project.json()).id
+
+    // Nothing is created until a worker needs it.
+    expect(await sharedVolume(request, "cache")).toBeUndefined()
+
+    const spawn = await request.post(`/api/projects/${projectId}/workers`, { data: {} })
+    expect(spawn.status(), await spawn.text()).toBe(201)
+    workerId = (await spawn.json()).id
+
+    const ready = await poll(() => workerState(request, workerId), (s) => s === "ready" || s === "error", 9 * 60_000)
+    expect(ready, "worker should reach ready, not error").toBe("ready")
+
+    const mounted = await poll(() => sharedVolume(request, "cache"), (v) => !!v, 30_000)
+    expect(mounted, "the shared volume should exist once a worker mounts it").toBeTruthy()
+    expect(mounted.kind).toBe("shared")
+    expect(mounted.projectId).toBe(projectId)
+    expect(mounted.mountPath).toBe("/home/vscode/.cache/e2e")
+    expect(mounted.mountedBy).toBeGreaterThanOrEqual(1)
+
+    // Deleting the worker wipes its own mp-worker-* volumes — never the project's.
+    expect((await request.delete(`/api/workers/${workerId}`)).status()).toBe(204)
+    workerId = ""
+    expect(await sharedVolume(request, "cache"), "shared volume must survive a worker delete").toBeTruthy()
+
+    // Deleting the project is the one thing that removes it.
+    expect((await request.delete(`/api/projects/${projectId}`)).status()).toBe(204)
+    const gone = await poll(() => sharedVolume(request, "cache"), (v) => !v, 30_000)
+    expect(gone, "shared volume should go with the project").toBeUndefined()
+    projectId = ""
+  })
+})

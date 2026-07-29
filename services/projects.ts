@@ -10,7 +10,7 @@ import {
 } from "../db/schema"
 import { newId } from "../lib/id"
 import { encrypt, decrypt } from "../lib/crypto"
-import { removeWorker as removeWorkerContainer, removeProjectImages } from "../lib/docker"
+import { removeWorker as removeWorkerContainer, removeProjectImages, removeProjectVolumes } from "../lib/docker"
 import { generateSSHKeyPair, derivePublicKey } from "../lib/ssh"
 import { AVAILABLE_FEATURES } from "../lib/catalogs"
 import type { CreateProjectInput, UpdateProjectInput } from "../lib/validation"
@@ -47,6 +47,7 @@ export function buildVersionConfig(p: Project): ProjectVersionConfig {
     postStartCommand: p.postStartCommand,
     repositories: p.repositories,
     forwardPorts: p.forwardPorts,
+    sharedVolumes: p.sharedVolumes,
   }
 }
 
@@ -113,6 +114,7 @@ export function createProject(input: CreateProjectInput): SerializedProject {
     postStartCommand: input.postStartCommand ?? null,
     repositories: input.repositories,
     forwardPorts: input.forwardPorts,
+    sharedVolumes: input.sharedVolumes,
     deployKeyPrivate: null,
     currentVersion: 1,
     favorite: false,
@@ -149,6 +151,7 @@ export function updateProject(id: string, input: UpdateProjectInput): Serialized
       input.postStartCommand !== undefined ? (input.postStartCommand ?? null) : existing.postStartCommand,
     repositories: input.repositories ?? existing.repositories,
     forwardPorts: input.forwardPorts ?? existing.forwardPorts,
+    sharedVolumes: input.sharedVolumes ?? existing.sharedVolumes,
     currentVersion: existing.currentVersion + 1,
   }
 
@@ -165,6 +168,7 @@ export function updateProject(id: string, input: UpdateProjectInput): Serialized
       postStartCommand: merged.postStartCommand,
       repositories: merged.repositories,
       forwardPorts: merged.forwardPorts,
+      sharedVolumes: merged.sharedVolumes,
       currentVersion: merged.currentVersion,
     })
     .where(eq(projects.id, id))
@@ -187,10 +191,15 @@ export function setFavorite(id: string, favorite: boolean): SerializedProject | 
 
 /**
  * Deletes a project and everything it owns: its workers' containers, networks and
- * volumes, the images built for it, then the row itself (versions, secrets, workers
- * and build rows go with it through the FK cascades). Docker cleanup is best effort
- * — a container that can't be removed never blocks the deletion.
- * Returns false when the project doesn't exist.
+ * volumes, its shared volumes, the images built for it, then the row itself
+ * (versions, secrets, workers and build rows go with it through the FK cascades).
+ * Docker cleanup is best effort — a container that can't be removed never blocks
+ * the deletion. Returns false when the project doesn't exist.
+ *
+ * This is the *only* place shared volumes are destroyed — they survive worker
+ * deletions and rebuilds — so the UI asks for an explicit confirmation before
+ * calling it (see `components/delete-project-dialog.tsx`). Workers go first: a
+ * volume still attached to a live container can't be removed.
  */
 export async function deleteProject(id: string): Promise<boolean> {
   const existing = getProjectRow(id)
@@ -198,6 +207,7 @@ export async function deleteProject(id: string): Promise<boolean> {
 
   const rows = db.select().from(workers).where(eq(workers.projectId, id)).all()
   for (const w of rows) await removeWorkerContainer(w.id, w.containerId).catch(() => {})
+  await removeProjectVolumes(id)
   await removeProjectImages(id)
 
   db.delete(projects).where(eq(projects.id, id)).run()
@@ -237,6 +247,9 @@ export function exportProject(id: string): ProjectExport | undefined {
       postStartCommand: p.postStartCommand ?? undefined,
       repositories: p.repositories,
       forwardPorts: p.forwardPorts,
+      // The *declaration* travels — a name and a mount path, no data and nothing
+      // sensitive. The volume itself is per-instance and created on first spawn.
+      sharedVolumes: p.sharedVolumes,
       secretNames: listProjectSecrets(id).map((s) => s.name),
     },
   }
@@ -277,6 +290,8 @@ export function restoreVersion(projectId: string, version: number): SerializedPr
       postStartCommand: c.postStartCommand,
       repositories: c.repositories,
       forwardPorts: c.forwardPorts,
+      // Snapshots taken before shared volumes existed simply don't have the key.
+      sharedVolumes: c.sharedVolumes ?? [],
       currentVersion: newVersion,
     })
     .where(eq(projects.id, projectId))

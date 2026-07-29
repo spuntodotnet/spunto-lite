@@ -12,6 +12,9 @@ export type Repository = {
 
 export type ProjectFeature = { id: string; options?: Record<string, string>; ociRef?: string; localScript?: string }
 
+/** A project-level volume mounted in every worker of the project. */
+export type SharedVolume = { name: string; mountPath: string }
+
 export type SetupStatus = {
   phase: "pending" | "initializing" | "credentials" | "dotfiles" | "cloning" | "features" | "lifecycle" | "ready" | "error"
   repos: { name: string; state: "pending" | "cloning" | "done" | "error" }[]
@@ -33,6 +36,7 @@ export type Project = {
   postStartCommand: string | null
   repositories: Repository[]
   forwardPorts: number[]
+  sharedVolumes: SharedVolume[]
   currentVersion: number
   favorite: boolean
   createdAt: string
@@ -133,12 +137,20 @@ export type ServiceResource = {
 export type VolumeResource = {
   name: string
   sizeBytes: number
-  kind: "workspace" | "docker" | "containerd" | "service" | "other"
+  /**
+   * `shared` is a project-level volume mounted in every worker of that project;
+   * `service` belongs to a shared service, not to any project.
+   */
+  kind: "workspace" | "docker" | "containerd" | "shared" | "service" | "other"
   workerId: string | null
   workerName: string | null
+  projectId: string | null
   projectName: string | null
   /** Set on a `service` volume: which shared service owns it. */
   serviceSlug: string | null
+  /** `shared` volumes only: where it lands in each worker, and how many mount it. */
+  mountPath: string | null
+  mountedBy: number | null
   inUse: boolean
 }
 
