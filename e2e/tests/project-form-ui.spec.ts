@@ -63,6 +63,8 @@ test.describe("project form → stored project", () => {
     await page.getByLabel("Shared volume 1 name").fill("pnpm-store")
     await page.getByLabel("Shared volume 1 mount path").fill("/home/vscode/.local/share/pnpm/store")
     await page.getByRole("button", { name: "Add shared volume" }).click()
+    // The blank row is on screen but isn't a volume: the manifest counts one, not two.
+    await expect(page.getByText("volumes", { exact: true }).locator("xpath=../..")).toContainText("1")
 
     await page.getByRole("button", { name: "Create project" }).click()
     // Not just `/projects/<something>`: `/projects/new` matches that too, and the

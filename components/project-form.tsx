@@ -24,7 +24,7 @@ import {
   withUniqueRepoIds,
   type LiteFormValue,
 } from "@/lib/project-form-value"
-import { SHARED_VOLUME_NAME_HINT } from "@/lib/shared-volumes"
+import { isDeclaredVolume, SHARED_VOLUME_NAME_HINT } from "@/lib/shared-volumes"
 import {
   PROJECT_IMPORT_HANDOFF_KEY,
   parseProjectExport,
@@ -349,13 +349,16 @@ const SHARED_VOLUMES_SECTION: ProjectFormCustomSection<LiteFormValue> = {
   hint: "Persistent, mounted in every workspace of this project",
   icon: HardDrive,
   accent: "run",
-  summary: ({ sharedVolumes }) =>
-    sharedVolumes.length ? `${sharedVolumes.length} shared volume${sharedVolumes.length > 1 ? "s" : ""}` : null,
-  manifestRow: ({ sharedVolumes }) => ({
-    label: "volumes",
-    value: `${sharedVolumes.length}`,
-    done: sharedVolumes.length > 0,
-  }),
+  // Both count what would actually be saved, not the rows on screen: a blank row
+  // the user just added is dropped on submit (see `isDeclaredVolume`).
+  summary: ({ sharedVolumes }) => {
+    const n = sharedVolumes.filter(isDeclaredVolume).length
+    return n ? `${n} shared volume${n > 1 ? "s" : ""}` : null
+  },
+  manifestRow: ({ sharedVolumes }) => {
+    const n = sharedVolumes.filter(isDeclaredVolume).length
+    return { label: "volumes", value: `${n}`, done: n > 0 }
+  },
   render: (value, patch) => (
     <SharedVolumeRows
       volumes={value.sharedVolumes}

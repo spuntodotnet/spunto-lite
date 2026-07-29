@@ -101,6 +101,15 @@ export function validateSharedVolumes(volumes: SharedVolume[]): string | null {
   return null
 }
 
+/**
+ * A row the user added and hasn't filled in yet is not a volume: the form drops
+ * it on submit, so anything counting volumes for the user (the fold's summary,
+ * the build manifest) has to agree, or it claims one more than gets saved.
+ */
+export function isDeclaredVolume(v: SharedVolume): boolean {
+  return !!(v.name.trim() || v.mountPath.trim())
+}
+
 /** `HostConfig.Binds` entries for a project's shared volumes. */
 export function sharedVolumeBinds(projectId: string, volumes: SharedVolume[]): string[] {
   return volumes.map((v) => `${sharedVolumeName(projectId, v.name)}:${normalizeMountPath(v.mountPath)}`)

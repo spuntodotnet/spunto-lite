@@ -19,7 +19,7 @@ import {
 import { AVAILABLE_FEATURES } from "./catalogs"
 import { EXTENSION_ID_HINT, isExtensionId } from "./extensions"
 import type { ProjectExport } from "./project-export"
-import { validateSharedVolumes } from "./shared-volumes"
+import { isDeclaredVolume, validateSharedVolumes } from "./shared-volumes"
 import type { Project, ProjectFeature, Repository, SharedVolume } from "./types"
 
 /** Pre-selected in the creation form, exactly as the hand-rolled form did. */
@@ -193,9 +193,8 @@ export function toProjectPayload(value: LiteFormValue): ProjectPayload {
     // The package's port field drops anything unparseable but keeps large
     // numbers; the API caps at 65535, so the bound is enforced here too.
     forwardPorts: value.forwardPorts.filter((n) => Number.isInteger(n) && n > 0 && n < 65536),
-    // A row the user added and hasn't filled in isn't a volume yet.
     sharedVolumes: value.sharedVolumes
-      .filter((v) => v.name.trim() || v.mountPath.trim())
+      .filter(isDeclaredVolume)
       .map((v) => ({ name: v.name.trim(), mountPath: v.mountPath.trim() })),
     secrets: value.secrets.filter((s) => s.name && s.value).map(({ name, value: v }) => ({ name, value: v })),
   }
