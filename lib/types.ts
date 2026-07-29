@@ -55,6 +55,35 @@ export type Worker = {
   createdAt: string
 }
 
+// ─── Shared services (cross-project, "Ship" local) ───────────────────────────
+
+/** Either a literal `value` or `secretName`, the name of a global secret. */
+export type ServiceEnvVar = { name: string; value?: string; secretName?: string }
+/** `host` absent/null = reachable over the shared network only, not published on the machine. */
+export type ServicePort = { container: number; host?: number | null }
+export type ServiceVolume = { name: string; mountPath: string }
+export type ServiceRestartPolicy = "no" | "unless-stopped" | "always" | "on-failure"
+/** Same vocabulary as `WorkerState`, so the status pills are shared. */
+export type ServiceState = "pending" | "starting" | "ready" | "stopped" | "error"
+
+export type Service = {
+  id: string
+  slug: string
+  description: string | null
+  image: string
+  /** Overrides the image's CMD (tokenised as a shell would quote it, not run by one). */
+  command: string | null
+  env: ServiceEnvVar[]
+  ports: ServicePort[]
+  volumes: ServiceVolume[]
+  httpPort: number | null
+  restartPolicy: ServiceRestartPolicy
+  containerId: string | null
+  state: ServiceState
+  error: string | null
+  createdAt: string
+}
+
 export type ProjectVersion = {
   id: string
   projectId: string
@@ -89,13 +118,27 @@ export type WorkerResource = {
   stats: ContainerStats | null
 }
 
+export type ServiceResource = {
+  id: string
+  slug: string
+  image: string
+  state: string
+  running: boolean
+  /** In-cluster address workers use, e.g. `http://elasticsearch:9200`. */
+  address: string
+  createdAt: string
+  stats: ContainerStats | null
+}
+
 export type VolumeResource = {
   name: string
   sizeBytes: number
-  kind: "workspace" | "docker" | "containerd" | "other"
+  kind: "workspace" | "docker" | "containerd" | "service" | "other"
   workerId: string | null
   workerName: string | null
   projectName: string | null
+  /** Set on a `service` volume: which shared service owns it. */
+  serviceSlug: string | null
   inUse: boolean
 }
 
@@ -112,6 +155,8 @@ export type ResourcesOverview = {
   totals: {
     workersTotal: number
     workersRunning: number
+    servicesTotal: number
+    servicesRunning: number
     cpuPercent: number
     memUsageMb: number
     volumesCount: number
@@ -120,6 +165,7 @@ export type ResourcesOverview = {
     imagesSizeBytes: number
   }
   workers: WorkerResource[]
+  services: ServiceResource[]
   volumes: VolumeResource[]
   images: ImageResource[]
 }
@@ -128,6 +174,9 @@ export type ResourcesOverview = {
 
 export type SearchKind = "project" | "worker" | "service" | "build" | "secret" | "template"
 
+/** A proxied target, resolved client-side by `workerBaseUrl()` / `serviceBaseUrl()`. */
+export type SearchTarget = { workerId: string; port?: number } | { serviceSlug: string; port?: number }
+
 export type SearchHit = {
   id: string
   kind: SearchKind
@@ -135,10 +184,9 @@ export type SearchHit = {
   description?: string
   meta?: string
   keywords: string[]
-  /** In-app route. Absent on `service` hits, which don't live on this origin. */
+  /** In-app route. Absent on hits that live on a proxied subdomain, not this origin. */
   href?: string
-  /** Worker-hosted target, resolved client-side by `workerBaseUrl()`. */
-  target?: { workerId: string; port?: number }
+  target?: SearchTarget
 }
 
 export type SearchIndex = { hits: SearchHit[]; generatedAt: string }

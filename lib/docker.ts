@@ -70,13 +70,55 @@ function containerName(workerId: string): string {
   return `mp-worker-${workerId}`
 }
 
-async function ensureWorkerNetwork(networkName: string): Promise<void> {
+async function ensureNetwork(networkName: string): Promise<void> {
   const networks = await docker.listNetworks({ filters: { name: [networkName] } })
   if (networks.find((n) => n.Name === networkName)) return
   try {
     await docker.createNetwork({ Name: networkName, Driver: "bridge" })
   } catch (err: unknown) {
     if ((err as { statusCode?: number }).statusCode !== 409) throw err
+  }
+}
+
+// ─── Shared network (workers ⇄ shared services) ───────────────────────────────
+//
+// Each worker still gets its own `mp-worker-<id>-net`, created at spawn and torn
+// down with it. On top of that, one bridge shared by everything: every shared
+// service joins it under a DNS alias equal to its slug, and every worker joins it
+// at spawn — so `curl http://elasticsearch:9200` resolves from any worker.
+//
+// The alternative was to attach each service to each worker's own network instead.
+// It isolates better (you'd pick which worker sees what) but costs a connect for
+// every (worker, service) pair, replayed on every spawn *and* every service
+// creation — and there's nothing to isolate from on a single-user local machine.
+// One common bridge it is; per-project scoping can come later as a filter on top.
+//
+// Unlike a worker network, this one is *never* removed: it's infrastructure shared
+// by objects with independent lifecycles, so no single deletion owns it.
+export const SHARED_NETWORK_NAME = "mp-shared-net"
+
+export async function ensureSharedNetwork(): Promise<void> {
+  await ensureNetwork(SHARED_NETWORK_NAME)
+}
+
+/**
+ * Joins a container to the shared network, optionally under DNS aliases. Creates
+ * the network if needed and is idempotent — re-connecting an already-attached
+ * container is a no-op, not an error. Best effort: a worker that can't reach the
+ * shared services must still boot, so a failure here is logged, never thrown.
+ */
+export async function connectToSharedNetwork(containerId: string, aliases: string[] = []): Promise<void> {
+  try {
+    await ensureSharedNetwork()
+    const info = await docker.getContainer(containerId).inspect()
+    if (info.NetworkSettings.Networks?.[SHARED_NETWORK_NAME]) return
+    await docker
+      .getNetwork(SHARED_NETWORK_NAME)
+      .connect({ Container: containerId, ...(aliases.length > 0 ? { EndpointConfig: { Aliases: aliases } } : {}) })
+  } catch (err: unknown) {
+    if (!(err as Error).message?.includes("already")) {
+      console.warn(`[docker] connectToSharedNetwork(${containerId}):`, (err as Error).message)
+    }
   }
 }
 
@@ -112,17 +154,38 @@ export type SpawnParams = {
   labels: Record<string, string>
 }
 
+/** Pulls `image` unless the daemon already has it (with private-registry auth if needed). */
+export async function ensureImage(image: string): Promise<void> {
+  const exists = await docker.getImage(image).inspect().then(() => true).catch(() => false)
+  if (exists) return
+  const authconfig = await getAuthForImage(image)
+  await new Promise<void>((resolve, reject) => {
+    docker.pull(image, authconfig ? { authconfig } : {}, (err, stream) => {
+      if (err) return reject(err)
+      if (!stream) return reject(new Error(`docker pull returned no stream for ${image}`))
+      docker.modem.followProgress(stream, (e) => (e ? reject(e) : resolve()))
+    })
+  })
+}
+
 export async function spawnContainer(params: SpawnParams): Promise<{ containerId: string; isRestart: boolean }> {
   const name = containerName(params.workerId)
 
   // Restart path: container already exists (stopped worker).
-  try {
-    const existing = docker.getContainer(name)
-    const info = await existing.inspect()
-    if (!info.State.Running) await existing.start()
-    return { containerId: info.Id, isRestart: true }
-  } catch {
-    // doesn't exist — create it
+  const existingId = await (async () => {
+    try {
+      const existing = docker.getContainer(name)
+      const info = await existing.inspect()
+      if (!info.State.Running) await existing.start()
+      return info.Id
+    } catch {
+      return null // doesn't exist — create it
+    }
+  })()
+  if (existingId) {
+    // A container created before the shared network existed isn't on it yet.
+    await connectToSharedNetwork(existingId, [`worker-${params.workerId}`])
+    return { containerId: existingId, isRestart: true }
   }
 
   const workspaceVolume = `mp-worker-${params.workerId}-workspace`
@@ -139,20 +202,10 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
   }
 
   // Pull base image if missing.
-  const imageExists = await docker.getImage(params.image).inspect().then(() => true).catch(() => false)
-  if (!imageExists) {
-    const authconfig = await getAuthForImage(params.image)
-    await new Promise<void>((resolve, reject) => {
-      docker.pull(params.image, authconfig ? { authconfig } : {}, (err, stream) => {
-        if (err) return reject(err)
-        if (!stream) return reject(new Error(`docker pull returned no stream for ${params.image}`))
-        docker.modem.followProgress(stream, (e) => (e ? reject(e) : resolve()))
-      })
-    })
-  }
+  await ensureImage(params.image)
 
   const network = workerNetworkName(params.workerId)
-  await ensureWorkerNetwork(network)
+  await ensureNetwork(network)
 
   const container = await docker.createContainer({
     name,
@@ -173,10 +226,146 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
     },
   })
 
+  // Joined *before* start, so the shared services resolve from the very first line
+  // of the setup script. `NetworkMode` above keeps the worker's own network as its
+  // primary one, which is what the reverse proxy resolves against.
+  await connectToSharedNetwork(container.id, [`worker-${params.workerId}`])
+
   await container.start()
   const info = await container.inspect()
   await connectSelfToNetwork(network)
   return { containerId: info.Id, isRestart: false }
+}
+
+// ─── Shared services ──────────────────────────────────────────────────────────
+
+export function serviceContainerName(serviceId: string): string {
+  return `mp-svc-${serviceId}`
+}
+
+/**
+ * Real Docker volume backing a service's named volume. Keyed on the service **id**,
+ * not its slug, so renaming the slug doesn't orphan the data.
+ */
+export function serviceVolumeName(serviceId: string, name: string): string {
+  return `mp-svc-${serviceId}-${name}`
+}
+
+export type SpawnServiceParams = {
+  serviceId: string
+  slug: string
+  image: string
+  /** Overrides the image's CMD. Already tokenised; empty = keep the image's own. */
+  command: string[]
+  env: string[]
+  ports: { container: number; host?: number | null }[]
+  volumes: { name: string; mountPath: string }[]
+  restartPolicy: string
+}
+
+/**
+ * Creates (or restarts) a shared service's container. Idempotent: an existing
+ * container for this service is simply started again — its named volumes and its
+ * place on the shared network are untouched. Recreating it after a spec change is
+ * the caller's job (`removeServiceContainer` then this).
+ */
+export async function spawnServiceContainer(params: SpawnServiceParams): Promise<string> {
+  const name = serviceContainerName(params.serviceId)
+
+  const existingId = await (async () => {
+    try {
+      const existing = docker.getContainer(name)
+      const info = await existing.inspect()
+      if (!info.State.Running) await existing.start()
+      return info.Id
+    } catch {
+      return null
+    }
+  })()
+  if (existingId) {
+    await connectToSharedNetwork(existingId, [params.slug])
+    return existingId
+  }
+
+  for (const vol of params.volumes) {
+    const real = serviceVolumeName(params.serviceId, vol.name)
+    const ex = await docker.listVolumes({ filters: { name: [real] } })
+    if (!ex.Volumes?.find((v) => v.Name === real)) await docker.createVolume({ Name: real })
+  }
+
+  await ensureImage(params.image)
+  await ensureSharedNetwork()
+
+  const container = await docker.createContainer({
+    name,
+    Image: params.image,
+    Cmd: params.command.length > 0 ? params.command : undefined,
+    Env: params.env.length > 0 ? params.env : undefined,
+    Labels: {
+      "spunto.service": "true",
+      "spunto.serviceId": params.serviceId,
+      "spunto.serviceSlug": params.slug,
+    },
+    ExposedPorts: Object.fromEntries(params.ports.map((p) => [`${p.container}/tcp`, {}])),
+    HostConfig: {
+      // The service's *primary* network, with its slug as DNS alias — so a worker
+      // (also on this network) reaches it as `http://<slug>:<port>`.
+      NetworkMode: SHARED_NETWORK_NAME,
+      RestartPolicy: { Name: params.restartPolicy },
+      // Only the ports that asked for a host binding are published: reachability
+      // from the workers goes through the shared network, not through the host.
+      PortBindings: Object.fromEntries(
+        params.ports
+          .filter((p) => p.host != null)
+          .map((p) => [`${p.container}/tcp`, [{ HostPort: String(p.host) }]]),
+      ),
+      Binds: params.volumes.map((v) => `${serviceVolumeName(params.serviceId, v.name)}:${v.mountPath}`),
+    },
+    NetworkingConfig: {
+      EndpointsConfig: { [SHARED_NETWORK_NAME]: { Aliases: [params.slug] } },
+    },
+  })
+
+  await container.start()
+  const info = await container.inspect()
+  // So the reverse proxy can reach it at svc-<slug>.<BASE_DOMAIN> without publishing
+  // a host port.
+  await connectSelfToNetwork(SHARED_NETWORK_NAME)
+  return info.Id
+}
+
+/**
+ * Removes a service's container, KEEPING its named volumes and the shared network
+ * (which outlives every individual service). Used by stop-and-recreate on edit.
+ */
+export async function removeServiceContainer(serviceId: string, containerId: string | null): Promise<void> {
+  for (const ref of [containerId, serviceContainerName(serviceId)]) {
+    if (!ref) continue
+    try {
+      const container = docker.getContainer(ref)
+      try {
+        await container.stop({ t: 10 })
+      } catch {}
+      await container.remove()
+      return
+    } catch (err: unknown) {
+      if ((err as { statusCode?: number }).statusCode !== 404) throw err
+    }
+  }
+}
+
+/** Removes the container AND the service's named volumes. Used by delete. */
+export async function removeService(
+  serviceId: string,
+  containerId: string | null,
+  volumeNames: string[],
+): Promise<void> {
+  await removeServiceContainer(serviceId, containerId)
+  for (const name of volumeNames) {
+    try {
+      await docker.getVolume(serviceVolumeName(serviceId, name)).remove()
+    } catch {}
+  }
 }
 
 export async function stopContainer(containerId: string): Promise<void> {
@@ -246,6 +435,33 @@ export async function removeProjectImages(projectId: string): Promise<void> {
       } catch {}
     }
   } catch {}
+}
+
+/**
+ * Live state of a service container. Richer than `getContainerState` because a
+ * service that *died* has to be told apart from one that was stopped on purpose:
+ * the exit code and the daemon's own error message are what the UI shows.
+ */
+export async function inspectServiceContainer(
+  containerId: string,
+): Promise<
+  | { state: "running" }
+  | { state: "stopped"; exitCode: number; error: string | null }
+  | { state: "not_found" }
+  | { state: "error" }
+> {
+  try {
+    const info = await docker.getContainer(containerId).inspect()
+    if (info.State.Running) return { state: "running" }
+    return {
+      state: "stopped",
+      exitCode: info.State.ExitCode ?? 0,
+      error: info.State.Error?.trim() || null,
+    }
+  } catch (err: unknown) {
+    if ((err as { statusCode?: number }).statusCode === 404) return { state: "not_found" }
+    return { state: "error" }
+  }
 }
 
 export async function getContainerState(containerId: string): Promise<"running" | "stopped" | "not_found" | "error"> {
@@ -363,7 +579,12 @@ export async function getSystemDf(): Promise<{ volumes: DfVolume[]; images: DfIm
   return { volumes, images }
 }
 
-/** Resolves a worker container's IP on its network, for the reverse proxy. */
+/**
+ * Resolves a worker container's IP on its **own** network, for the reverse proxy.
+ * The worker also sits on `mp-shared-net` (for the shared services), so the network
+ * is named explicitly rather than "first one found": the control plane is only
+ * guaranteed to have joined `mp-worker-<id>-net`.
+ */
 export async function resolveContainerIp(workerId: string): Promise<string | null> {
   const containers = await docker.listContainers({
     all: false,
@@ -372,7 +593,28 @@ export async function resolveContainerIp(workerId: string): Promise<string | nul
   const match = containers.find((c) => c.Labels["spunto.workerId"]?.toLowerCase() === workerId.toLowerCase())
   if (!match) return null
   const info = await docker.getContainer(match.Id).inspect()
-  const ip = Object.values(info.NetworkSettings.Networks ?? {})
+  const networks = info.NetworkSettings.Networks ?? {}
+  const own = networks[workerNetworkName(workerId)]?.IPAddress
+  if (own) return own
+  const ip = Object.values(networks)
+    .map((n) => n?.IPAddress)
+    .find((x) => x && x.length > 0)
+  return ip || null
+}
+
+/** Resolves a shared service's IP on the shared network, for the reverse proxy. */
+export async function resolveServiceIp(slug: string): Promise<string | null> {
+  const containers = await docker.listContainers({
+    all: false,
+    filters: JSON.stringify({ label: ["spunto.service=true"] }),
+  })
+  const match = containers.find((c) => c.Labels["spunto.serviceSlug"] === slug)
+  if (!match) return null
+  const info = await docker.getContainer(match.Id).inspect()
+  const networks = info.NetworkSettings.Networks ?? {}
+  const shared = networks[SHARED_NETWORK_NAME]?.IPAddress
+  if (shared) return shared
+  const ip = Object.values(networks)
     .map((n) => n?.IPAddress)
     .find((x) => x && x.length > 0)
   return ip || null

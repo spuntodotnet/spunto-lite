@@ -19,3 +19,16 @@ export function workerBaseUrl(
   const base = `${protocol}//${label}.${hostname}${portSuffix}`
   return folder ? `${base}/?folder=${encodeURIComponent(folder)}` : base
 }
+
+/**
+ * Browser URL for a shared service behind the reverse proxy: `svc-<slug>.<host>`,
+ * or `svc-<slug>-<port>.<host>` for a port other than the service's HTTP one (a
+ * MinIO console next to its API). Same derivation from `window.location` as
+ * `workerBaseUrl`, so it works on :80 and on a dev port alike.
+ */
+export function serviceBaseUrl(slug: string, port?: number): string {
+  if (typeof window === "undefined") return "#"
+  const { protocol, hostname, port: p } = window.location
+  const label = port ? `svc-${slug}-${port}` : `svc-${slug}`
+  return `${protocol}//${label}.${hostname}${p ? `:${p}` : ""}`
+}

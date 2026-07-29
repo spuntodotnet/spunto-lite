@@ -13,9 +13,9 @@ stand up either.
 
 | Project | What | Browser? | Docker? |
 |---|---|---|---|
-| `api` | HTTP-only: health, catalogs, project CRUD + validation, project export, secrets, settings | no | no |
-| `browser` | UI: landing + nav, dashboard renders a seeded project, project import pre-fills the form | yes | no |
-| `worker-lifecycle` | spawn a real worker container → ready → stop → delete | no | **yes** (opt-in) |
+| `api` | HTTP-only: health, catalogs, project CRUD + validation, project export, secrets, settings, shared services | no | no |
+| `browser` | UI: landing + nav, dashboard renders a seeded project, project import pre-fills the form, services page | yes | no |
+| `worker-lifecycle` | spawn a real worker container → ready → stop → delete; a shared service reachable by DNS from inside it | no | **yes** (opt-in) |
 
 ## Running
 
@@ -65,7 +65,21 @@ cd e2e && E2E_BASE_URL=http://localhost:3900 E2E_DOCKER=1 npm run test:worker
 
 Without `E2E_DOCKER=1` the spec self-skips.
 
-### 5. Feature-conflict repro (real Docker)
+### 5. Shared-service reachability (real Docker)
+
+`tests/shared-service-reach.spec.ts` is the one assertion that can't be faked: it declares a
+shared service, spawns a worker, then `curl`s the service **from inside the worker container** by
+its DNS name. Same opt-in as above, and it also needs the `docker` CLI on the runner:
+
+```bash
+cd e2e && E2E_BASE_URL=http://localhost:3900 E2E_DOCKER=1 npm run test:worker
+```
+
+Everything else about shared services (CRUD, validation, the `svc-` proxy route, the search
+index) is covered without Docker in `tests/services.spec.ts` — fixtures are created with
+`start: false`, so the spec is persisted while the container start stays fire-and-forget.
+
+### 6. Feature-conflict repro (real Docker)
 
 `tests/feature-*.spec.ts` reproduce feature-combination bugs on a real worker. Same opt-in as
 above (`E2E_DOCKER=1`) — they run in the `worker-lifecycle` project and also need the `docker`
@@ -107,11 +121,14 @@ e2e/
     settings.spec.ts         (api)
     resources.spec.ts        (api)
     search.spec.ts           (api)   # ⌘K palette index
+    services.spec.ts         (api)   # shared services: CRUD, validation, svc- proxy route
     landing.spec.ts              (browser)
     projects-ui.spec.ts          (browser)
     project-import-ui.spec.ts    (browser)
     resources-ui.spec.ts         (browser)
+    services-ui.spec.ts          (browser)
     command-palette-ui.spec.ts   (browser)
     feature-docker-claude.spec.ts (worker-lifecycle, opt-in — dind+claude repro)
     worker-lifecycle.spec.ts (worker-lifecycle, opt-in)
+    shared-service-reach.spec.ts (worker-lifecycle, opt-in — curl a service from a worker)
 ```

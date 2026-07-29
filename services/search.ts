@@ -1,11 +1,12 @@
 import { desc } from "drizzle-orm"
 import { db } from "../db/index"
-import { projects, workers, projectImageBuilds, projectSecrets, userSecrets } from "../db/schema"
+import { projects, workers, projectImageBuilds, projectSecrets, userSecrets, services } from "../db/schema"
 import { TEMPLATES } from "../lib/templates"
+import { serviceAddress, servicePrimaryPort } from "./services"
 
 // Flat index of everything the ⌘K palette can jump to: projects, workers (the
-// nodes), the services they expose, image builds, secret *names*, and the project
-// templates.
+// nodes), the shared services and the ones a worker exposes, image builds, secret
+// *names*, and the project templates.
 //
 // Two deliberate choices:
 //
@@ -22,6 +23,14 @@ import { TEMPLATES } from "../lib/templates"
 
 export type SearchKind = "project" | "worker" | "service" | "build" | "secret" | "template"
 
+/**
+ * A target behind the reverse proxy — a worker's own host (code-server, a forwarded
+ * port) or a shared service's. Only the browser can turn it into a URL
+ * (`workerBaseUrl()` / `serviceBaseUrl()` derive the host from `window.location`),
+ * so the server hands over the coordinates and the client resolves them.
+ */
+export type SearchTarget = { workerId: string; port?: number } | { serviceSlug: string; port?: number }
+
 export type SearchHit = {
   /** Unique across kinds — used as the palette item's `value`. */
   id: string
@@ -31,15 +40,9 @@ export type SearchHit = {
   meta?: string
   /** Extra terms the palette matches on but never displays. */
   keywords: string[]
-  /** In-app route. Absent on `service` hits, which don't live on this origin. */
+  /** In-app route. Absent on hits that live on a proxied subdomain, not this origin. */
   href?: string
-  /**
-   * A target hosted by the worker itself (code-server, or one of its forwarded
-   * ports). Only the browser can turn this into a URL — `workerBaseUrl()` derives
-   * the host from `window.location` — so the server hands over the coordinates
-   * and the client resolves them.
-   */
-  target?: { workerId: string; port?: number }
+  target?: SearchTarget
 }
 
 export type SearchIndex = { hits: SearchHit[]; generatedAt: string }
@@ -62,6 +65,7 @@ export function getSearchIndex(): SearchIndex {
     .from(projectSecrets)
     .all()
   const userSecretRows = db.select({ id: userSecrets.id, name: userSecrets.name }).from(userSecrets).all()
+  const serviceRows = db.select().from(services).orderBy(desc(services.createdAt)).all()
 
   const projectById = new Map(projectRows.map((p) => [p.id, p]))
   // FK cascades make an orphan row impossible; the fallback is pure defensiveness.
@@ -132,6 +136,33 @@ export function getSearchIndex(): SearchIndex {
         keywords: [w.id, owner, String(port), "port", "service"],
       })
     }
+  }
+
+  // Shared services — the cross-project dependencies. Unlike a worker's endpoints,
+  // they're listed whatever their state: the entry leads somewhere useful (the page
+  // where you start it) even when it's down. One with an HTTP port and actually
+  // running gets the browser target instead, so ⌘K opens Kibana in a tab.
+  for (const s of serviceRows) {
+    const browsable = s.httpPort !== null && s.state === "ready"
+    hits.push({
+      id: `service:shared:${s.id}`,
+      kind: "service",
+      label: s.slug,
+      description: s.description ?? s.image,
+      meta: browsable ? "shared · open" : `shared · ${s.state}`,
+      ...(browsable ? { target: { serviceSlug: s.slug } } : { href: "/services" }),
+      keywords: [
+        s.slug,
+        s.image,
+        serviceAddress(s),
+        s.state,
+        ...s.ports.map((p) => String(p.container)),
+        ...(servicePrimaryPort(s) ? [String(servicePrimaryPort(s))] : []),
+        "service",
+        "shared",
+        "dependency",
+      ].filter(Boolean),
+    })
   }
 
   for (const b of buildRows) {

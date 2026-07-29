@@ -37,6 +37,30 @@ export type SetupStatus = {
   error?: string
 }
 
+/**
+ * One environment variable of a shared service. Either a literal `value` (plain
+ * config, stored as-is in SQLite) or `secretName`, the name of a **global secret**
+ * whose AES-GCM encrypted value is decrypted at start time and never persisted
+ * here. Anything sensitive belongs in the second form.
+ */
+export type ServiceEnvVar = { name: string; value?: string; secretName?: string }
+
+/**
+ * A port the service listens on. `container` is always declared (that's how workers
+ * and the reverse proxy reach it over the shared network); `host` additionally
+ * publishes it on the machine, for a psql or a mongosh run outside any container.
+ */
+export type ServicePort = { container: number; host?: number | null }
+
+/**
+ * A persistent named volume. `name` is the user-facing suffix; the real Docker
+ * volume is `mp-svc-<serviceId>-<name>`, so it survives container recreation
+ * (edit, restart) and is only removed with the service itself.
+ */
+export type ServiceVolume = { name: string; mountPath: string }
+
+export type ServiceRestartPolicy = "no" | "unless-stopped" | "always" | "on-failure"
+
 /** Immutable snapshot of the build-relevant config at a given version. */
 export type ProjectVersionConfig = {
   name: string
@@ -114,6 +138,47 @@ export const workers = sqliteTable("workers", {
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 })
 
+/**
+ * A long-lived dependency shared by *every* dev environment — one Elasticsearch,
+ * one Postgres, one MinIO for all the workers of all the projects. Deliberately
+ * **global**: no `projectId`, because mutualising is the whole point. Its
+ * lifecycle is independent of any worker (it survives their deletion), and it's
+ * reachable from every worker by DNS at its `slug` on the shared network.
+ *
+ * v1 is one container per service: a stack (Elasticsearch + Kibana) is declared
+ * as two services on the same network, not as an imported docker-compose file.
+ */
+export const services = sqliteTable("services", {
+  id: text("id").primaryKey(),
+  /** DNS label — the hostname workers resolve, and the `svc-<slug>` proxy prefix. */
+  slug: text("slug").notNull().unique(),
+  description: text("description"),
+  image: text("image").notNull(),
+  /**
+   * Overrides the image's `CMD`, for images that take their configuration as
+   * arguments (`minio server /data --console-address :9001`). Tokenised as a shell
+   * would, not run through one — no pipes, no expansion.
+   */
+  command: text("command"),
+  env: text("env", { mode: "json" }).$type<ServiceEnvVar[]>().notNull().default(sql`'[]'`),
+  ports: text("ports", { mode: "json" }).$type<ServicePort[]>().notNull().default(sql`'[]'`),
+  volumes: text("volumes", { mode: "json" }).$type<ServiceVolume[]>().notNull().default(sql`'[]'`),
+  /**
+   * Container port serving HTTP, if any. Two consequences: the service is
+   * browsable at `http://svc-<slug>.<BASE_DOMAIN>` through the reverse proxy, and
+   * the `SPUNTO_SVC_<SLUG>` variable injected into workers is a full `http://` URL.
+   */
+  httpPort: integer("http_port"),
+  restartPolicy: text("restart_policy").$type<ServiceRestartPolicy>().notNull().default("unless-stopped"),
+  containerId: text("container_id"),
+  // pending | starting | ready | stopped | error — same vocabulary as workers, so
+  // the UI's status pills are shared.
+  state: text("state").notNull().default("stopped"),
+  /** Last start failure (missing image, port already bound…), surfaced in the UI. */
+  error: text("error"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+})
+
 export const projectImageBuilds = sqliteTable("project_image_builds", {
   id: text("id").primaryKey(),
   projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
@@ -143,5 +208,6 @@ export const settings = sqliteTable("settings", {
 
 export type Project = typeof projects.$inferSelect
 export type Worker = typeof workers.$inferSelect
+export type Service = typeof services.$inferSelect
 export type ProjectImageBuild = typeof projectImageBuilds.$inferSelect
 export type Settings = typeof settings.$inferSelect

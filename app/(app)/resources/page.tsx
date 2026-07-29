@@ -13,10 +13,11 @@ import {
   Code2,
   ChevronRight,
   RefreshCw,
+  Server,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
-import type { ResourcesOverview, WorkerResource } from "@/lib/types"
+import type { ResourcesOverview, ServiceResource, WorkerResource } from "@/lib/types"
 import { workerBaseUrl } from "@/lib/worker-url"
 import { cfgFor, ResourceBars, formatRelativeTime } from "@/components/worker-card"
 
@@ -39,6 +40,7 @@ const VOLUME_KIND_LABEL: Record<string, string> = {
   workspace: "Workspace",
   docker: "Docker (DinD)",
   containerd: "containerd (DinD)",
+  service: "Service data",
   other: "Other",
 }
 
@@ -123,6 +125,52 @@ function WorkerRow({ w }: { w: WorkerResource }) {
   )
 }
 
+// ─── Shared-service row (container) ──────────────────────────────────────────
+
+/**
+ * A shared service, listed next to the workers because it's the same kind of thing
+ * on the daemon — a container burning CPU and RAM — but with a lifecycle of its own:
+ * no project, no worker, and it survives both.
+ */
+function ServiceRow({ s }: { s: ServiceResource }) {
+  const cfg = cfgFor(s.state)
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={cn("h-2 w-2 rounded-full shrink-0", cfg.dotClass)} />
+            <Link href="/services" className="font-semibold text-sm leading-none hover:text-primary truncate">
+              {s.slug}
+            </Link>
+            <span className={cn("inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none", cfg.pillClass)}>
+              {cfg.label}
+            </span>
+            <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-mono leading-none bg-muted text-muted-foreground border-border">
+              shared
+            </span>
+          </div>
+          <div className="mt-1.5 text-[11px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
+            <span className="font-mono truncate">{s.address}</span>
+            <span className="text-muted-foreground/40">·</span>
+            <span className="font-mono truncate" title={s.image}>
+              {s.image}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {s.running && s.stats ? (
+        <ResourceBars stats={s.stats} />
+      ) : (
+        <div className="mt-3 rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5 text-[11px] text-muted-foreground">
+          Not consuming resources ({cfg.label.toLowerCase()}).
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Section wrapper ─────────────────────────────────────────────────────────
 
 function SectionHeader({ title, count }: { title: string; count: number }) {
@@ -174,8 +222,8 @@ export default function ResourcesPage() {
               icon={Activity}
               accent="text-green-500"
               label="Running containers"
-              value={`${data.totals.workersRunning}`}
-              sub={`of ${data.totals.workersTotal} workspace${data.totals.workersTotal === 1 ? "" : "s"}`}
+              value={`${data.totals.workersRunning + data.totals.servicesRunning}`}
+              sub={`${data.totals.workersRunning}/${data.totals.workersTotal} workspaces · ${data.totals.servicesRunning}/${data.totals.servicesTotal} services`}
             />
             <StatTile
               icon={Cpu}
@@ -217,11 +265,25 @@ export default function ResourcesPage() {
             )}
           </section>
 
+          {/* Shared services */}
+          <section>
+            <SectionHeader title="Shared services" count={data.services.length} />
+            {data.services.length === 0 ? (
+              <EmptyState icon={Server} text="No shared service declared yet." />
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {data.services.map((s) => (
+                  <ServiceRow key={s.id} s={s} />
+                ))}
+              </div>
+            )}
+          </section>
+
           {/* Volumes */}
           <section>
             <SectionHeader title="Volumes" count={data.volumes.length} />
             {data.volumes.length === 0 ? (
-              <EmptyState icon={HardDrive} text="No worker volumes on disk." />
+              <EmptyState icon={HardDrive} text="No worker or service volumes on disk." />
             ) : (
               <div className="overflow-hidden rounded-xl border border-border">
                 <table className="w-full text-sm">
@@ -229,7 +291,7 @@ export default function ResourcesPage() {
                     <tr className="border-b border-border bg-muted/30 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                       <th className="px-4 py-2 font-medium">Volume</th>
                       <th className="px-4 py-2 font-medium">Type</th>
-                      <th className="px-4 py-2 font-medium">Workspace</th>
+                      <th className="px-4 py-2 font-medium">Owner</th>
                       <th className="px-4 py-2 font-medium text-right">Size</th>
                       <th className="px-4 py-2 font-medium text-center">In use</th>
                     </tr>
@@ -242,7 +304,11 @@ export default function ResourcesPage() {
                         </td>
                         <td className="px-4 py-2 text-xs">{VOLUME_KIND_LABEL[v.kind] ?? v.kind}</td>
                         <td className="px-4 py-2 text-xs">
-                          {v.workerId ? (
+                          {v.kind === "service" ? (
+                            <Link href="/services" className="inline-flex items-center gap-0.5 hover:text-primary truncate">
+                              {v.serviceSlug ?? "orphaned service"} <ChevronRight className="size-3" />
+                            </Link>
+                          ) : v.workerId ? (
                             <span className="truncate">
                               {v.workerName ?? v.workerId}
                               {v.projectName && <span className="text-muted-foreground"> · {v.projectName}</span>}

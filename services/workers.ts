@@ -17,12 +17,14 @@ import {
   startContainer,
   removeWorker as removeWorkerContainer,
   removeContainerOnly,
+  connectToSharedNetwork,
   getContainerState,
   getSetupStatus,
   buildProjectImage,
 } from "../lib/docker"
 import { getProjectRow, ensureDeployKey } from "./projects"
 import { resolveSecretsForSpawn } from "./secrets"
+import { serviceEnvForWorkers } from "./services"
 import { getSettings } from "./settings"
 import { readHostPrivateKey } from "../lib/ssh-keys"
 
@@ -149,6 +151,10 @@ function spawnEnv(project: Project, workerId: string): string[] {
     // it on the container too means a `code-server --install-extension` typed by
     // hand in the worker's terminal resolves against the same registry.
     ...(CODE_SERVER_EXTENSIONS_GALLERY ? [`EXTENSIONS_GALLERY=${CODE_SERVER_EXTENSIONS_GALLERY}`] : []),
+    // SPUNTO_SVC_* — the shared services reachable by DNS from this worker, so a
+    // project reads its Elasticsearch URL from the environment instead of hard-coding
+    // it. Listed before the secrets so a secret of the same name still wins.
+    ...serviceEnvForWorkers(),
     ...Object.entries(secrets).map(([k, v]) => `${k}=${v}`),
   ]
 }
@@ -304,6 +310,9 @@ export async function startWorker(id: string): Promise<Worker | undefined> {
   const w = getWorkerRow(id)
   if (!w?.containerId) return w
   await startContainer(w.containerId)
+  // Containers created before the shared network existed aren't attached to it;
+  // joining on every start makes them reach the shared services too (no-op otherwise).
+  await connectToSharedNetwork(w.containerId, [`worker-${id}`])
   db.update(workers).set({ state: "starting" }).where(eq(workers.id, id)).run()
   return { ...w, state: "starting" }
 }
