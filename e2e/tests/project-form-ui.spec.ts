@@ -55,6 +55,14 @@ test.describe("project form → stored project", () => {
     await page.getByLabel("Secret value").fill("s3cret")
     await page.getByRole("button", { name: "Add secret" }).click()
 
+    // Shared volumes are a section of Lite's own, drawn outside the package's form
+    // (its section ids are a closed union) — so the round trip has to be pinned here
+    // too. A row left blank is not a volume and must not reach the API.
+    await page.getByRole("button", { name: "Add shared volume" }).click()
+    await page.getByLabel("Shared volume 1 name").fill("pnpm-store")
+    await page.getByLabel("Shared volume 1 mount path").fill("/home/vscode/.local/share/pnpm/store")
+    await page.getByRole("button", { name: "Add shared volume" }).click()
+
     await page.getByRole("button", { name: "Create project" }).click()
     // Not just `/projects/<something>`: `/projects/new` matches that too, and the
     // assertion would pass without the form ever having been submitted.
@@ -75,6 +83,7 @@ test.describe("project form → stored project", () => {
       // Nothing to type them in, so nothing is stored.
       forwardPorts: [],
       prewarmImages: [],
+      sharedVolumes: [{ name: "pnpm-store", mountPath: "/home/vscode/.local/share/pnpm/store" }],
     })
     // The feature carries the version typed in the form; its OCI ref is resolved server-side.
     expect(stored.features).toEqual([
@@ -93,6 +102,28 @@ test.describe("project form → stored project", () => {
     // A generic git repo earns the project a deploy key.
     expect(stored.deployPublicKey).toContain("ssh-")
     expect(await (await request.get(`/api/projects/${id}/secrets`)).json()).toMatchObject([{ name: "TOKEN" }])
+  })
+
+  // The one rule the form can't be allowed to let through: a shared volume on
+  // /workspace would shadow each worker's own volume. The check lives server-side
+  // (lib/shared-volumes.ts) and the form surfaces its message — this pins that the
+  // refusal actually reaches the user instead of a project being created anyway.
+  test("a shared volume mounted inside /workspace is refused, and nothing is created", async ({ page, request }) => {
+    const name = `e2e-form-guard-${Date.now()}`
+    await page.goto("/projects/new")
+    await page.locator("#project-name").fill(name)
+    // No fold to open: the shared-volumes section sits after it, not inside it.
+    await page.getByRole("button", { name: "Add shared volume" }).click()
+    await page.getByLabel("Shared volume 1 name").fill("cache")
+    await page.getByLabel("Shared volume 1 mount path").fill("/workspace/node_modules")
+
+    await page.getByRole("button", { name: "Create project" }).click()
+    // The message lands twice — the manifest's error line and a toast.
+    await expect(page.getByText(/is inside \/workspace/).first()).toBeVisible()
+    // Still on the form, and the project was never created.
+    await expect(page).toHaveURL(/\/projects\/new$/)
+    const list = await (await request.get("/api/projects")).json()
+    expect(list.map((p: { name: string }) => p.name)).not.toContain(name)
   })
 
   test("the form fits a phone — no horizontal overflow from 320 to 768 px", async ({ page, context }) => {
