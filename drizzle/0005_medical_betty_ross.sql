@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `shared_volumes` text DEFAULT '[]' NOT NULL;

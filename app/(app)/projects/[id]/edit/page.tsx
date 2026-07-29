@@ -49,7 +49,9 @@ export default function EditProjectPage({ params }: { params: Promise<{ id: stri
             <CardTitle className="text-base text-destructive">Danger zone</CardTitle>
             <CardDescription>
               Deleting this project erases its spec, version history and secrets, and destroys every workspace it
-              spawned — containers, volumes and built images. This cannot be undone.
+              spawned — containers, volumes and built images
+              {project.sharedVolumes.length > 0 ? ", plus its shared volumes and their data" : ""}. This cannot be
+              undone.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -66,6 +68,7 @@ export default function EditProjectPage({ params }: { params: Promise<{ id: stri
         projectId={id}
         projectName={project.name}
         workerCount={workers.length}
+        sharedVolumes={project.sharedVolumes}
         onDeleted={() => {
           // Drop the dead id's cached queries so the redirect doesn't refetch it.
           qc.removeQueries({ queryKey: ["project", id] })

@@ -173,10 +173,15 @@ async function runSpawnPipeline(workerId: string, project: Project, version: num
 
     const { containerId } = await spawnContainer({
       workerId,
+      projectId: project.id,
       image,
       script,
       env,
       hasDinD: hasDinD(project),
+      // From the *current* project row, like the setup script above: declaring a
+      // shared volume and rebuilding a worker is enough to get it mounted, no
+      // version bump needed on the image.
+      sharedVolumes: project.sharedVolumes,
       labels: { "spunto.worker": "true", "spunto.workerId": workerId, "spunto.projectId": project.id },
     })
     db.update(workers).set({ containerId, state: "starting" }).where(eq(workers.id, workerId)).run()

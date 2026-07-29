@@ -7,7 +7,7 @@
 // secret *names* travel, so the import can lay out the rows to fill in.
 
 import { z } from "zod"
-import { ExtensionIdSchema, FeatureInputSchema, RepositorySchema } from "./validation"
+import { ExtensionIdSchema, FeatureInputSchema, RepositorySchema, SharedVolumesSchema } from "./validation"
 
 export const PROJECT_EXPORT_KIND = "spunto-lite/project"
 export const PROJECT_EXPORT_VERSION = 1
@@ -32,6 +32,10 @@ export const ProjectExportSchema = z.object({
     postStartCommand: z.string().nullable().optional(),
     repositories: z.array(ExportRepositorySchema).default([]),
     forwardPorts: z.array(z.number().int().min(1).max(65535)).default([]),
+    // The declaration only — a name and a mount path. Unlike a secret's value,
+    // there's nothing sensitive in it, and the volume is created on first spawn
+    // wherever the spec is imported.
+    sharedVolumes: SharedVolumesSchema.default([]),
     // Names only — values never leave the instance.
     secretNames: z.array(z.string()).default([]),
   }),

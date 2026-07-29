@@ -1,5 +1,8 @@
 import { sql } from "drizzle-orm"
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core"
+import type { SharedVolume } from "../lib/shared-volumes"
+
+export type { SharedVolume }
 
 // ─── Shared JSON-ish shapes ──────────────────────────────────────────────────
 
@@ -74,6 +77,11 @@ export type ProjectVersionConfig = {
   postStartCommand: string | null
   repositories: Repository[]
   forwardPorts: number[]
+  /**
+   * Absent on snapshots taken before shared volumes existed — read it as `?? []`,
+   * never assume the key is there.
+   */
+  sharedVolumes?: SharedVolume[]
 }
 
 // ─── Tables ──────────────────────────────────────────────────────────────────
@@ -91,6 +99,10 @@ export const projects = sqliteTable("projects", {
   postStartCommand: text("post_start_command"),
   repositories: text("repositories", { mode: "json" }).$type<Repository[]>().notNull().default(sql`'[]'`),
   forwardPorts: text("forward_ports", { mode: "json" }).$type<number[]>().notNull().default(sql`'[]'`),
+  // Volumes mounted in *every* worker of the project (on top of its private
+  // /workspace) — a dependency cache, a dataset, build artifacts. They outlive
+  // the workers and are only destroyed with the project (see lib/shared-volumes.ts).
+  sharedVolumes: text("shared_volumes", { mode: "json" }).$type<SharedVolume[]>().notNull().default(sql`'[]'`),
   // Per-project ed25519 deploy key (AES-256-GCM), generated on demand for generic git repos.
   deployKeyPrivate: text("deploy_key_private"),
   currentVersion: integer("current_version").notNull().default(1),

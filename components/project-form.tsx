@@ -13,7 +13,7 @@ import {
   type ProjectRepo,
 } from "@spunto/design-system/projects"
 import type { DevcontainerFeatureEntry, VscodeExtensionEntry } from "@spunto/design-system/devcontainer"
-import { Upload } from "lucide-react"
+import { Plus, Trash2, Upload } from "lucide-react"
 import { api } from "@/lib/api"
 import { EXTENSION_ID_HINT, isExtensionId } from "@/lib/extensions"
 import {
@@ -23,8 +23,10 @@ import {
   toProjectPayload,
   validateProjectPayload,
   withUniqueRepoIds,
+  type LiteFormValue,
   type LiteRepo,
 } from "@/lib/project-form-value"
+import { SHARED_VOLUME_NAME_HINT } from "@/lib/shared-volumes"
 import {
   PROJECT_IMPORT_HANDOFF_KEY,
   parseProjectExport,
@@ -37,6 +39,7 @@ import type {
   ExtensionLookup,
   ExtensionRegistryInfo,
   ExtensionSuggestion,
+  SharedVolume,
 } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -79,7 +82,7 @@ export function ProjectForm({ initial }: { initial?: Project }) {
   const router = useRouter()
   const editing = !!initial
 
-  const [value, setValue] = useState<ProjectFormValue>(() =>
+  const [value, setValue] = useState<LiteFormValue>(() =>
     initial ? fromProject(initial) : newProjectFormValue(),
   )
   const [saving, setSaving] = useState(false)
@@ -113,7 +116,10 @@ export function ProjectForm({ initial }: { initial?: Project }) {
    *  - a hand-typed extension id is checked — shape now, existence right after;
    *  - repo row ids are kept unique (see `withUniqueRepoIds`).
    */
-  function handleChange(next: ProjectFormValue) {
+  function handleChange(incoming: ProjectFormValue) {
+    // The package patches its value with a spread, so `sharedVolumes` — a field
+    // it knows nothing about — comes back untouched (see `LiteFormValue`).
+    let next = incoming as LiteFormValue
     const added = next.vscodeExtensions.filter((id) => !value.vscodeExtensions.includes(id))
     const malformed = added.filter((id) => !isExtensionId(id))
     if (malformed.length) {
@@ -288,6 +294,14 @@ export function ProjectForm({ initial }: { initial?: Project }) {
               onChange={(f) => handleChange({ ...value, features: f })}
             />
           ),
+          docker: (
+            <SharedVolumes
+              volumes={value.sharedVolumes}
+              // Cast: `sharedVolumes` is Lite's own field, which the package's
+              // `ProjectFormValue` doesn't declare (see `LiteFormValue`).
+              onChange={(sharedVolumes) => handleChange({ ...value, sharedVolumes } as LiteFormValue)}
+            />
+          ),
         }}
         submitLabel={editing ? "Save changes" : "Create project"}
         submitting={saving}
@@ -336,6 +350,80 @@ function RepoBranches({ repos, onChange }: { repos: ProjectRepo[]; onChange: (re
         </div>
       ))}
       <p className="text-xs text-muted-foreground">Each workspace can override it at creation.</p>
+    </div>
+  )
+}
+
+/**
+ * Volumes mounted in *every* worker of the project, on top of each worker's own
+ * `/workspace` — a pnpm store, `~/.m2`, a dataset, a build-artifact directory.
+ * Lite's project has them and the package's `ProjectFormValue` doesn't, so like
+ * `RepoBranches` above they get a block under the section the closest thing to
+ * them lives in, rather than a hand-drawn section of their own.
+ *
+ * Deliberately no client-side path guard beyond the hint: the API is the one
+ * that decides (`lib/shared-volumes.ts`), and duplicating the rule here is how
+ * the two drift apart. A rejected path comes back as the form's error line.
+ */
+function SharedVolumes({
+  volumes,
+  onChange,
+}: {
+  volumes: SharedVolume[]
+  onChange: (volumes: SharedVolume[]) => void
+}) {
+  const patch = (index: number, field: keyof SharedVolume, v: string) =>
+    onChange(volumes.map((vol, i) => (i === index ? { ...vol, [field]: v } : vol)))
+
+  return (
+    <div className="mt-4 space-y-2 border-t border-dashed border-border pt-3">
+      <Label className="text-xs text-muted-foreground">
+        Shared volumes — persistent, mounted in every workspace of this project
+      </Label>
+      {volumes.map((vol, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <Input
+            className="h-8 w-40 font-mono text-xs"
+            placeholder="pnpm-store"
+            aria-label={`Shared volume ${i + 1} name`}
+            value={vol.name}
+            onChange={(e) => patch(i, "name", e.target.value)}
+          />
+          <Input
+            className="h-8 min-w-0 flex-1 font-mono text-xs"
+            placeholder="/home/vscode/.local/share/pnpm/store"
+            aria-label={`Shared volume ${i + 1} mount path`}
+            value={vol.mountPath}
+            onChange={(e) => patch(i, "mountPath", e.target.value)}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 shrink-0 px-2 text-muted-foreground"
+            aria-label={`Remove shared volume ${i + 1}`}
+            onClick={() => onChange(volumes.filter((_, x) => x !== i))}
+          >
+            <Trash2 className="size-3.5" />
+          </Button>
+        </div>
+      ))}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-8"
+        onClick={() => onChange([...volumes, { name: "", mountPath: "" }])}
+      >
+        <Plus className="size-3.5" /> Add shared volume
+      </Button>
+      <p className="text-xs text-muted-foreground">
+        Created on first use, kept when a workspace is deleted or rebuilt, and only destroyed with the project.{" "}
+        {SHARED_VOLUME_NAME_HINT}; the mount path must sit outside <code>/workspace</code>, which is each
+        workspace&apos;s own volume. Workers write into it <span className="font-medium">concurrently and
+        unsynchronised</span> — good for caches, datasets and artifacts, not for a shared SQLite database or a
+        lockfile two workers rewrite.
+      </p>
     </div>
   )
 }

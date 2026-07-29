@@ -19,7 +19,8 @@ import {
 import { AVAILABLE_FEATURES } from "./catalogs"
 import { EXTENSION_ID_HINT, isExtensionId } from "./extensions"
 import type { ProjectExport } from "./project-export"
-import type { Project, ProjectFeature, Repository } from "./types"
+import { validateSharedVolumes } from "./shared-volumes"
+import type { Project, ProjectFeature, Repository, SharedVolume } from "./types"
 
 /** Pre-selected in the creation form, exactly as the hand-rolled form did. */
 export const DEFAULT_IMAGE = "mcr.microsoft.com/devcontainers/javascript-node:20"
@@ -44,6 +45,15 @@ export type LiteRepo = ProjectRepo & {
   storedProvider?: Repository["provider"]
 }
 
+/**
+ * The form value as Lite carries it: the package's `ProjectFormValue` plus the
+ * one field of Lite's project the package has no room for. Same trick as
+ * `LiteRepo` — `ProjectForm` patches its value with a spread, so a key it knows
+ * nothing about survives every edit and the value stays the single source of
+ * truth (import, edit, submit all read it).
+ */
+export type LiteFormValue = ProjectFormValue & { sharedVolumes: SharedVolume[] }
+
 /** The body POSTed to /api/projects and PATCHed to /api/projects/:id. */
 export type ProjectPayload = {
   name: string
@@ -57,29 +67,33 @@ export type ProjectPayload = {
   postStartCommand?: string
   repositories: Repository[]
   forwardPorts: number[]
+  sharedVolumes: SharedVolume[]
   secrets: { name: string; value: string }[]
 }
 
 /** A fresh creation form: everything empty but the default base image. */
-export function newProjectFormValue(): ProjectFormValue {
-  return toProjectFormValue({ image: DEFAULT_IMAGE })
+export function newProjectFormValue(): LiteFormValue {
+  return { ...toProjectFormValue({ image: DEFAULT_IMAGE }), sharedVolumes: [] }
 }
 
 /** An existing project, as the form edits it. */
-export function fromProject(p: Project): ProjectFormValue {
-  return toProjectFormValue({
-    name: p.name,
-    description: p.description ?? "",
-    image: p.image,
-    repositories: p.repositories.map(toFormRepo),
-    features: p.features.map(toFormFeature),
-    vscodeExtensions: p.vscodeExtensions,
-    postCreateCommand: p.postCreateCommand ?? "",
-    postStartCommand: p.postStartCommand ?? "",
-    forwardPorts: p.forwardPorts,
-    prewarmImages: p.prewarmImages,
-    dockerInDocker: p.dind,
-  })
+export function fromProject(p: Project): LiteFormValue {
+  return {
+    ...toProjectFormValue({
+      name: p.name,
+      description: p.description ?? "",
+      image: p.image,
+      repositories: p.repositories.map(toFormRepo),
+      features: p.features.map(toFormFeature),
+      vscodeExtensions: p.vscodeExtensions,
+      postCreateCommand: p.postCreateCommand ?? "",
+      postStartCommand: p.postStartCommand ?? "",
+      forwardPorts: p.forwardPorts,
+      prewarmImages: p.prewarmImages,
+      dockerInDocker: p.dind,
+    }),
+    sharedVolumes: p.sharedVolumes ?? [],
+  }
 }
 
 /**
@@ -88,20 +102,24 @@ export function fromProject(p: Project): ProjectFormValue {
  * package's `SecretList` has no "row waiting for its value" state, so they don't
  * become drafts: the form names them in its import banner instead.
  */
-export function fromExport({ project: p }: ProjectExport): ProjectFormValue {
-  return toProjectFormValue({
-    name: p.name,
-    description: p.description ?? "",
-    image: p.image,
-    repositories: p.repositories.map((r) => toFormRepo({ ...r, id: r.id ?? crypto.randomUUID() })),
-    features: p.features.map((f) => toFormFeature({ id: f.id, options: f.options })),
-    vscodeExtensions: p.vscodeExtensions,
-    postCreateCommand: p.postCreateCommand ?? "",
-    postStartCommand: p.postStartCommand ?? "",
-    forwardPorts: p.forwardPorts,
-    prewarmImages: p.prewarmImages,
-    dockerInDocker: p.dind,
-  })
+export function fromExport({ project: p }: ProjectExport): LiteFormValue {
+  return {
+    ...toProjectFormValue({
+      name: p.name,
+      description: p.description ?? "",
+      image: p.image,
+      repositories: p.repositories.map((r) => toFormRepo({ ...r, id: r.id ?? crypto.randomUUID() })),
+      features: p.features.map((f) => toFormFeature({ id: f.id, options: f.options })),
+      vscodeExtensions: p.vscodeExtensions,
+      postCreateCommand: p.postCreateCommand ?? "",
+      postStartCommand: p.postStartCommand ?? "",
+      forwardPorts: p.forwardPorts,
+      prewarmImages: p.prewarmImages,
+      dockerInDocker: p.dind,
+    }),
+    // A spec exported before shared volumes existed simply doesn't have the key.
+    sharedVolumes: p.sharedVolumes ?? [],
+  }
 }
 
 function toFormRepo(r: Repository): LiteRepo {
@@ -140,6 +158,7 @@ function toFormFeature(f: Pick<ProjectFeature, "id" | "options"> & { ociRef?: st
  */
 export function toProjectPayload(value: ProjectFormValue): ProjectPayload {
   const repos = value.repositories as LiteRepo[]
+  const sharedVolumes = (value as LiteFormValue).sharedVolumes ?? []
   return {
     name: value.name.trim(),
     description: value.description.trim() || undefined,
@@ -172,6 +191,10 @@ export function toProjectPayload(value: ProjectFormValue): ProjectPayload {
     // The package's port field drops anything unparseable but keeps large
     // numbers; the API caps at 65535, so the bound is enforced here too.
     forwardPorts: value.forwardPorts.filter((n) => Number.isInteger(n) && n > 0 && n < 65536),
+    // A row the user added and hasn't filled in isn't a volume yet.
+    sharedVolumes: sharedVolumes
+      .filter((v) => v.name.trim() || v.mountPath.trim())
+      .map((v) => ({ name: v.name.trim(), mountPath: v.mountPath.trim() })),
     secrets: value.secrets.filter((s) => s.name && s.value).map(({ name, value: v }) => ({ name, value: v })),
   }
 }
@@ -185,7 +208,7 @@ export function validateProjectPayload(p: ProjectPayload): string | null {
   if (!p.image) return "Base image is required"
   const bad = p.vscodeExtensions.filter((id) => !isExtensionId(id))
   if (bad.length) return `Invalid extension id: ${bad.join(", ")}. ${EXTENSION_ID_HINT}`
-  return null
+  return validateSharedVolumes(p.sharedVolumes)
 }
 
 /**

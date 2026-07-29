@@ -1,6 +1,7 @@
 import { db } from "../db/index"
 import { workers, projects, services } from "../db/schema"
 import { getContainerState, getContainerStats, getSystemDf } from "../lib/docker"
+import { parseSharedVolumeName, sharedVolumeName } from "../lib/shared-volumes"
 import { serviceAddress } from "./services"
 
 // Aggregated, cross-project view of everything the control plane has running on
@@ -43,12 +44,20 @@ export type ServiceResource = {
 export type VolumeResource = {
   name: string
   sizeBytes: number
-  kind: "workspace" | "docker" | "containerd" | "service" | "other"
+  /**
+   * `shared` is a project-level volume mounted in every worker of that project;
+   * `service` belongs to a shared service, not to any project.
+   */
+  kind: "workspace" | "docker" | "containerd" | "shared" | "service" | "other"
   workerId: string | null
   workerName: string | null
+  projectId: string | null
   projectName: string | null
   /** Set on a `service` volume: which shared service owns it. */
   serviceSlug: string | null
+  /** `shared` volumes only: where it lands in each worker, and how many mount it. */
+  mountPath: string | null
+  mountedBy: number | null
   inUse: boolean
 }
 
@@ -152,37 +161,63 @@ export async function getResourcesOverview(): Promise<ResourcesOverview> {
   const workerById = new Map(live.map((w) => [w.id, w]))
   const serviceById = new Map(serviceRows.map((s) => [s.id, s]))
 
+  // Declared shared volumes, keyed by the Docker name they get. A `mp-proj-…`
+  // volume that isn't in here is one whose declaration (or whose project) is
+  // gone — it stays listed, so its disk usage never becomes invisible.
+  const declaredShared = new Map(
+    projectRows.flatMap((p) =>
+      (p.sharedVolumes ?? []).map((v) => [sharedVolumeName(p.id, v.name), { project: p, mountPath: v.mountPath }] as const),
+    ),
+  )
+
   const volumes: VolumeResource[] = df.volumes
-    .filter((v) => v.name.startsWith("mp-worker-") || v.name.startsWith("mp-svc-"))
+    .filter((v) => ["mp-worker-", "mp-proj-", "mp-svc-"].some((p) => v.name.startsWith(p)))
     .map((v): VolumeResource => {
+      const base = {
+        name: v.name,
+        sizeBytes: v.sizeBytes,
+        inUse: v.refCount > 0,
+        workerId: null,
+        workerName: null,
+        projectId: null,
+        projectName: null,
+        serviceSlug: null,
+        mountPath: null,
+        mountedBy: null,
+      }
+
       const svc = v.name.match(SERVICE_VOLUME_RE)
       if (svc) {
         // A shared service's data volume: no worker, no project — it belongs to the
         // service, and outlives every environment that used it.
+        return { ...base, kind: "service", serviceSlug: serviceById.get(svc[1])?.slug ?? null }
+      }
+
+      if (v.name.startsWith("mp-proj-")) {
+        const declared = declaredShared.get(v.name)
+        const projectId = declared?.project.id ?? parseSharedVolumeName(v.name)?.projectId ?? null
         return {
-          name: v.name,
-          sizeBytes: v.sizeBytes,
-          kind: "service",
-          workerId: null,
-          workerName: null,
-          projectName: null,
-          serviceSlug: serviceById.get(svc[1])?.slug ?? null,
-          inUse: v.refCount > 0,
+          ...base,
+          kind: "shared",
+          projectId,
+          projectName: declared?.project.name ?? (projectId ? (projectById.get(projectId)?.name ?? null) : null),
+          mountPath: declared?.mountPath ?? null,
+          // The daemon's own count of containers referencing the volume — i.e.
+          // exactly how many workers mount it, running or stopped.
+          mountedBy: v.refCount >= 0 ? v.refCount : null,
         }
       }
+
       const m = v.name.match(WORKER_VOLUME_RE)
       const workerId = m?.[1] ?? null
-      const kind = (m?.[2] ?? "other") as VolumeResource["kind"]
       const worker = workerId ? workerById.get(workerId) : undefined
       return {
-        name: v.name,
-        sizeBytes: v.sizeBytes,
-        kind,
+        ...base,
+        kind: (m?.[2] ?? "other") as VolumeResource["kind"],
         workerId,
         workerName: worker?.name ?? null,
+        projectId: worker?.projectId ?? null,
         projectName: worker?.projectName ?? null,
-        serviceSlug: null,
-        inUse: v.refCount > 0,
       }
     })
     .sort((a, b) => b.sizeBytes - a.sizeBytes)

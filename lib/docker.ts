@@ -3,6 +3,7 @@ import { existsSync } from "node:fs"
 import { hostname } from "node:os"
 import { getGcpRegistryKey, normalizeGcpKey } from "../services/settings"
 import { gcpAccessTokenFromCredential } from "./gcp-token"
+import { sharedVolumeBinds, type SharedVolume } from "./shared-volumes"
 
 // Docker operations, ported/simplified from apps/agent/src/docker.ts. The control
 // plane talks straight to the local daemon — no remote agent, no OTLP telemetry
@@ -147,10 +148,13 @@ export async function connectSelfToNetwork(networkName: string): Promise<void> {
 
 export type SpawnParams = {
   workerId: string
+  projectId: string
   image: string
   script: string
   env: string[]
   hasDinD: boolean
+  /** Project-level volumes mounted in every worker, alongside its own /workspace. */
+  sharedVolumes: SharedVolume[]
   labels: Record<string, string>
 }
 
@@ -166,6 +170,13 @@ export async function ensureImage(image: string): Promise<void> {
       docker.modem.followProgress(stream, (e) => (e ? reject(e) : resolve()))
     })
   })
+}
+
+/** Creates a named volume unless the daemon already has it. */
+async function ensureVolume(name: string): Promise<void> {
+  const existing = await docker.listVolumes({ filters: { name: [name] } })
+  if (existing.Volumes?.find((v) => v.Name === name)) return
+  await docker.createVolume({ Name: name })
 }
 
 export async function spawnContainer(params: SpawnParams): Promise<{ containerId: string; isRestart: boolean }> {
@@ -189,17 +200,14 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
   }
 
   const workspaceVolume = `mp-worker-${params.workerId}-workspace`
-  const existingVolumes = await docker.listVolumes({ filters: { name: [workspaceVolume] } })
-  if (!existingVolumes.Volumes?.find((v) => v.Name === workspaceVolume)) {
-    await docker.createVolume({ Name: workspaceVolume })
-  }
+  await ensureVolume(workspaceVolume)
   if (params.hasDinD) {
-    for (const suffix of ["docker", "containerd"]) {
-      const vol = `mp-worker-${params.workerId}-${suffix}`
-      const ex = await docker.listVolumes({ filters: { name: [vol] } })
-      if (!ex.Volumes?.find((v) => v.Name === vol)) await docker.createVolume({ Name: vol })
-    }
+    for (const suffix of ["docker", "containerd"]) await ensureVolume(`mp-worker-${params.workerId}-${suffix}`)
   }
+  // Project volumes are created on demand by the first worker that needs them,
+  // and reused (never recreated) by every later one — that's the whole point.
+  const sharedBinds = sharedVolumeBinds(params.projectId, params.sharedVolumes)
+  for (const bind of sharedBinds) await ensureVolume(bind.split(":")[0])
 
   // Pull base image if missing.
   await ensureImage(params.image)
@@ -222,6 +230,9 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
         ...(params.hasDinD
           ? [`mp-worker-${params.workerId}-docker:/var/lib/docker`, `mp-worker-${params.workerId}-containerd:/var/lib/containerd`]
           : []),
+        // Last, but they can't shadow anything above: a mount path inside
+        // /workspace (or on a DinD path) is rejected at validation time.
+        ...sharedBinds,
       ],
     },
   })
@@ -287,11 +298,7 @@ export async function spawnServiceContainer(params: SpawnServiceParams): Promise
     return existingId
   }
 
-  for (const vol of params.volumes) {
-    const real = serviceVolumeName(params.serviceId, vol.name)
-    const ex = await docker.listVolumes({ filters: { name: [real] } })
-    if (!ex.Volumes?.find((v) => v.Name === real)) await docker.createVolume({ Name: real })
-  }
+  for (const vol of params.volumes) await ensureVolume(serviceVolumeName(params.serviceId, vol.name))
 
   await ensureImage(params.image)
   await ensureSharedNetwork()
@@ -412,7 +419,12 @@ export async function removeContainerOnly(workerId: string, containerId: string 
   } catch {}
 }
 
-/** Removes the container + network AND all associated volumes. Used by delete. */
+/**
+ * Removes the container + network AND all volumes the worker owns. Used by delete.
+ * Strictly the three `mp-worker-<id>-*` ones: a project's shared volumes are
+ * `mp-proj-<projectId>-*` and outlive every worker that mounted them — deleting
+ * a worker must never take the team's dependency cache with it.
+ */
 export async function removeWorker(workerId: string, containerId: string | null): Promise<void> {
   await removeContainerOnly(workerId, containerId)
   for (const suffix of ["workspace", "docker", "containerd"]) {
@@ -432,6 +444,30 @@ export async function removeProjectImages(projectId: string): Promise<void> {
     for (const img of images) {
       try {
         await docker.getImage(img.Id).remove({ force: true })
+      } catch {}
+    }
+  } catch {}
+}
+
+/**
+ * Removes every shared volume of a project (`mp-proj-<projectId>-<name>`), data
+ * included. Only ever called from the project deletion path, behind an explicit
+ * confirmation — nothing else in the app destroys them, not even deleting the
+ * last worker that mounted them. Best effort: a volume still attached to a
+ * container the daemon couldn't remove is left behind rather than blocking.
+ *
+ * The daemon's `name` filter is a substring match, so the prefix is re-checked
+ * here — otherwise a project id that happens to be a substring of another's
+ * would take its volumes down too.
+ */
+export async function removeProjectVolumes(projectId: string): Promise<void> {
+  const prefix = `mp-proj-${projectId}-`
+  try {
+    const { Volumes } = await docker.listVolumes({ filters: { name: [prefix] } })
+    for (const vol of Volumes ?? []) {
+      if (!vol.Name.startsWith(prefix)) continue
+      try {
+        await docker.getVolume(vol.Name).remove({ force: true })
       } catch {}
     }
   } catch {}

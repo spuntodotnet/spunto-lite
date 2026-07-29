@@ -1,5 +1,12 @@
 import { z } from "zod"
 import { EXTENSION_ID_HINT, EXTENSION_ID_RE } from "./extensions"
+import {
+  SHARED_VOLUME_NAME_HINT,
+  SHARED_VOLUME_NAME_RE,
+  normalizeMountPath,
+  validateMountPath,
+  validateSharedVolumes,
+} from "./shared-volumes"
 
 /**
  * A VS Code extension id, checked for shape before it ever reaches the build
@@ -20,6 +27,29 @@ export const RepositorySchema = z.object({
   cloneUrl: z.string().optional(),
   // Default branch to clone; absent/empty = the remote's default (HEAD).
   branch: z.string().optional(),
+})
+
+/**
+ * A volume mounted in every worker of a project. The mount path is normalized
+ * (trailing slashes dropped) *before* the guard runs, so `/workspace/` can't
+ * sneak past the check that keeps a shared volume from shadowing the worker's
+ * own `/workspace` — see `lib/shared-volumes.ts` for the full rule set.
+ */
+export const SharedVolumeSchema = z.object({
+  name: z.string().regex(SHARED_VOLUME_NAME_RE, SHARED_VOLUME_NAME_HINT).max(40),
+  mountPath: z
+    .string()
+    .transform(normalizeMountPath)
+    .superRefine((path, ctx) => {
+      const error = validateMountPath(path)
+      if (error) ctx.addIssue({ code: "custom", message: error })
+    }),
+})
+
+/** The whole list — same per-volume rules, plus no duplicate name and no shared mount path. */
+export const SharedVolumesSchema = z.array(SharedVolumeSchema).superRefine((volumes, ctx) => {
+  const error = validateSharedVolumes(volumes)
+  if (error) ctx.addIssue({ code: "custom", message: error })
 })
 
 export const SecretInputSchema = z.object({
@@ -50,6 +80,7 @@ export const CreateProjectSchema = z.object({
   postStartCommand: z.string().optional(),
   repositories: z.array(RepositorySchema).default([]),
   forwardPorts: z.array(z.number().int().min(1).max(65535)).default([]),
+  sharedVolumes: SharedVolumesSchema.default([]),
   secrets: z.array(SecretInputSchema).optional(),
 })
 
@@ -74,6 +105,7 @@ export const UpdateProjectSchema = z.object({
   postStartCommand: z.string().optional(),
   repositories: z.array(RepositorySchema).optional(),
   forwardPorts: z.array(z.number().int().min(1).max(65535)).optional(),
+  sharedVolumes: SharedVolumesSchema.optional(),
   secrets: z.array(SecretInputSchema).optional(),
 })
 
