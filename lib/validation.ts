@@ -77,6 +77,79 @@ export const UpdateProjectSchema = z.object({
   secrets: z.array(SecretInputSchema).optional(),
 })
 
+// ─── Shared services ──────────────────────────────────────────────────────────
+
+/**
+ * A service's slug doubles as a **DNS label** (workers reach it at `http://<slug>:…`)
+ * and as a reverse-proxy subdomain prefix (`svc-<slug>.localhost`), so it's held to
+ * what both accept: lowercase alphanumerics and inner hyphens.
+ */
+export const ServiceSlugSchema = z
+  .string()
+  .min(1)
+  .max(40)
+  .regex(/^[a-z][a-z0-9]*(-[a-z0-9]+)*$/, "Slug must be a DNS label: lowercase letters, digits and inner hyphens")
+
+/** Either a literal value or a reference to a global secret — never both, never neither. */
+export const ServiceEnvVarSchema = z
+  .object({
+    name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_.]*$/, "Invalid environment variable name"),
+    value: z.string().optional(),
+    secretName: z.string().optional(),
+  })
+  .refine((v) => (v.value === undefined) !== (v.secretName === undefined), {
+    message: "Provide either a value or a secretName",
+  })
+
+export const ServicePortSchema = z.object({
+  container: z.number().int().min(1).max(65535),
+  /** Absent/null = reachable over the shared network only, not published on the host. */
+  host: z.number().int().min(1).max(65535).nullable().optional(),
+})
+
+export const ServiceVolumeSchema = z.object({
+  // Suffix of the real volume `mp-svc-<serviceId>-<name>`, so it has to be a safe
+  // Docker volume-name fragment.
+  name: z.string().regex(/^[a-z0-9][a-z0-9_.-]*$/, "Volume name must be lowercase alphanumeric"),
+  mountPath: z.string().startsWith("/", "Mount path must be absolute"),
+})
+
+export const ServiceRestartPolicySchema = z.enum(["no", "unless-stopped", "always", "on-failure"])
+
+export const CreateServiceSchema = z.object({
+  slug: ServiceSlugSchema,
+  description: z.string().optional(),
+  image: z.string().min(1),
+  command: z.string().nullable().optional(),
+  env: z.array(ServiceEnvVarSchema).default([]),
+  ports: z.array(ServicePortSchema).default([]),
+  volumes: z.array(ServiceVolumeSchema).default([]),
+  httpPort: z.number().int().min(1).max(65535).nullable().optional(),
+  restartPolicy: ServiceRestartPolicySchema.default("unless-stopped"),
+  /** Start the container right away (the default). False creates the spec only. */
+  start: z.boolean().default(true),
+})
+
+/**
+ * PATCH shape — plain-optional throughout, "absent" meaning "leave unchanged".
+ * Same reasoning as `UpdateProjectSchema`: `.partial()` would keep the `.default([])`
+ * and silently wipe env/ports/volumes on a PATCH that never mentioned them.
+ */
+export const UpdateServiceSchema = z.object({
+  slug: ServiceSlugSchema.optional(),
+  description: z.string().nullable().optional(),
+  image: z.string().min(1).optional(),
+  command: z.string().nullable().optional(),
+  env: z.array(ServiceEnvVarSchema).optional(),
+  ports: z.array(ServicePortSchema).optional(),
+  volumes: z.array(ServiceVolumeSchema).optional(),
+  httpPort: z.number().int().min(1).max(65535).nullable().optional(),
+  restartPolicy: ServiceRestartPolicySchema.optional(),
+})
+
+export type CreateServiceInput = z.infer<typeof CreateServiceSchema>
+export type UpdateServiceInput = z.infer<typeof UpdateServiceSchema>
+
 export const SettingsSchema = z.object({
   gitUserName: z.string().nullable().optional(),
   gitUserEmail: z.string().nullable().optional(),

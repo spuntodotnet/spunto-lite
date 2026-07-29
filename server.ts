@@ -4,16 +4,20 @@ import type { Duplex } from "node:stream"
 import next from "next"
 import { PORT, BASE_DOMAIN } from "./lib/env"
 import { runMigrations } from "./db/index"
-import { handleWorkerRequest, handleWorkerUpgrade, parseWorkerHost } from "./server/worker-proxy"
+import { handleProxyRequest, handleProxyUpgrade, parseProxyHost } from "./server/worker-proxy"
 import { handleTerminalUpgrade } from "./server/terminal-ws"
 
 const dev = process.env.NODE_ENV !== "production"
 const app = next({ dev })
 const handle = app.getRequestHandler()
 
-/** True for hostnames like `worker-<slug>.localhost` / `worker-<slug>-3000.localhost`. */
-function isWorkerHost(host: string | undefined): boolean {
-  return parseWorkerHost(host) !== null
+/**
+ * True for the hostnames the reverse proxy owns: `worker-<slug>.localhost`,
+ * `worker-<slug>-3000.localhost`, and `svc-<slug>[-<port>].localhost` for a shared
+ * service. Everything else is the app itself.
+ */
+function isProxyHost(host: string | undefined): boolean {
+  return parseProxyHost(host) !== null
 }
 
 async function main() {
@@ -22,8 +26,8 @@ async function main() {
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const host = req.headers.host?.split(":")[0]
-    if (isWorkerHost(host)) {
-      handleWorkerRequest(req, res).catch((err) => {
+    if (isProxyHost(host)) {
+      handleProxyRequest(req, res).catch((err) => {
         console.error("[proxy] error", err)
         if (!res.headersSent) res.writeHead(502)
         res.end("Bad gateway")
@@ -38,14 +42,14 @@ async function main() {
     const url = req.url || "/"
 
     // Our own terminal WebSocket (served on the app host).
-    if (!isWorkerHost(host) && url.startsWith("/api/workers/") && url.includes("/terminal")) {
+    if (!isProxyHost(host) && url.startsWith("/api/workers/") && url.includes("/terminal")) {
       handleTerminalUpgrade(req, socket, head)
       return
     }
 
-    // code-server (and its WebSockets) behind a worker subdomain.
-    if (isWorkerHost(host)) {
-      handleWorkerUpgrade(req, socket, head).catch((err) => {
+    // code-server (and its WebSockets) behind a worker or service subdomain.
+    if (isProxyHost(host)) {
+      handleProxyUpgrade(req, socket, head).catch((err) => {
         console.error("[proxy] upgrade error", err)
         socket.destroy()
       })
@@ -57,7 +61,7 @@ async function main() {
   })
 
   server.listen(PORT, () => {
-    console.log(`▲ spunto-lite ready on http://localhost:${PORT}  (workers: *.${BASE_DOMAIN})`)
+    console.log(`▲ spunto-lite ready on http://localhost:${PORT}  (workers + services: *.${BASE_DOMAIN})`)
   })
 }
 

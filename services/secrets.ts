@@ -54,6 +54,16 @@ export function deleteUserSecret(id: string) {
 }
 
 /**
+ * Decrypted value of a global secret, by name. The one read path for a *reference*
+ * to a secret (a shared service's `secretName` env var) rather than a bulk spawn
+ * injection. Null when no secret carries that name.
+ */
+export function getUserSecretValue(name: string): string | null {
+  const row = db.select().from(userSecrets).where(eq(userSecrets.name, name)).get()
+  return row ? decrypt(row.encryptedValue) : null
+}
+
+/**
  * Merges secrets for a worker spawn, in precedence order (last wins):
  *   global < project.
  * Returns a plain { NAME: value } map of decrypted values.

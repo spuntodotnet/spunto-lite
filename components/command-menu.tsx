@@ -29,12 +29,13 @@ import {
   Moon,
   Plus,
   Rocket,
+  Server,
   Settings,
   Sun,
 } from "lucide-react"
 import { api } from "@/lib/api"
 import type { SearchHit, SearchIndex, SearchKind } from "@/lib/types"
-import { workerBaseUrl } from "@/lib/worker-url"
+import { serviceBaseUrl, workerBaseUrl } from "@/lib/worker-url"
 
 // The app's ⌘K: the design-system `CommandPalette` (input + groups + items, all
 // keyboard behaviour included) fed by `/api/search`. Everything domain-specific
@@ -63,12 +64,13 @@ const KIND_GROUPS: { kind: SearchKind; heading: string; icon: ReactNode }[] = [
 /** Static destinations — the sidebar's nav, reachable without leaving the keyboard. */
 const PAGES: { href: string; label: string; icon: ReactNode; keywords: string[] }[] = [
   { href: "/projects", label: "Projects", icon: <FolderGit2 />, keywords: ["dashboard", "home"] },
+  { href: "/services", label: "Services", icon: <Server />, keywords: ["shared", "postgres", "redis", "elasticsearch", "minio", "dependencies"] },
   { href: "/resources", label: "Resources", icon: <Activity />, keywords: ["containers", "volumes", "images", "cpu", "memory"] },
   { href: "/secrets", label: "Global secrets", icon: <KeyRound />, keywords: ["env", "variables"] },
   { href: "/settings", label: "Settings", icon: <Settings />, keywords: ["git", "ssh", "dotfiles", "registry"] },
 ]
 
-/** One search hit. `service` hits open the worker's own host; everything else is an in-app route. */
+/** One search hit. Proxied targets open their own host; everything else is an in-app route. */
 function HitItem({ hit, icon }: { hit: SearchHit; icon: ReactNode }) {
   const shared = {
     value: hit.id,
@@ -79,18 +81,13 @@ function HitItem({ hit, icon }: { hit: SearchHit; icon: ReactNode }) {
     icon,
   }
 
-  // A worker's code-server / forwarded port lives on `worker-<id>.<host>`, a URL
-  // only the browser can build — so it's a click that opens a tab, not a <Link>.
+  // A worker's code-server / forwarded port lives on `worker-<id>.<host>`, a shared
+  // service on `svc-<slug>.<host>` — URLs only the browser can build, so it's a click
+  // that opens a tab, not a <Link>.
   if (hit.target) {
-    const { workerId, port } = hit.target
-    return (
-      <CommandPaletteItem
-        {...shared}
-        onSelect={() =>
-          window.open(workerBaseUrl(workerId, port !== undefined ? { port } : {}), "_blank", "noopener,noreferrer")
-        }
-      />
-    )
+    const t = hit.target
+    const url = "serviceSlug" in t ? serviceBaseUrl(t.serviceSlug, t.port) : workerBaseUrl(t.workerId, t.port !== undefined ? { port: t.port } : {})
+    return <CommandPaletteItem {...shared} onSelect={() => window.open(url, "_blank", "noopener,noreferrer")} />
   }
   return <CommandPaletteItem {...shared} href={hit.href} render={LINK_RENDER} />
 }

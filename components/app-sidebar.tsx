@@ -2,11 +2,14 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Flame, FolderGit2, Settings, KeyRound, Activity } from "lucide-react"
+import { Flame, FolderGit2, Server, Settings, KeyRound, Activity } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const NAV = [
   { href: "/projects", label: "Projects", icon: FolderGit2 },
+  // Shared services: long-lived dependencies (Postgres, Elasticsearch…) mutualised
+  // across every project's workers — a sibling of Projects, not a sub-page of one.
+  { href: "/services", label: "Services", icon: Server },
   { href: "/resources", label: "Resources", icon: Activity },
   { href: "/secrets", label: "Global secrets", icon: KeyRound },
   { href: "/settings", label: "Settings", icon: Settings },

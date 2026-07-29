@@ -1,12 +1,13 @@
 import { db } from "../db/index"
-import { workers, projects } from "../db/schema"
+import { workers, projects, services } from "../db/schema"
 import { getContainerState, getContainerStats, getSystemDf } from "../lib/docker"
+import { serviceAddress } from "./services"
 
 // Aggregated, cross-project view of everything the control plane has running on
-// the local Docker daemon: worker containers (with live CPU/memory), the named
-// volumes they own, and the per-project images that were built for them. Powers
-// the "Resources" page — the one place to see what's switched on without opening
-// each project.
+// the local Docker daemon: worker containers and shared-service containers (both
+// with live CPU/memory), the named volumes they own, and the per-project images
+// that were built for them. Powers the "Resources" page — the one place to see
+// what's switched on without opening each project.
 
 export type ContainerStats = {
   cpuPercent: number
@@ -27,13 +28,27 @@ export type WorkerResource = {
   stats: ContainerStats | null
 }
 
+export type ServiceResource = {
+  id: string
+  slug: string
+  image: string
+  state: string
+  running: boolean
+  /** In-cluster address workers use, e.g. `http://elasticsearch:9200`. */
+  address: string
+  createdAt: string
+  stats: ContainerStats | null
+}
+
 export type VolumeResource = {
   name: string
   sizeBytes: number
-  kind: "workspace" | "docker" | "containerd" | "other"
+  kind: "workspace" | "docker" | "containerd" | "service" | "other"
   workerId: string | null
   workerName: string | null
   projectName: string | null
+  /** Set on a `service` volume: which shared service owns it. */
+  serviceSlug: string | null
   inUse: boolean
 }
 
@@ -50,6 +65,8 @@ export type ResourcesOverview = {
   totals: {
     workersTotal: number
     workersRunning: number
+    servicesTotal: number
+    servicesRunning: number
     cpuPercent: number
     memUsageMb: number
     volumesCount: number
@@ -58,12 +75,16 @@ export type ResourcesOverview = {
     imagesSizeBytes: number
   }
   workers: WorkerResource[]
+  services: ServiceResource[]
   volumes: VolumeResource[]
   images: ImageResource[]
 }
 
 // mp-worker-<workerId>-<workspace|docker|containerd>
 const WORKER_VOLUME_RE = /^mp-worker-(.+)-(workspace|docker|containerd)$/
+// mp-svc-<serviceId>-<name> — the service id is 12 lowercase alphanumerics (lib/id.ts),
+// so the split is unambiguous even for a volume name containing hyphens.
+const SERVICE_VOLUME_RE = /^mp-svc-([a-z0-9]{12})-(.+)$/
 // mp-proj-<projectId>:v<n>
 const PROJECT_IMAGE_RE = /^mp-proj-(.+):v(\d+)$/
 
@@ -76,9 +97,10 @@ const PROJECT_IMAGE_RE = /^mp-proj-(.+):v(\d+)$/
 export async function getResourcesOverview(): Promise<ResourcesOverview> {
   const workerRows = db.select().from(workers).all()
   const projectRows = db.select().from(projects).all()
+  const serviceRows = db.select().from(services).all()
   const projectById = new Map(projectRows.map((p) => [p.id, p]))
 
-  const [live, df] = await Promise.all([
+  const [live, liveServices, df] = await Promise.all([
     Promise.all(
       workerRows.map(async (w): Promise<WorkerResource> => {
         const project = projectById.get(w.projectId)
@@ -105,14 +127,49 @@ export async function getResourcesOverview(): Promise<ResourcesOverview> {
         return { ...base, state, running, stats }
       }),
     ),
+    Promise.all(
+      serviceRows.map(async (s): Promise<ServiceResource> => {
+        const base = {
+          id: s.id,
+          slug: s.slug,
+          image: s.image,
+          address: serviceAddress(s),
+          createdAt: (s.createdAt instanceof Date ? s.createdAt : new Date(s.createdAt)).toISOString(),
+        }
+        if (!s.containerId) return { ...base, state: s.state, running: false, stats: null }
+        const cState = await getContainerState(s.containerId).catch(() => "error" as const)
+        const running = cState === "running"
+        let state = s.state
+        if (cState === "stopped" || cState === "not_found") state = s.state === "error" ? "error" : "stopped"
+        else if (running && s.state !== "ready") state = "ready"
+        const stats = running ? await getContainerStats(s.containerId).catch(() => null) : null
+        return { ...base, state, running, stats }
+      }),
+    ),
     getSystemDf().catch(() => ({ volumes: [], images: [] })),
   ])
 
   const workerById = new Map(live.map((w) => [w.id, w]))
+  const serviceById = new Map(serviceRows.map((s) => [s.id, s]))
 
   const volumes: VolumeResource[] = df.volumes
-    .filter((v) => v.name.startsWith("mp-worker-"))
-    .map((v) => {
+    .filter((v) => v.name.startsWith("mp-worker-") || v.name.startsWith("mp-svc-"))
+    .map((v): VolumeResource => {
+      const svc = v.name.match(SERVICE_VOLUME_RE)
+      if (svc) {
+        // A shared service's data volume: no worker, no project — it belongs to the
+        // service, and outlives every environment that used it.
+        return {
+          name: v.name,
+          sizeBytes: v.sizeBytes,
+          kind: "service",
+          workerId: null,
+          workerName: null,
+          projectName: null,
+          serviceSlug: serviceById.get(svc[1])?.slug ?? null,
+          inUse: v.refCount > 0,
+        }
+      }
       const m = v.name.match(WORKER_VOLUME_RE)
       const workerId = m?.[1] ?? null
       const kind = (m?.[2] ?? "other") as VolumeResource["kind"]
@@ -124,6 +181,7 @@ export async function getResourcesOverview(): Promise<ResourcesOverview> {
         workerId,
         workerName: worker?.name ?? null,
         projectName: worker?.projectName ?? null,
+        serviceSlug: null,
         inUse: v.refCount > 0,
       }
     })
@@ -149,20 +207,28 @@ export async function getResourcesOverview(): Promise<ResourcesOverview> {
     .sort((a, b) => b.sizeBytes - a.sizeBytes)
 
   const running = live.filter((w) => w.running)
+  const runningServices = liveServices.filter((s) => s.running)
   const knownSize = (n: number) => (n >= 0 ? n : 0)
+  // CPU/memory are summed over *every* running container the control plane owns:
+  // a shared Elasticsearch is often the heaviest thing on the machine, so leaving
+  // it out of the totals would make the dashboard lie.
+  const busy = [...running, ...runningServices]
 
   return {
     totals: {
       workersTotal: live.length,
       workersRunning: running.length,
-      cpuPercent: Math.round(running.reduce((s, w) => s + (w.stats?.cpuPercent ?? 0), 0) * 100) / 100,
-      memUsageMb: Math.round(running.reduce((s, w) => s + (w.stats?.memUsageMb ?? 0), 0) * 100) / 100,
+      servicesTotal: liveServices.length,
+      servicesRunning: runningServices.length,
+      cpuPercent: Math.round(busy.reduce((s, c) => s + (c.stats?.cpuPercent ?? 0), 0) * 100) / 100,
+      memUsageMb: Math.round(busy.reduce((s, c) => s + (c.stats?.memUsageMb ?? 0), 0) * 100) / 100,
       volumesCount: volumes.length,
       volumesSizeBytes: volumes.reduce((s, v) => s + knownSize(v.sizeBytes), 0),
       imagesCount: images.length,
       imagesSizeBytes: images.reduce((s, i) => s + knownSize(i.sizeBytes), 0),
     },
     workers: live.sort((a, b) => Number(b.running) - Number(a.running) || a.name.localeCompare(b.name)),
+    services: liveServices.sort((a, b) => Number(b.running) - Number(a.running) || a.slug.localeCompare(b.slug)),
     volumes,
     images,
   }

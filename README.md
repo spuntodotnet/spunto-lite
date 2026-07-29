@@ -29,8 +29,9 @@ docker run -d --name spunto-lite -p 80:80 \
 
 Then open **http://localhost**. Workers appear at
 `http://worker-<id>.localhost` (VS Code) and
-`http://worker-<id>-<port>.localhost` (forwarded ports). `*.localhost` resolves
-to `127.0.0.1` automatically in Chrome/Edge/Firefox.
+`http://worker-<id>-<port>.localhost` (forwarded ports); shared services at
+`http://svc-<slug>.localhost`. `*.localhost` resolves to `127.0.0.1`
+automatically in Chrome/Edge/Firefox.
 
 ## How it works
 
@@ -41,6 +42,20 @@ to `127.0.0.1` automatically in Chrome/Edge/Firefox.
   host daemon.
 - **SQLite** (via Drizzle) for projects/workers/secrets, in a Docker volume.
 - **`~/.ssh` mounted read-only** and injected into each worker for git identity.
+- **Shared services** — the local take on Spunto's *Ship* pillar. Declare a
+  long-lived dependency once (Postgres, Elasticsearch, MinIO… image + env + ports
+  + persistent volumes, presets included) under **Services**, and **every worker of
+  every project reaches it by DNS at its slug**: one instance instead of one per
+  project. Each service container joins a shared bridge `mp-shared-net` under its
+  slug, every worker joins it at spawn, so `curl http://elasticsearch:9200` works
+  from any workspace. Its address is also injected at spawn as
+  `SPUNTO_SVC_<SLUG>` (plus `_HOST`/`_PORT`) so nothing hard-codes an URL, and a
+  service with an HTTP port is browsable at `http://svc-<slug>.localhost` through
+  the same reverse proxy as the workers — no host port to publish. Env vars can
+  reference an encrypted **global secret** by name instead of holding a literal
+  value. Lifecycle is its own (start/stop/restart/logs, live CPU/RAM): a service
+  outlives the worker, and the project, that needed it. Details and the
+  network-design trade-off: [`docs/shared-services.md`](docs/shared-services.md).
 - **Projects are portable**: *Export* on a project downloads its spec as JSON
   (`GET /api/projects/:id/export`), *Import* on the dashboard (or in the
   new-project form) pre-fills the creation form from such a file. Secret
@@ -64,8 +79,9 @@ to `127.0.0.1` automatically in Chrome/Edge/Firefox.
   you point this at, and under which terms, is yours to decide.
 - **⌘K search** (Ctrl+K on non-Apple): the header palette
   (`CommandPalette` from `@spunto/design-system`) jumps to projects, workers, the
-  services a worker exposes (code-server + forwarded ports), image builds, secret
-  *names* and project templates — plus the nav and a couple of actions. It pulls
+  shared services *and* the ones a worker exposes (code-server + forwarded ports),
+  image builds, secret *names* and project templates — plus the nav and a couple of
+  actions. It pulls
   the whole index from `GET /api/search` when it opens (SQLite only, no Docker
   round-trip, so it's instant) and filters in the browser, accent- and
   case-insensitively.
