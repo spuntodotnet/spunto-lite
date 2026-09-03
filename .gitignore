@@ -7,3 +7,6 @@ data
 .env.local
 next-env.d.ts
 .DS_Store
+
+# mkcert local wildcard cert (généré par local-https/generate-certs.sh)
+local-https/certs/

@@ -33,6 +33,12 @@ Then open **http://localhost**. Workers appear at
 `http://svc-<slug>.localhost`. `*.localhost` resolves to `127.0.0.1`
 automatically in Chrome/Edge/Firefox.
 
+That works from *your* browser. From a container — `browser-remote`, the e2e
+runner — `localhost` is the container itself, so the same stack also answers on a
+real wildcard domain (`*.local.spunto.net`) served by a bundled CoreDNS, over
+HTTPS with a local mkcert certificate. See
+[`docs/local-domain.md`](docs/local-domain.md).
+
 ## How it works
 
 - **One Next.js app** (App Router) served by a small custom Node server

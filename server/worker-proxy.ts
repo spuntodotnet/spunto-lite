@@ -2,7 +2,7 @@ import http from "node:http"
 import net from "node:net"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import type { Duplex } from "node:stream"
-import { BASE_DOMAIN } from "../lib/env"
+import { BASE_DOMAINS } from "../lib/env"
 import {
   SHARED_NETWORK_NAME,
   connectSelfToNetwork,
@@ -29,10 +29,13 @@ export type ProxyRoute = { kind: "worker"; workerId: string; port: number } | { 
  */
 export function parseProxyHost(host?: string): ProxyRoute | null {
   if (!host) return null
-  const suffix = "." + BASE_DOMAIN
-  let h = host
-  if (h.endsWith(suffix)) h = h.slice(0, -suffix.length)
-  else return null
+  // Any configured base domain matches — a deployment answers both on `*.localhost`
+  // (host browser) and on the CoreDNS-served wildcard (containers). See lib/env.ts.
+  const lower = host.toLowerCase()
+  const suffix = BASE_DOMAINS.map((d) => "." + d).find((s) => lower.endsWith(s))
+  if (!suffix) return null
+  let h = lower.slice(0, -suffix.length)
+  if (!h) return null
 
   if (h.startsWith("svc-")) {
     const label = h.slice("svc-".length)

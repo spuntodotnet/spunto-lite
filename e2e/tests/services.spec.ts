@@ -190,8 +190,9 @@ test.describe("shared services elsewhere in the app", () => {
     // Nothing is listening, so a 502 from *our* proxy is the success condition: it proves
     // the `svc-` prefix is claimed by the proxy and never handed to the Next app (which
     // would answer 200 on /). Same BASE_DOMAIN default as lib/env.ts — the runner and the
-    // app read it from the same environment.
-    const baseDomain = process.env.BASE_DOMAIN || "localhost"
+    // app read it from the same environment. BASE_DOMAIN may list several suffixes
+    // (the app accepts them all); the first is the canonical one, so that's what we forge.
+    const baseDomain = (process.env.BASE_DOMAIN || "localhost").split(",")[0].trim()
     const res = await request.get("/", { headers: { host: `svc-nobody-here.${baseDomain}` }, maxRedirects: 0 })
     expect(res.status()).toBe(502)
   })

@@ -1,0 +1,32 @@
+# DNS wildcard local pour `*.local.spunto.net`, porté de `coderhammer/spunto`
+# (`local-https/Corefile`). Il n'est consulté que par les conteneurs du compose qui
+# pointent leur `dns:` dessus — `browser-remote` et le runner e2e. L'hôte, lui,
+# continue de résoudre `local.spunto.net` par le DNS public (qui pointe sur la prod).
+#
+# L'IP répondue est celle du conteneur `spunto-lite`, fixée dans docker-compose.yml.
+# Les deux doivent rester d'accord : c'est le seul couplage de ce fichier.
+local.spunto.net:53 {
+    template IN A {
+        match "^.*\.local\.spunto\.net\.$|^local\.spunto\.net\.$"
+        answer "{{ .Name }} 60 IN A 10.79.0.10"
+    }
+    # Écart assumé avec spunto : une réponse NODATA explicite en AAAA. Sans elle, la
+    # requête AAAA que Chrome envoie en parallèle de la A ne matche aucun template et
+    # ressort en SERVFAIL — ce qui, selon le résolveur, peut faire échouer toute la
+    # résolution alors que la A était bonne.
+    template IN AAAA {
+        match "^.*\.local\.spunto\.net\.$|^local\.spunto\.net\.$"
+        rcode NOERROR
+    }
+    log
+}
+
+# Tout le reste part vers le resolver embarqué de Docker (127.0.0.11 dans CE
+# conteneur), et non vers un DNS public comme dans spunto. C'est ce qui préserve la
+# résolution des noms de services compose — `http://spunto-lite`, `http://browser-remote`
+# — pour les conteneurs dont on a écrasé le `dns:`. Docker relaie lui-même les noms
+# publics vers les resolvers de l'hôte, donc Internet continue de marcher.
+.:53 {
+    forward . 127.0.0.11
+    log
+}
