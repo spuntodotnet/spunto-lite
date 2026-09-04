@@ -39,7 +39,7 @@ function RowActions({ worker, projectId }: { worker: Worker; projectId: string }
   return (
     <div className="flex items-center justify-end gap-1">
       {running && (
-        <Tooltip content={gitStatus.length > 0 ? <GitStatusSummary gitStatus={gitStatus} /> : null} side="top">
+        <Tooltip content={gitStatus.length > 0 ? <GitStatusSummary repos={gitStatus} /> : null} side="top">
           <a href={workerBaseUrl(worker.id)} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "outline", size: "sm" }), "h-7 text-xs gap-1")}>
             <Code2 className="h-3 w-3" /> Open
           </a>
