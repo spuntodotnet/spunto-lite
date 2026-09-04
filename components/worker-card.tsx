@@ -22,7 +22,6 @@ import {
 import {
   ArrowUpCircle,
   Loader as LoaderIcon,
-  ChevronRight,
   MoreVertical,
   Play,
   Square,
@@ -30,9 +29,7 @@ import {
   Trash2,
   Code2,
 } from "lucide-react"
-import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
-import { buttonVariants } from "@/components/ui/button"
 import { Tooltip } from "@/components/ui/tooltip"
 import { workerBaseUrl } from "@/lib/worker-url"
 import type { Worker } from "@/lib/types"
@@ -252,20 +249,9 @@ export function WorkerCard({
       onRebuild={() => confirmRebuild(projectVersion) && rebuild.mutate()}
       rebuilding={rebuild.isPending}
       actions={<ActionsMenu worker={worker} projectId={projectId} latestVersion={projectVersion} />}
-      footer={
-        <>
-          <Link href={cockpitHref} className={cn(buttonVariants({ variant: "default", size: "sm" }), "flex-1 h-7 text-xs gap-1.5")}>
-            View <ChevronRight className="h-3.5 w-3.5" />
-          </Link>
-          {running && (
-            <Tooltip content={gitStatus.length > 0 ? <GitStatusSummary repos={repos} /> : null} side="top">
-              <a href={workerBaseUrl(worker.id)} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "outline", size: "sm" }), "h-7 text-xs gap-1.5")}>
-                <Code2 className="h-3.5 w-3.5" /> VS Code
-              </a>
-            </Tooltip>
-          )}
-        </>
-      }
+      // No `footer` slot: the package's default is exactly this card's — a
+      // full-width "View" to the cockpit. Opening VS Code lives in the `⋯` menu,
+      // and each repo chip above already links to code-server on that folder.
     />
   )
 }
