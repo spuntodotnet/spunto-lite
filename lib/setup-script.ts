@@ -101,30 +101,64 @@ function resolveFeatures(features: ProjectFeature[]): ResolvedFeature[] {
   return resolved
 }
 
-// ─── tmux + VS Code settings ──────────────────────────────────────────────────
+// ─── The two features every workspace image is made of ────────────────────────
+//
+// A workspace needs three things its base image doesn't have: a non-root user with sudo, an
+// in-browser VS Code, and a terminal that survives a disconnect. That used to be ~60 lines of
+// shell here — and the same ~60 lines, forked and already drifting, in the Spunto cloud
+// codebase. Both speak the devcontainer feature spec already (`buildFeatureInstallScript`
+// above), so that spec is the seam: the shared half is published as features and consumed
+// identically on both sides, and nothing private has to be released to share it.
+//
+//   common-utils (upstream)  →  spunto-pack (ours)  →  the project's own features
+//
+// spunto-pack is one feature rather than three (code-server / tmux / sshd) because the fetcher
+// above reads nothing but `entrypoint` out of a devcontainer-feature.json: `installsAfter` is
+// ignored, so features run in array order and nothing resolves an ordering for us. Inside a
+// single install.sh the order is guaranteed by construction — and it costs one OCI round-trip
+// instead of three.
+//
+// Source and tests: github.com/coderhammer/features, src/spunto-pack.
+const COMMON_UTILS_REF = "ghcr.io/devcontainers/features/common-utils:2"
+const SPUNTO_PACK_REF = "ghcr.io/coderhammer/features/spunto-pack:1"
 
-// NB: `set -as terminal-features` is NOT in here on purpose — that option only exists in
-// tmux >= 3.2, so on an older tmux (e.g. Debian bullseye ships 3.1c) it prints "Invalid option:
-// terminal-features" on every terminal open. It's appended separately, guarded by a version
-// check, when /etc/tmux.conf is written (see buildImageScript). Truecolor is already covered by
-// the `terminal-overrides ...:Tc` line below, which every supported tmux understands.
-const TMUX_CONF = [
-  "set -g mouse on",
-  "set -g set-clipboard on",
-  "set -g history-limit 50000",
-  "set -g base-index 1",
-  "setw -g pane-base-index 1",
-  "set -g renumber-windows on",
-  "set -sg escape-time 10",
-  'set -g default-terminal "screen-256color"',
-  'set -ga terminal-overrides ",*256col*:Tc,xterm*:Tc"',
-  'set -g status-style "bg=#18181b,fg=#a1a1aa"',
-  'set -g status-left "#[fg=#ea5400,bold] #S #[default]"',
-  "set -g status-left-length 40",
-  'set -g status-right "#[fg=#52525b]%H:%M "',
-  'setw -g window-status-current-style "fg=#ea5400,bold"',
-  "set -g status-justify left",
-].join("\n")
+/**
+ * common-utils replaces the old user block: it creates `vscode`, drops a `/etc/sudoers.d/vscode`
+ * at 0440 (rather than appending to /etc/sudoers) and installs the base toolchain — on Debian,
+ * RedHat, Alpine and azurelinux alike, which is more than the shim it replaces covered.
+ *
+ * None of these can be left at its default: `username` because `automatic` picks from a candidate
+ * list that starts with users the base image may already have (`node` on a node:* base);
+ * `upgradePackages` because on by default it runs a full distro upgrade in every image build;
+ * `configureZshAsDefaultShell` because the block it replaces made zsh the login shell; and
+ * `installOhMyZsh` because oh-my-zsh lives in a home directory, which buildSetupScript already
+ * populates per workspace, at a point where it knows about the user's dotfiles.
+ */
+const COMMON_UTILS_OPTIONS: Record<string, string> = {
+  username: "vscode",
+  upgradePackages: "false",
+  installZsh: "true",
+  configureZshAsDefaultShell: "true",
+  installOhMyZsh: "false",
+  installOhMyZshConfig: "false",
+}
+
+/**
+ * spunto-pack replaces the code-server and tmux blocks — including the system-wide /etc/tmux.conf
+ * (mouse, OSC 52 clipboard, 50k scrollback, warm status bar) that used to live here as TMUX_CONF,
+ * with the same version guard and one more: tmux rejects a config file as a whole, so each recent
+ * option is gated on the version that introduced it (`window-size` 3.1, `terminal-features` 3.2)
+ * and the result is loaded for real before the build moves on.
+ *
+ * `terminalBackend: tmux` — the pack also ships dtach, which only the cloud product has a terminal
+ * backend for. No SSH server: the terminal here is a `docker exec` tmux bridge, not sshd.
+ */
+const SPUNTO_PACK_OPTIONS: Record<string, string> = {
+  terminalBackend: "tmux",
+  installSshd: "false",
+}
+
+// ─── VS Code settings ─────────────────────────────────────────────────────────
 
 function defaultVscodeUserSettings(projectName?: string): Record<string, unknown> {
   return {
@@ -205,6 +239,17 @@ const EXTENSION_INSTALL_SUMMARY = [
 
 // ─── 1. buildImageScript (prebuild) ───────────────────────────────────────────
 
+/**
+ * What the baked layer is made of, as a version. Part of the image tag (`services/workers.ts`,
+ * `imageRefFor`), so bumping it makes the "is this image already built?" lookup miss and the
+ * image get rebuilt — otherwise a project whose config never changed keeps spawning workers on
+ * an image baked by an older release, indefinitely and invisibly.
+ *
+ * 1 → the hand-written blocks (vscode user, code-server, tmux).
+ * 2 → common-utils + spunto-pack.
+ */
+export const IMAGE_RECIPE_VERSION = 2
+
 export function buildImageScript(params: {
   features: ProjectFeature[]
   vscodeExtensions?: string[]
@@ -212,90 +257,50 @@ export function buildImageScript(params: {
 }): { script: string; hasDinD: boolean } {
   const lines: string[] = [
     "set -e",
-    // Package-manager shim so the rest of this prebuild can install packages
-    // without caring which distro the base image is (Debian/Alpine/Fedora/…).
-    "mp_pkg_install() {",
-    "  if command -v apt-get >/dev/null 2>&1; then",
-    "    DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>&1 || return 1",
-    '    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$@" 2>&1',
-    '  elif command -v apk >/dev/null 2>&1; then apk add --no-cache "$@" 2>&1',
-    '  elif command -v dnf >/dev/null 2>&1; then dnf install -y "$@" 2>&1',
-    '  elif command -v yum >/dev/null 2>&1; then yum install -y "$@" 2>&1',
-    '  elif command -v pacman >/dev/null 2>&1; then pacman -Sy --noconfirm "$@" 2>&1',
-    '  else echo "[build] no supported package manager to install: $*" >&2; return 1; fi',
-    "}",
-    // Normalize a minimal base image (e.g. node:24) toward a devcontainer-like
-    // baseline. This prebuild runs as root, so install sudo + zsh here instead
-    // of assuming the image ships them: sudo makes the `vscode` NOPASSWD rule
-    // below actually usable (dotfiles/postCreate run as `vscode`, not root), and
-    // having zsh present lets the block further down set it as vscode's login
-    // shell. Best-effort — a failure must not abort the build.
-    "(",
-    "  set +e",
-    '  command -v sudo >/dev/null 2>&1 || { echo "[build] Installing sudo..."; mp_pkg_install sudo; }',
-    '  command -v zsh  >/dev/null 2>&1 || { echo "[build] Installing zsh...";  mp_pkg_install zsh; }',
-    "  set -e",
-    ")",
-    "useradd -m -s /bin/bash vscode 2>/dev/null || true",
-    "echo 'vscode ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers",
-    "if command -v zsh >/dev/null 2>&1; then",
-    "  _ZSH=$(command -v zsh)",
-    '  grep -qF "$_ZSH" /etc/shells 2>/dev/null || echo "$_ZSH" >> /etc/shells',
-    '  usermod -s "$_ZSH" vscode 2>/dev/null || chsh -s "$_ZSH" vscode 2>/dev/null || true',
-    "fi",
+    // Devcontainer feature env (spec). First, before any feature runs: common-utils reads these to
+    // decide which user it creates and configures, so exporting them later would have it fall back
+    // to its own detection — which on a node:* base picks the pre-existing `node` user.
     "export HOME=/root",
     "export _REMOTE_USER=vscode",
     "export _REMOTE_USER_HOME=/home/vscode",
     "export _CONTAINER_USER=vscode",
     "export _CONTAINER_USER_HOME=/home/vscode",
     "",
-    // `curl … | sh` used to hide two failures at once: the pipeline's exit status
-    // is the shell's, so a missing curl (minimal bases like node:*-slim don't ship
-    // one) left the image with no code-server at all — and every later
-    // `--install-extension` then died with "command not found", swallowed by the
-    // old `set +e`. Install curl if needed, and say so loudly when it still fails.
-    'if ! command -v code-server >/dev/null 2>&1; then',
-    '  echo "[build] Installing code-server..."',
+    // curl can't become a feature: `buildFeatureInstallScript` *is* a curl script (OCI token,
+    // manifest, blob), so a base image without one (node:*-slim and friends) can't fetch the very
+    // feature that would install it. Chicken and egg — it stays inline, and first.
+    "if ! command -v curl >/dev/null 2>&1; then",
+    '  echo "[build] Installing curl (the feature fetcher\'s own dependency)..."',
     "  (",
     "    set +e",
-    '    command -v curl >/dev/null 2>&1 || { echo "[build] Installing curl (needed to fetch code-server)..."; mp_pkg_install curl ca-certificates; }',
+    "    if command -v apt-get >/dev/null 2>&1; then",
+    "      DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl ca-certificates 2>&1",
+    "    elif command -v apk >/dev/null 2>&1; then apk add --no-cache curl ca-certificates 2>&1",
+    "    elif command -v dnf >/dev/null 2>&1; then dnf install -y curl ca-certificates 2>&1",
+    "    elif command -v yum >/dev/null 2>&1; then yum install -y curl ca-certificates 2>&1",
+    "    fi",
     "    set -e",
     "  )",
-    "  set +e",
-    '  curl -fsSL https://code-server.dev/install.sh | sh -s -- --method standalone --prefix /usr/local',
-    "  set -e",
-    '  command -v code-server >/dev/null 2>&1 \\',
-    '    || echo "[build] WARNING: code-server could not be installed — the workspace IDE and any VS Code extension below will be missing from this image."',
-    'fi',
-    "(",
-    "  set +e",
-    "  if ! command -v tmux >/dev/null 2>&1; then",
-    '    echo "[build] Installing tmux..."',
-    "    if command -v apt-get >/dev/null 2>&1; then",
-    "      DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tmux 2>&1",
-    "    elif command -v apk >/dev/null 2>&1; then apk add --no-cache tmux 2>&1",
-    "    elif command -v yum >/dev/null 2>&1; then yum install -y tmux 2>&1",
-    "    elif command -v dnf >/dev/null 2>&1; then dnf install -y tmux 2>&1",
-    "    fi",
-    "  fi",
-    "  set -e",
-    ")",
-    `echo ${JSON.stringify(Buffer.from(TMUX_CONF).toString("base64"))} | base64 -d > /etc/tmux.conf`,
-    // Append `terminal-features` only when the installed tmux is >= 3.2 (the version that added
-    // the option). On older tmux (e.g. bullseye's 3.1c) appending it would make every terminal
-    // open print "Invalid option: terminal-features". Version parsed from `tmux -V`
-    // ("tmux 3.1c" → 3.1); if tmux is missing or the version can't be parsed, we skip it (safe).
-    "if command -v tmux >/dev/null 2>&1; then",
-    `  _TMUX_VER=$(tmux -V 2>/dev/null | grep -oE '[0-9]+\\.[0-9]+' | head -1)`,
-    `  if [ -n "$_TMUX_VER" ] && awk -v v="$_TMUX_VER" 'BEGIN{split(v,a,"."); exit !((a[1]+0)>3 || ((a[1]+0)==3 && (a[2]+0)>=2))}'; then`,
-    `    echo 'set -as terminal-features ",screen-256color:clipboard"' >> /etc/tmux.conf`,
-    "  fi",
     "fi",
+    'command -v curl >/dev/null 2>&1 || echo "[build] WARNING: curl unavailable — feature installs will fail"',
   ]
 
   const hasDinD = params.features.some((f) => f.id === "docker-in-docker") || !!params.dind
 
-  for (const { id, script } of resolveFeatures(params.features)) {
+  // The two features every image is made of, ahead of the project's own. A project that picked
+  // common-utils itself gets its options merged over ours rather than a second install.
+  const userCommonUtils = params.features.find((f) => f.id === "common-utils")
+  const baseFeatures: ProjectFeature[] = [
+    {
+      id: "common-utils",
+      ociRef: userCommonUtils?.ociRef ?? COMMON_UTILS_REF,
+      options: { ...COMMON_UTILS_OPTIONS, ...userCommonUtils?.options },
+    },
+    { id: "spunto-pack", ociRef: SPUNTO_PACK_REF, options: SPUNTO_PACK_OPTIONS },
+  ]
+
+  const allFeatures = [...baseFeatures, ...params.features.filter((f) => f.id !== "common-utils")]
+  for (const { id, script } of resolveFeatures(allFeatures)) {
     lines.push(`echo "[build] Installing feature: ${id}..."`, script)
   }
 
