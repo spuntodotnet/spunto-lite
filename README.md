@@ -48,6 +48,17 @@ HTTPS with a local mkcert certificate. See
   host daemon.
 - **SQLite** (via Drizzle) for projects/workers/secrets, in a Docker volume.
 - **`~/.ssh` mounted read-only** and injected into each worker for git identity.
+- **A workspace image is your base image + two devcontainer features**:
+  [`common-utils`](https://github.com/devcontainers/features/tree/main/src/common-utils)
+  (the `vscode` user, sudo, the base toolchain) then
+  [`spunto-pack`](https://github.com/coderhammer/features/tree/main/src/spunto-pack)
+  (code-server, tmux and its system-wide config), before the features the project
+  itself declares. Both are ordinary published features — the same layer any
+  `devcontainer.json` can install, and the same one Spunto Cloud builds its workers
+  on, which is the point: it used to be sixty lines of shell duplicated between the
+  two, drifting. Images are tagged `mp-proj-<id>:v<version>-r<recipe>`, so a release
+  that changes what goes into an image rebuilds it instead of leaving your workers
+  on the old one.
 - **Shared services** — the local take on Spunto's *Ship* pillar. Declare a
   long-lived dependency once (Postgres, Elasticsearch, MinIO… image + env + ports
   + persistent volumes, presets included) under **Services**, and **every worker of

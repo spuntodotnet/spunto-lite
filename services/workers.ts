@@ -9,6 +9,7 @@ import {
   buildSetupScript,
   buildStartScript,
   buildWorkerScript,
+  IMAGE_RECIPE_VERSION,
 } from "../lib/setup-script"
 import {
   docker,
@@ -28,8 +29,16 @@ import { serviceEnvForWorkers } from "./services"
 import { getSettings } from "./settings"
 import { readHostPrivateKey } from "../lib/ssh-keys"
 
+/**
+ * The tag carries two versions: the project's, and the *recipe's* — what `buildImageScript`
+ * bakes in (`IMAGE_RECIPE_VERSION`). An image is looked up by asking Docker whether the tag
+ * exists, so a project whose config never changed would otherwise keep spawning workers on an
+ * image built by an older release of Spunto Lite, indefinitely and invisibly. Bumping the recipe
+ * makes the lookup miss, which rebuilds. Images from an older recipe are left behind — they are
+ * ordinary dangling tags, `docker image prune` territory.
+ */
 function imageRefFor(projectId: string, version: number): string {
-  return `mp-proj-${projectId}:v${version}`
+  return `mp-proj-${projectId}:v${version}-r${IMAGE_RECIPE_VERSION}`
 }
 
 function hasDinD(project: Project): boolean {
