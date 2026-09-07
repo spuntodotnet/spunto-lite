@@ -126,7 +126,30 @@ const TMUX_CONF = [
   "set -g status-justify left",
 ].join("\n")
 
-function defaultVscodeUserSettings(projectName?: string): Record<string, unknown> {
+/**
+ * Terminal profiles for the worker's editor, both declared as **login** shells.
+ *
+ * Left unset, VS Code auto-builds a profile from `$SHELL` and launches it
+ * *non-login*: zsh then reads only ~/.zshenv + ~/.zshrc, bash only ~/.bashrc —
+ * ~/.zprofile, ~/.zlogin and ~/.profile are never sourced. Dotfiles repos
+ * routinely put PATH and exported credentials in exactly those files, so their
+ * config silently does nothing in the integrated terminal.
+ *
+ * `args: ["-l"]` is not passed through verbatim: VS Code's shell integration
+ * rewrites the argv to `--init-file <script>` and instead exports
+ * `VSCODE_SHELL_LOGIN=1`, which makes that script source the login files itself.
+ * Same effect, and it keeps shell integration working.
+ *
+ * NB: `profiles.linux` alone is ignored — VS Code only picks a *named* profile
+ * when `defaultProfile.linux` names it, otherwise it falls back to the profile
+ * it derived from `$SHELL`. The two settings have to be seeded together.
+ */
+const TERMINAL_PROFILES_LINUX = {
+  bash: { path: "bash", args: ["-l"], icon: "terminal-bash" },
+  zsh: { path: "zsh", args: ["-l"] },
+}
+
+function defaultVscodeUserSettings(projectName?: string, defaultShell: "zsh" | "bash" = "bash"): Record<string, unknown> {
   return {
     "chat.disableAIFeatures": true,
     "security.workspace.trust.enabled": false,
@@ -134,6 +157,8 @@ function defaultVscodeUserSettings(projectName?: string): Record<string, unknown
     "window.title": projectName
       ? `${projectName}\${separator}\${activeEditorShort}`
       : "${rootName}${separator}${activeEditorShort}",
+    "terminal.integrated.defaultProfile.linux": defaultShell,
+    "terminal.integrated.profiles.linux": TERMINAL_PROFILES_LINUX,
   }
 }
 
@@ -236,6 +261,17 @@ export function buildImageScript(params: {
     '  command -v zsh  >/dev/null 2>&1 || { echo "[build] Installing zsh...";  mp_pkg_install zsh; }',
     "  set -e",
     ")",
+    // Both installs are best-effort, so say it out loud when one didn't take —
+    // same reasoning as the code-server WARNING below. A silently missing zsh is
+    // the hardest of the two to trace back: every downstream step is guarded by
+    // `command -v zsh`, so oh-my-zsh, the ZSH_THEME tweak, the alias block and
+    // the `usermod -s` above all no-op, the terminal quietly falls back to bash,
+    // and a dotfiles repo that writes to ~/.zshrc looks installed while none of
+    // it is ever sourced.
+    'command -v sudo >/dev/null 2>&1 \\',
+    '  || echo "[build] WARNING: sudo is missing and could not be installed — lifecycle steps that run as the vscode user (dotfiles install scripts, postCreate) will not be able to install packages or write outside their home."',
+    'command -v zsh >/dev/null 2>&1 \\',
+    '  || echo "[build] WARNING: zsh is missing and could not be installed — the worker terminal falls back to bash, oh-my-zsh is skipped, and anything a dotfiles repo writes to ~/.zshrc will never be sourced."',
     "useradd -m -s /bin/bash vscode 2>/dev/null || true",
     "echo 'vscode ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers",
     "if command -v zsh >/dev/null 2>&1; then",
@@ -733,13 +769,23 @@ export function buildStartScript(params: StartScriptParams): { script: string; h
     "fi",
   )
 
-  // Seed code-server settings (no-clobber)
-  const vscodeSettings = JSON.stringify(defaultVscodeUserSettings(project.name), null, 2)
+  // Seed code-server settings (no-clobber). Two variants, picked at boot: the
+  // default terminal profile has to name a shell that actually exists in this
+  // image — pointing `defaultProfile.linux` at zsh on a base where the prebuild
+  // could not install it leaves the user with a broken terminal profile.
+  const settingsB64 = (shell: "zsh" | "bash") =>
+    JSON.stringify(
+      Buffer.from(JSON.stringify(defaultVscodeUserSettings(project.name, shell), null, 2)).toString("base64"),
+    )
   push(
     "",
     `mkdir -p ${homeDir}/.local/share/code-server/User`,
     `if [ ! -f ${homeDir}/.local/share/code-server/User/settings.json ]; then`,
-    `  echo ${JSON.stringify(Buffer.from(vscodeSettings).toString("base64"))} | base64 -d > ${homeDir}/.local/share/code-server/User/settings.json`,
+    `  if command -v zsh >/dev/null 2>&1; then`,
+    `    echo ${settingsB64("zsh")} | base64 -d > ${homeDir}/.local/share/code-server/User/settings.json`,
+    `  else`,
+    `    echo ${settingsB64("bash")} | base64 -d > ${homeDir}/.local/share/code-server/User/settings.json`,
+    `  fi`,
     `  chown -R ${username}:${username} ${homeDir}/.local`,
     "fi",
   )
