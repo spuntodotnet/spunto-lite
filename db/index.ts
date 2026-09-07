@@ -8,6 +8,15 @@ import * as schema from "./schema"
 
 type Db = ReturnType<typeof open>
 
+/**
+ * Keep `better-sqlite3` on 13+. Up to 12 it was a NAN addon built on
+ * `node::ObjectWrap`, which Node 24.19.0 gave cleanup hooks to
+ * (nodejs/node#63642): from that version on, the GC finalizing a `Statement`
+ * aborts the whole process — `Assertion failed: (env) != nullptr` in
+ * `RemoveEnvironmentCleanupHook`, no JS stack, no catch, the container just dies.
+ * 13.0.0 rewrote the addon on the N-API, which has no such hook. Downgrading below
+ * it brings the abort back, and it lands on whoever creates or deletes a worker.
+ */
 function open() {
   mkdirSync(dirname(DB_PATH), { recursive: true })
   const sqlite = new Database(DB_PATH)
