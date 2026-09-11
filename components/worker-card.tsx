@@ -1,6 +1,5 @@
 "use client"
 
-import { useState } from "react"
 import Link from "next/link"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "@spunto/design-system"
@@ -31,6 +30,7 @@ import {
 } from "lucide-react"
 import { api } from "@/lib/api"
 import { Tooltip } from "@/components/ui/tooltip"
+import { Menu, MenuTrigger, MenuContent, MenuItem, MenuItemDestructive, MenuLinkItem, MenuSeparator } from "@/components/ui/menu"
 import { workerBaseUrl } from "@/lib/worker-url"
 import type { Worker } from "@/lib/types"
 
@@ -134,52 +134,52 @@ export function WorkerUpdateButton({ worker, projectId, latestVersion }: { worke
   )
 }
 
+/**
+ * The card's `⋯` menu — everything you can do to a worker that isn't "open it".
+ *
+ * The popup is portalled (see `components/ui/menu`): drawn inline it would be
+ * clipped by the card's `overflow-hidden`, which is what cut the menu off at the
+ * card's bottom edge.
+ */
 function ActionsMenu({ worker, projectId, latestVersion }: { worker: Worker; projectId: string; latestVersion: number }) {
-  const [open, setOpen] = useState(false)
   const { stop, start, rebuild, del } = useWorkerMutations(projectId, worker.id)
   const running = worker.state === "ready"
   const stopped = worker.state === "stopped"
   const outdated = isOutdated(worker, latestVersion)
 
   return (
-    <div className="relative shrink-0">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground/50 hover:text-foreground hover:bg-accent transition-colors"
+    <Menu>
+      <MenuTrigger
+        aria-label="Workspace actions"
+        className="h-7 w-7 shrink-0 flex items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:text-foreground hover:bg-accent data-[popup-open]:text-foreground data-[popup-open]:bg-accent"
       >
         <MoreVertical className="h-4 w-4" />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-8 z-20 min-w-52 rounded-lg border border-border bg-popover shadow-lg py-1 text-xs">
-          {running && (
-            <a href={workerBaseUrl(worker.id)} target="_blank" rel="noreferrer" className="flex items-center gap-2 px-3 py-2 hover:bg-accent">
-              <Code2 className="h-3.5 w-3.5" /> Open in VS Code
-            </a>
-          )}
-          {stopped ? (
-            <button onMouseDown={() => start.mutate()} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-accent">
-              <Play className="h-3.5 w-3.5" /> Start
-            </button>
-          ) : (
-            <button onMouseDown={() => stop.mutate()} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-accent">
-              <Square className="h-3.5 w-3.5" /> Stop
-            </button>
-          )}
-          <button onMouseDown={() => rebuild.mutate()} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-accent">
-            <RotateCw className="h-3.5 w-3.5" /> Rebuild
-            {outdated && <span className="ml-auto text-[10px] font-medium text-amber-600 dark:text-amber-400">v{latestVersion} available</span>}
-          </button>
-          <div className="my-1 border-t border-border/60" />
-          <button
-            onMouseDown={() => confirm("Delete this workspace?") && del.mutate()}
-            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-destructive/10 text-destructive"
-          >
-            <Trash2 className="h-3.5 w-3.5" /> Delete
-          </button>
-        </div>
-      )}
-    </div>
+      </MenuTrigger>
+      <MenuContent>
+        {running && (
+          <MenuLinkItem href={workerBaseUrl(worker.id)} target="_blank" rel="noreferrer" closeOnClick>
+            <Code2 className="h-3.5 w-3.5" /> Open in VS Code
+          </MenuLinkItem>
+        )}
+        {stopped ? (
+          <MenuItem onClick={() => start.mutate()}>
+            <Play className="h-3.5 w-3.5" /> Start
+          </MenuItem>
+        ) : (
+          <MenuItem onClick={() => stop.mutate()}>
+            <Square className="h-3.5 w-3.5" /> Stop
+          </MenuItem>
+        )}
+        <MenuItem onClick={() => rebuild.mutate()}>
+          <RotateCw className="h-3.5 w-3.5" /> Rebuild
+          {outdated && <span className="ml-auto text-[10px] font-medium text-amber-600 dark:text-amber-400">v{latestVersion} available</span>}
+        </MenuItem>
+        <MenuSeparator />
+        <MenuItemDestructive onClick={() => confirm("Delete this workspace?") && del.mutate()}>
+          <Trash2 className="h-3.5 w-3.5" /> Delete
+        </MenuItemDestructive>
+      </MenuContent>
+    </Menu>
   )
 }
 
