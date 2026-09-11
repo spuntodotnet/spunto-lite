@@ -1,9 +1,8 @@
 "use client"
 
-import { useState } from "react"
 import Link from "next/link"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { toast } from "@spunto/design-system"
+import { toast, type ActionMenuEntry } from "@spunto/design-system"
 import {
   WorkerCard as DsWorkerCard,
   GitStatusSummary,
@@ -22,7 +21,6 @@ import {
 import {
   ArrowUpCircle,
   Loader as LoaderIcon,
-  MoreVertical,
   Play,
   Square,
   RotateCw,
@@ -134,53 +132,52 @@ export function WorkerUpdateButton({ worker, projectId, latestVersion }: { worke
   )
 }
 
-function ActionsMenu({ worker, projectId, latestVersion }: { worker: Worker; projectId: string; latestVersion: number }) {
-  const [open, setOpen] = useState(false)
-  const { stop, start, rebuild, del } = useWorkerMutations(projectId, worker.id)
+/**
+ * The `⋯` menu, as data for the design system's `ActionMenu` — passed through
+ * `WorkerCard`'s `menu` prop, which builds the trigger, the popup and the items.
+ * What each entry *does* stays here (a mutation); what it looks like belongs to
+ * the package.
+ *
+ * The separators are deliberately unconditional: `ActionMenu` drops any rule
+ * left alone by a missing neighbour, so "Open in VS Code" disappearing on a
+ * stopped worker can't strand a line at the top of the popup.
+ */
+function workerMenu(
+  worker: Worker,
+  latestVersion: number,
+  m: ReturnType<typeof useWorkerMutations>,
+): ActionMenuEntry[] {
   const running = worker.state === "ready"
   const stopped = worker.state === "stopped"
-  const outdated = isOutdated(worker, latestVersion)
 
-  return (
-    <div className="relative shrink-0">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground/50 hover:text-foreground hover:bg-accent transition-colors"
-      >
-        <MoreVertical className="h-4 w-4" />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-8 z-20 min-w-52 rounded-lg border border-border bg-popover shadow-lg py-1 text-xs">
-          {running && (
-            <a href={workerBaseUrl(worker.id)} target="_blank" rel="noreferrer" className="flex items-center gap-2 px-3 py-2 hover:bg-accent">
-              <Code2 className="h-3.5 w-3.5" /> Open in VS Code
-            </a>
-          )}
-          {stopped ? (
-            <button onMouseDown={() => start.mutate()} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-accent">
-              <Play className="h-3.5 w-3.5" /> Start
-            </button>
-          ) : (
-            <button onMouseDown={() => stop.mutate()} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-accent">
-              <Square className="h-3.5 w-3.5" /> Stop
-            </button>
-          )}
-          <button onMouseDown={() => rebuild.mutate()} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-accent">
-            <RotateCw className="h-3.5 w-3.5" /> Rebuild
-            {outdated && <span className="ml-auto text-[10px] font-medium text-amber-600 dark:text-amber-400">v{latestVersion} available</span>}
-          </button>
-          <div className="my-1 border-t border-border/60" />
-          <button
-            onMouseDown={() => confirm("Delete this workspace?") && del.mutate()}
-            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-destructive/10 text-destructive"
-          >
-            <Trash2 className="h-3.5 w-3.5" /> Delete
-          </button>
-        </div>
-      )}
-    </div>
-  )
+  return [
+    // Only a live worker serves code-server.
+    running && { label: "Open in VS Code", icon: Code2, href: workerBaseUrl(worker.id), target: "_blank" },
+    "separator",
+    stopped
+      ? { label: "Start", icon: Play, onClick: () => m.start.mutate(), loading: m.start.isPending }
+      : { label: "Stop", icon: Square, onClick: () => m.stop.mutate(), loading: m.stop.isPending },
+    {
+      label: "Rebuild",
+      icon: RotateCw,
+      onClick: () => m.rebuild.mutate(),
+      loading: m.rebuild.isPending,
+      // Same nudge as the card's own banner, in the menu's trailing slot.
+      shortcut: isOutdated(worker, latestVersion) ? (
+        <span className="font-medium text-amber-600 dark:text-amber-400">v{latestVersion} available</span>
+      ) : undefined,
+    },
+    "separator",
+    {
+      label: "Delete",
+      icon: Trash2,
+      destructive: true,
+      loading: m.del.isPending,
+      onClick: () => {
+        if (confirm("Delete this workspace?")) m.del.mutate()
+      },
+    },
+  ]
 }
 
 // ─── WorkerCard ──────────────────────────────────────────────────────────────
@@ -224,7 +221,10 @@ export function WorkerCard({
   projectVersion: number
 }) {
   const running = worker.state === "ready"
-  const { rebuild } = useWorkerMutations(projectId, worker.id)
+  // One set of mutations for the whole card: the outdated banner and the `⋯`
+  // menu both rebuild, and sharing them means a rebuild in flight disables both.
+  const mutations = useWorkerMutations(projectId, worker.id)
+  const { rebuild } = mutations
 
   const { data: gitStatus = [] } = useQuery({
     queryKey: ["git-status", worker.id],
@@ -248,7 +248,7 @@ export function WorkerCard({
       currentProjectVersion={projectVersion}
       onRebuild={() => confirmRebuild(projectVersion) && rebuild.mutate()}
       rebuilding={rebuild.isPending}
-      actions={<ActionsMenu worker={worker} projectId={projectId} latestVersion={projectVersion} />}
+      menu={workerMenu(worker, projectVersion, mutations)}
       // No `footer` slot: the package's default is exactly this card's — a
       // full-width "View" to the cockpit. Opening VS Code lives in the `⋯` menu,
       // and each repo chip above already links to code-server on that folder.
