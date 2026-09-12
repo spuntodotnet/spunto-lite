@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import Link from "next/link"
 import { useQuery } from "@tanstack/react-query"
 import { Clock, Code2, ChevronRight, GitBranch, Trash2 } from "lucide-react"
@@ -9,7 +10,7 @@ import { buttonVariants } from "@/components/ui/button"
 import { Tooltip } from "@/components/ui/tooltip"
 import { workerBaseUrl } from "@/lib/worker-url"
 import type { Worker } from "@/lib/types"
-import { cfgFor, isSettingUp, phaseLabel, setupProgress, formatRelativeTime, GitStatusSummary, useWorkerMutations, WorkerUpdateButton, type GitStatus } from "@/components/worker-card"
+import { cfgFor, DeleteWorkerDialog, isSettingUp, phaseLabel, setupProgress, formatRelativeTime, GitStatusSummary, useWorkerMutations, WorkerUpdateButton, type GitStatus } from "@/components/worker-card"
 
 function StatusCell({ worker }: { worker: Worker }) {
   const settingUp = isSettingUp(worker.state)
@@ -30,6 +31,7 @@ function StatusCell({ worker }: { worker: Worker }) {
 function RowActions({ worker, projectId }: { worker: Worker; projectId: string }) {
   const running = worker.state === "ready"
   const { del } = useWorkerMutations(projectId, worker.id)
+  const [confirming, setConfirming] = useState(false)
   const { data: gitStatus = [] } = useQuery({
     queryKey: ["git-status", worker.id],
     queryFn: () => api.get<GitStatus[]>(`/api/workers/${worker.id}/git-status`),
@@ -52,11 +54,12 @@ function RowActions({ worker, projectId }: { worker: Worker; projectId: string }
         type="button"
         aria-label="Delete workspace"
         disabled={del.isPending}
-        onClick={() => confirm("Delete this workspace?") && del.mutate()}
+        onClick={() => setConfirming(true)}
         className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "h-7 w-7 px-0 text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 disabled:opacity-50")}
       >
         <Trash2 className="h-3.5 w-3.5" />
       </button>
+      <DeleteWorkerDialog open={confirming} onOpenChange={setConfirming} onConfirm={() => del.mutate()} />
     </div>
   )
 }

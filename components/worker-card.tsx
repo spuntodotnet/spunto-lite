@@ -3,7 +3,7 @@
 import { useState } from "react"
 import Link from "next/link"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { toast } from "@spunto/design-system"
+import { toast, type ActionMenuEntry } from "@spunto/design-system"
 import {
   WorkerCard as DsWorkerCard,
   GitStatusSummary,
@@ -22,7 +22,6 @@ import {
 import {
   ArrowUpCircle,
   Loader as LoaderIcon,
-  MoreVertical,
   Play,
   Square,
   RotateCw,
@@ -30,6 +29,7 @@ import {
   Code2,
 } from "lucide-react"
 import { api } from "@/lib/api"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Tooltip } from "@/components/ui/tooltip"
 import { workerBaseUrl } from "@/lib/worker-url"
 import type { Worker } from "@/lib/types"
@@ -98,9 +98,76 @@ export function useWorkerMutations(projectId: string, workerId: string) {
   return { stop, start, rebuild, del }
 }
 
-/** Rebuild-to-latest, with the confirmation the card's own banner doesn't ask for. */
-function confirmRebuild(latestVersion: number): boolean {
-  return confirm(`Update this workspace to v${latestVersion}?\n\nThe container is recreated on the latest project config — only your workspace (its files) is kept.`)
+// ─── Confirmations ───────────────────────────────────────────────────────────
+//
+// Both live here rather than at each call site: the card, the table and the
+// cockpit all delete a workspace, and the copy below is the only place saying
+// what that costs. Three hand-written `confirm()` strings had already started
+// drifting from what the API does.
+
+/**
+ * Deleting a worker is `removeWorker`: the container, its network, and the three
+ * `mp-worker-<id>-*` volumes — workspace included. So uncommitted work is gone,
+ * which the old "Delete this workspace?" never said. The project's shared
+ * volumes (`mp-proj-*`) are deliberately untouched by that path.
+ */
+export function DeleteWorkerDialog({
+  open,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onConfirm: () => void
+}) {
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Delete this workspace?"
+      description={
+        <>
+          Its container and its volumes are removed —{" "}
+          <span className="font-medium text-foreground">anything uncommitted in /workspace is gone for good</span>. The
+          project&rsquo;s shared volumes are left alone. This cannot be undone.
+        </>
+      }
+      confirmLabel="Delete"
+      icon={Trash2}
+      destructive
+      onConfirm={onConfirm}
+    />
+  )
+}
+
+/**
+ * Rebuilding is `rebuildWorker`, not `deleteWorker`: the container is dropped and
+ * respawned on the project's current version, and the `/workspace` volume — git
+ * clone and uncommitted work — survives. Worth stating plainly, since the button
+ * sits next to a Delete that doesn't spare it.
+ */
+export function RebuildWorkerDialog({
+  open,
+  onOpenChange,
+  latestVersion,
+  onConfirm,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  latestVersion: number
+  onConfirm: () => void
+}) {
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={`Update this workspace to v${latestVersion}?`}
+      description="The container is recreated on the latest project config. Your workspace is kept — its files, including work you haven't committed."
+      confirmLabel={`Update to v${latestVersion}`}
+      icon={ArrowUpCircle}
+      onConfirm={onConfirm}
+    />
+  )
 }
 
 /**
@@ -114,73 +181,72 @@ function confirmRebuild(latestVersion: number): boolean {
  */
 export function WorkerUpdateButton({ worker, projectId, latestVersion }: { worker: Worker; projectId: string; latestVersion: number }) {
   const { rebuild } = useWorkerMutations(projectId, worker.id)
+  const [confirming, setConfirming] = useState(false)
   if (!isOutdated(worker, latestVersion)) return null
   return (
-    <Tooltip content={`Rebuild to update this workspace from v${worker.projectVersion} to the latest project config (v${latestVersion}). Your workspace is kept.`} side="top">
-      <button
-        type="button"
-        disabled={rebuild.isPending}
-        onClick={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          if (confirmRebuild(latestVersion)) rebuild.mutate()
-        }}
-        className="inline-flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium leading-none text-amber-600 dark:text-amber-400 transition-colors hover:bg-amber-500/20 disabled:opacity-50"
-      >
-        {rebuild.isPending ? <LoaderIcon className="h-3 w-3 animate-spin" /> : <ArrowUpCircle className="h-3 w-3" />}
-        Update to v{latestVersion}
-      </button>
-    </Tooltip>
+    <>
+      <Tooltip content={`Rebuild to update this workspace from v${worker.projectVersion} to the latest project config (v${latestVersion}). Your workspace is kept.`} side="top">
+        <button
+          type="button"
+          disabled={rebuild.isPending}
+          onClick={(e) => {
+            // The pill sits inside a row that is itself a link to the cockpit.
+            e.preventDefault()
+            e.stopPropagation()
+            setConfirming(true)
+          }}
+          className="inline-flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium leading-none text-amber-600 dark:text-amber-400 transition-colors hover:bg-amber-500/20 disabled:opacity-50"
+        >
+          {rebuild.isPending ? <LoaderIcon className="h-3 w-3 animate-spin" /> : <ArrowUpCircle className="h-3 w-3" />}
+          Update to v{latestVersion}
+        </button>
+      </Tooltip>
+      <RebuildWorkerDialog open={confirming} onOpenChange={setConfirming} latestVersion={latestVersion} onConfirm={() => rebuild.mutate()} />
+    </>
   )
 }
 
-function ActionsMenu({ worker, projectId, latestVersion }: { worker: Worker; projectId: string; latestVersion: number }) {
-  const [open, setOpen] = useState(false)
-  const { stop, start, rebuild, del } = useWorkerMutations(projectId, worker.id)
+/**
+ * The `⋯` menu, as data for the design system's `ActionMenu` — passed through
+ * `WorkerCard`'s `menu` prop, which builds the trigger, the popup and the items.
+ * What each entry *does* stays here (a mutation); what it looks like belongs to
+ * the package.
+ *
+ * The separators are deliberately unconditional: `ActionMenu` drops any rule
+ * left alone by a missing neighbour, so "Open in VS Code" disappearing on a
+ * stopped worker can't strand a line at the top of the popup.
+ */
+function workerMenu(
+  worker: Worker,
+  latestVersion: number,
+  m: ReturnType<typeof useWorkerMutations>,
+  onDelete: () => void,
+): ActionMenuEntry[] {
   const running = worker.state === "ready"
   const stopped = worker.state === "stopped"
-  const outdated = isOutdated(worker, latestVersion)
 
-  return (
-    <div className="relative shrink-0">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
-        className="h-7 w-7 flex items-center justify-center rounded-md text-muted-foreground/50 hover:text-foreground hover:bg-accent transition-colors"
-      >
-        <MoreVertical className="h-4 w-4" />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-8 z-20 min-w-52 rounded-lg border border-border bg-popover shadow-lg py-1 text-xs">
-          {running && (
-            <a href={workerBaseUrl(worker.id)} target="_blank" rel="noreferrer" className="flex items-center gap-2 px-3 py-2 hover:bg-accent">
-              <Code2 className="h-3.5 w-3.5" /> Open in VS Code
-            </a>
-          )}
-          {stopped ? (
-            <button onMouseDown={() => start.mutate()} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-accent">
-              <Play className="h-3.5 w-3.5" /> Start
-            </button>
-          ) : (
-            <button onMouseDown={() => stop.mutate()} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-accent">
-              <Square className="h-3.5 w-3.5" /> Stop
-            </button>
-          )}
-          <button onMouseDown={() => rebuild.mutate()} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-accent">
-            <RotateCw className="h-3.5 w-3.5" /> Rebuild
-            {outdated && <span className="ml-auto text-[10px] font-medium text-amber-600 dark:text-amber-400">v{latestVersion} available</span>}
-          </button>
-          <div className="my-1 border-t border-border/60" />
-          <button
-            onMouseDown={() => confirm("Delete this workspace?") && del.mutate()}
-            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-destructive/10 text-destructive"
-          >
-            <Trash2 className="h-3.5 w-3.5" /> Delete
-          </button>
-        </div>
-      )}
-    </div>
-  )
+  return [
+    // Only a live worker serves code-server.
+    running && { label: "Open in VS Code", icon: Code2, href: workerBaseUrl(worker.id), target: "_blank" },
+    "separator",
+    stopped
+      ? { label: "Start", icon: Play, onClick: () => m.start.mutate(), loading: m.start.isPending }
+      : { label: "Stop", icon: Square, onClick: () => m.stop.mutate(), loading: m.stop.isPending },
+    {
+      label: "Rebuild",
+      icon: RotateCw,
+      onClick: () => m.rebuild.mutate(),
+      loading: m.rebuild.isPending,
+      // Same nudge as the card's own banner, in the menu's trailing slot.
+      shortcut: isOutdated(worker, latestVersion) ? (
+        <span className="font-medium text-amber-600 dark:text-amber-400">v{latestVersion} available</span>
+      ) : undefined,
+    },
+    "separator",
+    // Opens the card's dialog rather than mutating: an entry that destroys a
+    // volume asks first, and the popup is gone by the time the dialog is up.
+    { label: "Delete", icon: Trash2, destructive: true, loading: m.del.isPending, onClick: onDelete },
+  ]
 }
 
 // ─── WorkerCard ──────────────────────────────────────────────────────────────
@@ -224,7 +290,13 @@ export function WorkerCard({
   projectVersion: number
 }) {
   const running = worker.state === "ready"
-  const { rebuild } = useWorkerMutations(projectId, worker.id)
+  // One set of mutations for the whole card: the outdated banner and the `⋯`
+  // menu both rebuild, and sharing them means a rebuild in flight disables both.
+  const mutations = useWorkerMutations(projectId, worker.id)
+  const { rebuild, del } = mutations
+  // Which confirmation is up, if any. Both are rendered beside the card rather
+  // than inside the `⋯` popup, which Base UI unmounts on click.
+  const [confirming, setConfirming] = useState<"delete" | "rebuild" | null>(null)
 
   const { data: gitStatus = [] } = useQuery({
     queryKey: ["git-status", worker.id],
@@ -237,21 +309,34 @@ export function WorkerCard({
   const cockpitHref = `/projects/${projectId}/workers/${worker.id}`
 
   return (
-    <DsWorkerCard
-      // Everything but the state passes through untouched; see `toDsState`.
-      worker={{ ...worker, state: toDsState(worker.state) }}
-      href={cockpitHref}
-      render={{ link: ({ href, className, children }) => <Link href={href} className={className}>{children}</Link> }}
-      gitStatus={repos}
-      // Only a live worker can serve code-server; otherwise the chip stays static.
-      repoHref={running ? (repo) => workerBaseUrl(worker.id, { folder: repo.path }) : undefined}
-      currentProjectVersion={projectVersion}
-      onRebuild={() => confirmRebuild(projectVersion) && rebuild.mutate()}
-      rebuilding={rebuild.isPending}
-      actions={<ActionsMenu worker={worker} projectId={projectId} latestVersion={projectVersion} />}
-      // No `footer` slot: the package's default is exactly this card's — a
-      // full-width "View" to the cockpit. Opening VS Code lives in the `⋯` menu,
-      // and each repo chip above already links to code-server on that folder.
-    />
+    <>
+      <DsWorkerCard
+        // Everything but the state passes through untouched; see `toDsState`.
+        worker={{ ...worker, state: toDsState(worker.state) }}
+        href={cockpitHref}
+        render={{ link: ({ href, className, children }) => <Link href={href} className={className}>{children}</Link> }}
+        gitStatus={repos}
+        // Only a live worker can serve code-server; otherwise the chip stays static.
+        repoHref={running ? (repo) => workerBaseUrl(worker.id, { folder: repo.path }) : undefined}
+        currentProjectVersion={projectVersion}
+        onRebuild={() => setConfirming("rebuild")}
+        rebuilding={rebuild.isPending}
+        menu={workerMenu(worker, projectVersion, mutations, () => setConfirming("delete"))}
+        // No `footer` slot: the package's default is exactly this card's — a
+        // full-width "View" to the cockpit. Opening VS Code lives in the `⋯` menu,
+        // and each repo chip above already links to code-server on that folder.
+      />
+      <DeleteWorkerDialog
+        open={confirming === "delete"}
+        onOpenChange={(o) => !o && setConfirming(null)}
+        onConfirm={() => del.mutate()}
+      />
+      <RebuildWorkerDialog
+        open={confirming === "rebuild"}
+        onOpenChange={(o) => !o && setConfirming(null)}
+        latestVersion={projectVersion}
+        onConfirm={() => rebuild.mutate()}
+      />
+    </>
   )
 }
