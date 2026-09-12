@@ -35,6 +35,7 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { LogsPanel, LogTerminal } from "@/components/logs-panel"
 import { TerminalSessions } from "@/components/terminal-sessions"
 import {
+  DeleteWorkerDialog,
   ResourceBars,
   StepIndicator,
   setupProgress,
@@ -108,6 +109,7 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
   const act = (path: string, msg: string) =>
     api.post(`/api/workers/${wid}/${path}`).then(() => { invalidate(); toast.success(msg) }).catch((e) => toast.error((e as Error).message))
   const del = () => api.del(`/api/workers/${wid}`).then(() => { toast.success("Workspace deleted"); router.push(`/projects/${id}`) })
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   async function setTags(tags: string[]) {
     await api.post(`/api/workers/${wid}/tags`, { tags }).catch((e) => toast.error((e as Error).message))
@@ -234,11 +236,12 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
             <span className="font-medium">Rebuild container</span>
             <span className="ml-auto text-[10px] text-muted-foreground/50">keeps workspace</span>
           </button>
-          <button onClick={() => confirm("Delete this workspace?") && del()} className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border border-red-500/20 bg-red-500/5 hover:bg-red-500/10 transition-colors text-xs text-red-600 dark:text-red-400">
+          <button onClick={() => setConfirmingDelete(true)} className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border border-red-500/20 bg-red-500/5 hover:bg-red-500/10 transition-colors text-xs text-red-600 dark:text-red-400">
             <Trash2 className="h-3.5 w-3.5" />
             <span className="font-medium">Delete workspace</span>
             <span className="ml-auto text-[10px] opacity-60">permanent</span>
           </button>
+          <DeleteWorkerDialog open={confirmingDelete} onOpenChange={setConfirmingDelete} onConfirm={() => del()} />
         </div>
       </div>
 

@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import type { Service } from "@/lib/types"
 import { Button, buttonVariants } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { LogsPanel } from "@/components/logs-panel"
 import { cfgFor, formatRelativeTime, ResourceBars, type Stats } from "@/components/worker-card"
 import { serviceBaseUrl } from "@/lib/worker-url"
@@ -51,6 +52,7 @@ function Chip({ icon: Icon, children, title }: { icon?: React.ComponentType<{ cl
 export function ServiceCard({ service, onEdit }: { service: Service; onEdit: () => void }) {
   const qc = useQueryClient()
   const [showLogs, setShowLogs] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const cfg = cfgFor(service.state)
   const running = service.state === "ready"
 
@@ -194,14 +196,27 @@ export function ServiceCard({ service, onEdit }: { service: Service; onEdit: () 
           variant="ghost"
           size="sm"
           className="h-7 text-xs gap-1.5 ml-auto text-destructive hover:bg-destructive/10"
-          onClick={() =>
-            confirm(`Delete the service "${service.slug}"?\n\nIts container AND its persistent volumes are removed — the data is gone for good.`) &&
-            del.mutate()
-          }
+          onClick={() => setConfirmingDelete(true)}
           disabled={del.isPending}
         >
           <Trash2 className="size-3.5" /> Delete
         </Button>
+        <ConfirmDialog
+          open={confirmingDelete}
+          onOpenChange={setConfirmingDelete}
+          title={`Delete the service “${service.slug}”?`}
+          description={
+            <>
+              Its container and its persistent volumes are removed —{" "}
+              <span className="font-medium text-foreground">the data in them is gone for good</span>. Every worker of
+              the project loses this service.
+            </>
+          }
+          confirmLabel="Delete"
+          icon={Trash2}
+          destructive
+          onConfirm={() => del.mutate()}
+        />
       </div>
     </div>
   )

@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import Link from "next/link"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast, type ActionMenuEntry } from "@spunto/design-system"
@@ -28,6 +29,7 @@ import {
   Code2,
 } from "lucide-react"
 import { api } from "@/lib/api"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Tooltip } from "@/components/ui/tooltip"
 import { workerBaseUrl } from "@/lib/worker-url"
 import type { Worker } from "@/lib/types"
@@ -96,9 +98,76 @@ export function useWorkerMutations(projectId: string, workerId: string) {
   return { stop, start, rebuild, del }
 }
 
-/** Rebuild-to-latest, with the confirmation the card's own banner doesn't ask for. */
-function confirmRebuild(latestVersion: number): boolean {
-  return confirm(`Update this workspace to v${latestVersion}?\n\nThe container is recreated on the latest project config — only your workspace (its files) is kept.`)
+// ─── Confirmations ───────────────────────────────────────────────────────────
+//
+// Both live here rather than at each call site: the card, the table and the
+// cockpit all delete a workspace, and the copy below is the only place saying
+// what that costs. Three hand-written `confirm()` strings had already started
+// drifting from what the API does.
+
+/**
+ * Deleting a worker is `removeWorker`: the container, its network, and the three
+ * `mp-worker-<id>-*` volumes — workspace included. So uncommitted work is gone,
+ * which the old "Delete this workspace?" never said. The project's shared
+ * volumes (`mp-proj-*`) are deliberately untouched by that path.
+ */
+export function DeleteWorkerDialog({
+  open,
+  onOpenChange,
+  onConfirm,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onConfirm: () => void
+}) {
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Delete this workspace?"
+      description={
+        <>
+          Its container and its volumes are removed —{" "}
+          <span className="font-medium text-foreground">anything uncommitted in /workspace is gone for good</span>. The
+          project&rsquo;s shared volumes are left alone. This cannot be undone.
+        </>
+      }
+      confirmLabel="Delete"
+      icon={Trash2}
+      destructive
+      onConfirm={onConfirm}
+    />
+  )
+}
+
+/**
+ * Rebuilding is `rebuildWorker`, not `deleteWorker`: the container is dropped and
+ * respawned on the project's current version, and the `/workspace` volume — git
+ * clone and uncommitted work — survives. Worth stating plainly, since the button
+ * sits next to a Delete that doesn't spare it.
+ */
+export function RebuildWorkerDialog({
+  open,
+  onOpenChange,
+  latestVersion,
+  onConfirm,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  latestVersion: number
+  onConfirm: () => void
+}) {
+  return (
+    <ConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={`Update this workspace to v${latestVersion}?`}
+      description="The container is recreated on the latest project config. Your workspace is kept — its files, including work you haven't committed."
+      confirmLabel={`Update to v${latestVersion}`}
+      icon={ArrowUpCircle}
+      onConfirm={onConfirm}
+    />
+  )
 }
 
 /**
@@ -112,23 +181,28 @@ function confirmRebuild(latestVersion: number): boolean {
  */
 export function WorkerUpdateButton({ worker, projectId, latestVersion }: { worker: Worker; projectId: string; latestVersion: number }) {
   const { rebuild } = useWorkerMutations(projectId, worker.id)
+  const [confirming, setConfirming] = useState(false)
   if (!isOutdated(worker, latestVersion)) return null
   return (
-    <Tooltip content={`Rebuild to update this workspace from v${worker.projectVersion} to the latest project config (v${latestVersion}). Your workspace is kept.`} side="top">
-      <button
-        type="button"
-        disabled={rebuild.isPending}
-        onClick={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          if (confirmRebuild(latestVersion)) rebuild.mutate()
-        }}
-        className="inline-flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium leading-none text-amber-600 dark:text-amber-400 transition-colors hover:bg-amber-500/20 disabled:opacity-50"
-      >
-        {rebuild.isPending ? <LoaderIcon className="h-3 w-3 animate-spin" /> : <ArrowUpCircle className="h-3 w-3" />}
-        Update to v{latestVersion}
-      </button>
-    </Tooltip>
+    <>
+      <Tooltip content={`Rebuild to update this workspace from v${worker.projectVersion} to the latest project config (v${latestVersion}). Your workspace is kept.`} side="top">
+        <button
+          type="button"
+          disabled={rebuild.isPending}
+          onClick={(e) => {
+            // The pill sits inside a row that is itself a link to the cockpit.
+            e.preventDefault()
+            e.stopPropagation()
+            setConfirming(true)
+          }}
+          className="inline-flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium leading-none text-amber-600 dark:text-amber-400 transition-colors hover:bg-amber-500/20 disabled:opacity-50"
+        >
+          {rebuild.isPending ? <LoaderIcon className="h-3 w-3 animate-spin" /> : <ArrowUpCircle className="h-3 w-3" />}
+          Update to v{latestVersion}
+        </button>
+      </Tooltip>
+      <RebuildWorkerDialog open={confirming} onOpenChange={setConfirming} latestVersion={latestVersion} onConfirm={() => rebuild.mutate()} />
+    </>
   )
 }
 
@@ -146,6 +220,7 @@ function workerMenu(
   worker: Worker,
   latestVersion: number,
   m: ReturnType<typeof useWorkerMutations>,
+  onDelete: () => void,
 ): ActionMenuEntry[] {
   const running = worker.state === "ready"
   const stopped = worker.state === "stopped"
@@ -168,15 +243,9 @@ function workerMenu(
       ) : undefined,
     },
     "separator",
-    {
-      label: "Delete",
-      icon: Trash2,
-      destructive: true,
-      loading: m.del.isPending,
-      onClick: () => {
-        if (confirm("Delete this workspace?")) m.del.mutate()
-      },
-    },
+    // Opens the card's dialog rather than mutating: an entry that destroys a
+    // volume asks first, and the popup is gone by the time the dialog is up.
+    { label: "Delete", icon: Trash2, destructive: true, loading: m.del.isPending, onClick: onDelete },
   ]
 }
 
@@ -224,7 +293,10 @@ export function WorkerCard({
   // One set of mutations for the whole card: the outdated banner and the `⋯`
   // menu both rebuild, and sharing them means a rebuild in flight disables both.
   const mutations = useWorkerMutations(projectId, worker.id)
-  const { rebuild } = mutations
+  const { rebuild, del } = mutations
+  // Which confirmation is up, if any. Both are rendered beside the card rather
+  // than inside the `⋯` popup, which Base UI unmounts on click.
+  const [confirming, setConfirming] = useState<"delete" | "rebuild" | null>(null)
 
   const { data: gitStatus = [] } = useQuery({
     queryKey: ["git-status", worker.id],
@@ -237,21 +309,34 @@ export function WorkerCard({
   const cockpitHref = `/projects/${projectId}/workers/${worker.id}`
 
   return (
-    <DsWorkerCard
-      // Everything but the state passes through untouched; see `toDsState`.
-      worker={{ ...worker, state: toDsState(worker.state) }}
-      href={cockpitHref}
-      render={{ link: ({ href, className, children }) => <Link href={href} className={className}>{children}</Link> }}
-      gitStatus={repos}
-      // Only a live worker can serve code-server; otherwise the chip stays static.
-      repoHref={running ? (repo) => workerBaseUrl(worker.id, { folder: repo.path }) : undefined}
-      currentProjectVersion={projectVersion}
-      onRebuild={() => confirmRebuild(projectVersion) && rebuild.mutate()}
-      rebuilding={rebuild.isPending}
-      menu={workerMenu(worker, projectVersion, mutations)}
-      // No `footer` slot: the package's default is exactly this card's — a
-      // full-width "View" to the cockpit. Opening VS Code lives in the `⋯` menu,
-      // and each repo chip above already links to code-server on that folder.
-    />
+    <>
+      <DsWorkerCard
+        // Everything but the state passes through untouched; see `toDsState`.
+        worker={{ ...worker, state: toDsState(worker.state) }}
+        href={cockpitHref}
+        render={{ link: ({ href, className, children }) => <Link href={href} className={className}>{children}</Link> }}
+        gitStatus={repos}
+        // Only a live worker can serve code-server; otherwise the chip stays static.
+        repoHref={running ? (repo) => workerBaseUrl(worker.id, { folder: repo.path }) : undefined}
+        currentProjectVersion={projectVersion}
+        onRebuild={() => setConfirming("rebuild")}
+        rebuilding={rebuild.isPending}
+        menu={workerMenu(worker, projectVersion, mutations, () => setConfirming("delete"))}
+        // No `footer` slot: the package's default is exactly this card's — a
+        // full-width "View" to the cockpit. Opening VS Code lives in the `⋯` menu,
+        // and each repo chip above already links to code-server on that folder.
+      />
+      <DeleteWorkerDialog
+        open={confirming === "delete"}
+        onOpenChange={(o) => !o && setConfirming(null)}
+        onConfirm={() => del.mutate()}
+      />
+      <RebuildWorkerDialog
+        open={confirming === "rebuild"}
+        onOpenChange={(o) => !o && setConfirming(null)}
+        latestVersion={projectVersion}
+        onConfirm={() => rebuild.mutate()}
+      />
+    </>
   )
 }
