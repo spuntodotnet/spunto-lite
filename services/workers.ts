@@ -51,10 +51,17 @@ async function imageExists(ref: string): Promise<boolean> {
   return docker.getImage(ref).inspect().then(() => true).catch(() => false)
 }
 
-/** Builds the per-(project,version) image if it isn't already present. Returns the image ref. */
-export async function ensureProjectImage(project: Project, version: number): Promise<string> {
+/**
+ * Builds the per-(project,version) image if it isn't already present. Returns the image ref.
+ *
+ * `force` is what separates "make sure this exists" from "build it again": spawning a worker
+ * wants the first, and stops at the existence check. A user who just read a build log and asked
+ * for another one wants the second — for them the existence check is the whole problem, since
+ * the image existing is precisely the state they're trying to leave.
+ */
+export async function ensureProjectImage(project: Project, version: number, force = false): Promise<string> {
   const ref = imageRefFor(project.id, version)
-  if (await imageExists(ref)) return ref
+  if (!force && (await imageExists(ref))) return ref
 
   const buildId = newId()
   db.insert(projectImageBuilds).values({ id: buildId, projectId: project.id, version, imageRef: ref, state: "building", logs: "" }).run()
@@ -73,7 +80,7 @@ export async function ensureProjectImage(project: Project, version: number): Pro
   }
 
   try {
-    await buildProjectImage({ baseImage: project.image, buildScript: script, imageRef: ref, onLog: flush })
+    await buildProjectImage({ baseImage: project.image, buildScript: script, imageRef: ref, noCache: force, onLog: flush })
     db.update(projectImageBuilds).set({ state: "ready", logs }).where(eq(projectImageBuilds.id, buildId)).run()
     return ref
   } catch (err) {
@@ -83,11 +90,14 @@ export async function ensureProjectImage(project: Project, version: number): Pro
   }
 }
 
-/** Fire-and-forget pre-build of the current version's image (no-op if already built). */
-export function triggerBuild(projectId: string): boolean {
+/**
+ * Fire-and-forget build of the current version's image. No-op if it is already built, unless
+ * `force` — which rebuilds it from scratch, cache included.
+ */
+export function triggerBuild(projectId: string, force = false): boolean {
   const project = getProjectRow(projectId)
   if (!project) return false
-  void ensureProjectImage(project, project.currentVersion).catch((e) => console.error(`[build ${projectId}]`, e))
+  void ensureProjectImage(project, project.currentVersion, force).catch((e) => console.error(`[build ${projectId}]`, e))
   return true
 }
 

@@ -1,6 +1,7 @@
 "use client"
 
 import { useRef } from "react"
+import { Loader2, RotateCw } from "lucide-react"
 import {
   Sheet,
   SheetContent,
@@ -51,12 +52,17 @@ export function BuildLogsSheet({
   onOpenChange,
   build,
   targetLabel,
+  onRebuild,
+  rebuilding = false,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   build: ProjectImageBuild
   /** The row this was opened from — "local · Docker" in Lite. */
   targetLabel: string
+  /** Runs another build of the same version, cache and all. Omitted → no button. */
+  onRebuild?: () => void
+  rebuilding?: boolean
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -73,7 +79,7 @@ export function BuildLogsSheet({
         </SheetHeader>
 
         <div className="min-h-0 flex-1">
-          <BuildLogTerminal build={build} />
+          <BuildLogTerminal build={build} onRebuild={onRebuild} rebuilding={rebuilding} />
         </div>
       </SheetContent>
     </Sheet>
@@ -88,7 +94,15 @@ export function BuildLogsSheet({
  * then, so no dependency ever changes to re-fire it. Here the handle and the
  * effect mount and unmount together, and opening the panel always prints.
  */
-function BuildLogTerminal({ build }: { build: ProjectImageBuild }) {
+function BuildLogTerminal({
+  build,
+  onRebuild,
+  rebuilding,
+}: {
+  build: ProjectImageBuild
+  onRebuild?: () => void
+  rebuilding?: boolean
+}) {
   const term = useRef<TerminalHandle>(null)
   // No placeholder text in the buffer: an empty log is `TerminalPanel`'s own
   // `placeholder`/`loading` below, which swaps the surface out instead.
@@ -96,6 +110,8 @@ function BuildLogTerminal({ build }: { build: ProjectImageBuild }) {
 
   const { status, label } = PANEL_STATUS[build.state]
   const empty = !build.logs
+  // One build at a time per project — a second one would write into the same tag.
+  const busy = rebuilding || build.state === "building"
 
   return (
     <TerminalPanel
@@ -104,6 +120,23 @@ function BuildLogTerminal({ build }: { build: ProjectImageBuild }) {
       subtitle={build.imageRef}
       status={status}
       statusLabel={label}
+      // `actions` and not `onReconnect`: the DS reconnect button is for a stream
+      // that dropped, and its label says so. This re-runs the build. Matches
+      // `BarButton`'s geometry by hand — the DS keeps it internal.
+      actions={
+        onRebuild && (
+          <button
+            type="button"
+            title={busy ? "A build is already running" : "Rebuild this image from scratch"}
+            aria-label="Rebuild image"
+            disabled={busy}
+            onClick={onRebuild}
+            className="flex size-6 cursor-pointer items-center justify-center rounded text-zinc-500 transition-colors hover:bg-white/5 hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCw className="h-3.5 w-3.5" />}
+          </button>
+        )
+      }
       // A build that has produced no output yet is only worth waiting on while
       // it's still running; an empty log on a finished build is a fact, not a
       // spinner.

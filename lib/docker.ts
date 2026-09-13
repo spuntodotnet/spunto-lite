@@ -760,6 +760,12 @@ export async function buildProjectImage(params: {
   baseImage: string
   buildScript: string
   imageRef: string
+  /**
+   * Re-run every layer instead of reusing the cache. The build is one `RUN` over a
+   * script whose text rarely changes, so Docker would otherwise hand back the same
+   * cached layer and "rebuild" would be a no-op that *looks* like a build.
+   */
+  noCache?: boolean
   onLog?: (chunk: string) => void
 }): Promise<void> {
   const dockerfile = Buffer.from(
@@ -780,7 +786,12 @@ export async function buildProjectImage(params: {
   await new Promise<void>((resolve, reject) => {
     docker.buildImage(
       contextStream as never,
-      { t: params.imageRef, pull: "true", ...(registryconfig ? { registryconfig } : {}) } as never,
+      {
+        t: params.imageRef,
+        pull: "true",
+        ...(params.noCache ? { nocache: true } : {}),
+        ...(registryconfig ? { registryconfig } : {}),
+      } as never,
       (err, stream) => {
         if (err) return reject(err)
         if (!stream) return reject(new Error("No build stream returned"))

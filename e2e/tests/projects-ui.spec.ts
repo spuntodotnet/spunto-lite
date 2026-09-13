@@ -163,4 +163,32 @@ test.describe("build log from the project panel", () => {
     // on a word rather than on a whole line.
     await expect(panel.locator(".xterm-rows")).toContainText(/ERROR/, { timeout: 15_000 })
   })
+
+  test("the panel can launch another build, and asks for a forced one", async ({ page, request }) => {
+    await page.goto(`/projects/${projectId}`)
+    await page.getByRole("button", { name: "Pre-build" }).click()
+
+    await expect
+      .poll(
+        async () => {
+          const builds = await (await request.get(`/api/projects/${projectId}/builds`)).json()
+          return builds[0]?.state
+        },
+        { timeout: 60_000 }
+      )
+      .toBe("error")
+
+    await page.getByRole("button", { name: /local · Docker/ }).click()
+    const panel = page.getByRole("dialog", { name: "Build log" })
+    await expect(panel).toBeVisible()
+
+    // `force=1` is the whole point of the button: plain /build skips the work when
+    // the image is already there, so without the flag this would be a no-op on
+    // every project whose build succeeded — which is most of them.
+    const posted = page.waitForRequest(
+      (r) => r.method() === "POST" && r.url().includes(`/api/projects/${projectId}/build`)
+    )
+    await panel.getByRole("button", { name: "Rebuild image" }).click()
+    expect(new URL((await posted).url()).searchParams.get("force")).toBe("1")
+  })
 })

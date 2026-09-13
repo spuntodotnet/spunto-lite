@@ -65,6 +65,15 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["builds", id] }); toast.success("Pre-building image…") },
     onError: (e) => toast.error((e as Error).message),
   })
+  // Separate from `prebuild` because the verb is different, not just the flag:
+  // pre-building an image that exists is a no-op on purpose, and the panel's
+  // "Pre-build" should stay that. `force=1` is for someone who read the log and
+  // asked for another build — it discards the cache, so it is never implicit.
+  const rebuild = useMutation({
+    mutationFn: () => api.post(`/api/projects/${id}/build?force=1`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["builds", id] }); toast.success("Rebuilding image…") },
+    onError: (e) => toast.error((e as Error).message),
+  })
   const [logsOpen, setLogsOpen] = useState(false)
 
   if (isError) {
@@ -187,6 +196,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           onOpenChange={setLogsOpen}
           build={currentBuild}
           targetLabel={BUILD_TARGET_LABEL}
+          onRebuild={() => rebuild.mutate()}
+          rebuilding={rebuild.isPending}
         />
       )}
     </div>
