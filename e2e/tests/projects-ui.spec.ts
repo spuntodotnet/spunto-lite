@@ -85,4 +85,121 @@ test.describe("projects dashboard", () => {
     await page.goto("/projects/new")
     await expect(page).toHaveURL(/\/projects\/new$/)
   })
+
+  // A project that has never been built has no log to show, so the build-cache row
+  // must stay plain markup. Regression guard on the *absence* of an affordance: the
+  // design system turns a target into a <button> as soon as it gets an `onSelect`,
+  // and handing it one unconditionally is how this becomes a button that does nothing.
+  test("the build-cache row is inert until the project has a build", async ({ page }) => {
+    await page.goto(`/projects/${projectId}`)
+    await expect(page.getByText("Build cache")).toBeVisible()
+    await expect(page.getByText("not built")).toBeVisible()
+    await expect(page.getByRole("button", { name: /local · Docker/ })).toHaveCount(0)
+  })
+})
+
+// The build log used to be reachable only from a workspace page, and only while that
+// workspace had no container yet — which is the one moment you aren't looking for it.
+// A failed build is the case that matters: the panel is where you find out why.
+test.describe("build log from the project panel", () => {
+  let projectId: string
+
+  test.beforeEach(async ({ request }) => {
+    // A base image no registry can serve: the build fails within seconds, at the pull,
+    // without downloading anything. Enough to put a real row in `/builds` to open.
+    const res = await request.post("/api/projects", {
+      data: { name: `e2e-buildlog-${Date.now()}`, image: "spunto-lite.invalid/no-such-image:0" },
+    })
+    expect(res.status(), await res.text()).toBe(201)
+    projectId = (await res.json()).id
+  })
+
+  test.afterEach(async ({ request }) => {
+    if (projectId) await request.delete(`/api/projects/${projectId}`)
+  })
+
+  test("clicking the build-cache row opens that build's log", async ({ page, request }) => {
+    await page.goto(`/projects/${projectId}`)
+    await page.getByRole("button", { name: "Pre-build" }).click()
+
+    // Wait for the build to be *over* before opening it, and not merely started.
+    // A build still in flight keeps changing its own log, which re-renders the
+    // panel for free and hides whether opening it printed anything — this test
+    // passed against a panel that only ever filled in because the build was
+    // still writing. A finished build's log is fixed, so what you see is exactly
+    // what opening the panel put there.
+    await expect
+      .poll(
+        async () => {
+          const builds = await (await request.get(`/api/projects/${projectId}/builds`)).json()
+          return builds[0]?.state
+        },
+        { timeout: 60_000 }
+      )
+      .toBe("error")
+
+    // Reload so the page's own /builds poll *starts* from the finished log. Without
+    // this the test only proves the panel fills in eventually: the poll that lands
+    // after the panel is open re-renders it either way, which is precisely how a
+    // panel that never printed on open still went green here.
+    await page.reload()
+
+    const row = page.getByRole("button", { name: /local · Docker/ })
+    await expect(row).toBeVisible({ timeout: 15_000 })
+    await row.click()
+
+    const panel = page.getByRole("dialog", { name: "Build log" })
+    await expect(panel).toBeVisible()
+    // The image ref is what ties the log to the image it produced. Matched as a
+    // prefix on purpose: what the tag carries past the version is the build
+    // recipe's business, not this test's.
+    await expect(panel).toContainText(`mp-proj-${projectId}:v1`)
+
+    // The log itself, not just the bar around it. Asserting only the header let a
+    // regression through once: the terminal is mounted by the sheet, so printing
+    // into it from outside runs before it exists and leaves a panel that is
+    // correct in every respect except the one it is for. xterm's DOM renderer
+    // puts the characters in the page, one span per cell — hence the loose match
+    // on a word rather than on a whole line.
+    await expect(panel.locator(".xterm-rows")).toContainText(/ERROR/, { timeout: 15_000 })
+
+    // The blocks beside the log. This project declares no feature of its own, but every image is
+    // made of two, so the plan is base image → common-utils → spunto-pack → finalize. The pull is
+    // what failed, so nothing got done.
+    await expect(panel.getByText("Build steps")).toBeVisible()
+    await expect(panel.getByText("0/4")).toBeVisible()
+    await expect(panel.getByText("Pull base image")).toBeVisible()
+    // Exact: the block's label, not its OCI ref on the line below — which also says spunto-pack.
+    await expect(panel.getByText("spunto-pack", { exact: true })).toBeVisible()
+    await expect(panel.getByText("ghcr.io/coderhammer/features/spunto-pack:1")).toBeVisible()
+    await expect(panel.getByText("Finalize image")).toBeVisible()
+  })
+
+  test("the panel can launch another build, and asks for a forced one", async ({ page, request }) => {
+    await page.goto(`/projects/${projectId}`)
+    await page.getByRole("button", { name: "Pre-build" }).click()
+
+    await expect
+      .poll(
+        async () => {
+          const builds = await (await request.get(`/api/projects/${projectId}/builds`)).json()
+          return builds[0]?.state
+        },
+        { timeout: 60_000 }
+      )
+      .toBe("error")
+
+    await page.getByRole("button", { name: /local · Docker/ }).click()
+    const panel = page.getByRole("dialog", { name: "Build log" })
+    await expect(panel).toBeVisible()
+
+    // `force=1` is the whole point of the button: plain /build skips the work when
+    // the image is already there, so without the flag this would be a no-op on
+    // every project whose build succeeded — which is most of them.
+    const posted = page.waitForRequest(
+      (r) => r.method() === "POST" && r.url().includes(`/api/projects/${projectId}/build`)
+    )
+    await panel.getByRole("button", { name: "Rebuild image" }).click()
+    expect(new URL((await posted).url()).searchParams.get("force")).toBe("1")
+  })
 })

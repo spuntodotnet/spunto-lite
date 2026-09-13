@@ -6,9 +6,11 @@ import { BASE_DOMAIN } from "../lib/env"
 import { CODE_SERVER_EXTENSIONS_GALLERY } from "../lib/extension-registry"
 import {
   buildImageScript,
+  imageFeatures,
   buildSetupScript,
   buildStartScript,
   buildWorkerScript,
+  IMAGE_RECIPE_VERSION,
 } from "../lib/setup-script"
 import {
   docker,
@@ -27,9 +29,18 @@ import { resolveSecretsForSpawn } from "./secrets"
 import { serviceEnvForWorkers } from "./services"
 import { getSettings } from "./settings"
 import { readHostPrivateKey } from "../lib/ssh-keys"
+import { planBuildSteps, applyBuildLog, stampBuildSteps } from "../lib/build-steps"
 
+/**
+ * The tag carries two versions: the project's, and the *recipe's* — what `buildImageScript`
+ * bakes in (`IMAGE_RECIPE_VERSION`). An image is looked up by asking Docker whether the tag
+ * exists, so a project whose config never changed would otherwise keep spawning workers on an
+ * image built by an older release of Spunto Lite, indefinitely and invisibly. Bumping the recipe
+ * makes the lookup miss, which rebuilds. Images from an older recipe are left behind — they are
+ * ordinary dangling tags, `docker image prune` territory.
+ */
 function imageRefFor(projectId: string, version: number): string {
-  return `mp-proj-${projectId}:v${version}`
+  return `mp-proj-${projectId}:v${version}-r${IMAGE_RECIPE_VERSION}`
 }
 
 function hasDinD(project: Project): boolean {
@@ -42,10 +53,17 @@ async function imageExists(ref: string): Promise<boolean> {
   return docker.getImage(ref).inspect().then(() => true).catch(() => false)
 }
 
-/** Builds the per-(project,version) image if it isn't already present. Returns the image ref. */
-export async function ensureProjectImage(project: Project, version: number): Promise<string> {
+/**
+ * Builds the per-(project,version) image if it isn't already present. Returns the image ref.
+ *
+ * `force` is what separates "make sure this exists" from "build it again": spawning a worker
+ * wants the first, and stops at the existence check. A user who just read a build log and asked
+ * for another one wants the second — for them the existence check is the whole problem, since
+ * the image existing is precisely the state they're trying to leave.
+ */
+export async function ensureProjectImage(project: Project, version: number, force = false): Promise<string> {
   const ref = imageRefFor(project.id, version)
-  if (await imageExists(ref)) return ref
+  if (!force && (await imageExists(ref))) return ref
 
   const buildId = newId()
   db.insert(projectImageBuilds).values({ id: buildId, projectId: project.id, version, imageRef: ref, state: "building", logs: "" }).run()
@@ -57,28 +75,44 @@ export async function ensureProjectImage(project: Project, version: number): Pro
   })
 
   let logs = ""
+  // The plan is known before the first line is printed — that's what lets the UI grey out the
+  // blocks still to come instead of growing a list. The log then only moves them along.
+  // The same list `buildImageScript` is generated from — see `imageFeatures`. Reading it here
+  // rather than `project.features` is what puts common-utils and spunto-pack in the plan, greyed
+  // out, instead of appearing only once the build reaches them.
+  let steps = planBuildSteps({ ...project, features: imageFeatures(project.features) })
+  const advance = (state: "building" | "ready" | "error") => {
+    steps = stampBuildSteps(steps, applyBuildLog(steps, logs, state), new Date().toISOString())
+    return steps
+  }
+
   const flush = (chunk: string) => {
     logs += chunk
-    // Periodic persistence so the UI can tail progress.
-    db.update(projectImageBuilds).set({ logs }).where(eq(projectImageBuilds.id, buildId)).run()
+    // Periodic persistence so the UI can tail progress. Steps ride along on the same write:
+    // they're derived from the log we're already storing, so this costs one JSON encode, and
+    // the two can never disagree about how far the build got.
+    db.update(projectImageBuilds).set({ logs, steps: advance("building") }).where(eq(projectImageBuilds.id, buildId)).run()
   }
 
   try {
-    await buildProjectImage({ baseImage: project.image, buildScript: script, imageRef: ref, onLog: flush })
-    db.update(projectImageBuilds).set({ state: "ready", logs }).where(eq(projectImageBuilds.id, buildId)).run()
+    await buildProjectImage({ baseImage: project.image, buildScript: script, imageRef: ref, noCache: force, onLog: flush })
+    db.update(projectImageBuilds).set({ state: "ready", logs, steps: advance("ready") }).where(eq(projectImageBuilds.id, buildId)).run()
     return ref
   } catch (err) {
     logs += `\n[build] ERROR: ${(err as Error).message}\n`
-    db.update(projectImageBuilds).set({ state: "error", logs }).where(eq(projectImageBuilds.id, buildId)).run()
+    db.update(projectImageBuilds).set({ state: "error", logs, steps: advance("error") }).where(eq(projectImageBuilds.id, buildId)).run()
     throw err
   }
 }
 
-/** Fire-and-forget pre-build of the current version's image (no-op if already built). */
-export function triggerBuild(projectId: string): boolean {
+/**
+ * Fire-and-forget build of the current version's image. No-op if it is already built, unless
+ * `force` — which rebuilds it from scratch, cache included.
+ */
+export function triggerBuild(projectId: string, force = false): boolean {
   const project = getProjectRow(projectId)
   if (!project) return false
-  void ensureProjectImage(project, project.currentVersion).catch((e) => console.error(`[build ${projectId}]`, e))
+  void ensureProjectImage(project, project.currentVersion, force).catch((e) => console.error(`[build ${projectId}]`, e))
   return true
 }
 

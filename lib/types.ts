@@ -1,3 +1,6 @@
+import type { BuildStep } from "./build-steps"
+export type { BuildStep }
+
 // Client-facing types (kept separate from db/schema.ts so client bundles never
 // pull in better-sqlite3/drizzle runtime).
 
@@ -103,6 +106,12 @@ export type ProjectImageBuild = {
   imageRef: string
   state: "building" | "ready" | "error"
   logs: string
+  /**
+   * The build as timestamped blocks. Null on every build recorded before the column existed —
+   * those are redrawn from their log alone (`planFromLog`), without durations. Treat absence as
+   * "this build predates steps", never as "this build had none".
+   */
+  steps: BuildStep[] | null
   createdAt: string
 }
 
