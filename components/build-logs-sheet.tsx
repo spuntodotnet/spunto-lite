@@ -12,8 +12,10 @@ import {
   type TerminalHandle,
   type TerminalPanelStatus,
 } from "@spunto/design-system"
+import { BuildSteps } from "@spunto/design-system/projects"
 import { useLogSnapshot } from "@/components/logs-panel"
-import type { ProjectImageBuild } from "@/lib/types"
+import { applyBuildLog, planFromLog } from "@/lib/build-steps"
+import type { BuildStep, ProjectImageBuild } from "@/lib/types"
 
 /**
  * A build's three states, in the panel's vocabulary. The wording is overridden
@@ -78,12 +80,33 @@ export function BuildLogsSheet({
           </p>
         </SheetHeader>
 
-        <div className="min-h-0 flex-1">
-          <BuildLogTerminal build={build} onRebuild={onRebuild} rebuilding={rebuilding} />
+        {/* Blocks beside the log, not instead of it: the list answers "what is it doing, and
+            for how long", the log answers "what exactly did it say". Stacked below `lg`, where
+            two columns would leave neither readable. */}
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+          <div className="min-h-0 shrink-0 border-b border-border lg:w-64 lg:border-r lg:border-b-0">
+            <BuildSteps steps={stepsFor(build)} className="h-full max-h-48 lg:max-h-none" />
+          </div>
+          <div className="min-h-0 flex-1">
+            <BuildLogTerminal build={build} onRebuild={onRebuild} rebuilding={rebuilding} />
+          </div>
         </div>
       </SheetContent>
     </Sheet>
   )
+}
+
+/**
+ * The blocks to draw for a build, whichever release recorded it.
+ *
+ * A build stored since the `steps` column exists carries its own, timestamped as they ran —
+ * nothing to recompute. One recorded before it never will, and re-deriving from its log is all
+ * there is: the same states, minus the durations (a log has no clock in it) and minus the blocks
+ * it never reached (a log cannot mention what never ran). Both read as a build; only the older
+ * one reads as a shorter one, which is the honest rendering of what was kept about it.
+ */
+function stepsFor(build: ProjectImageBuild): BuildStep[] {
+  return build.steps ?? applyBuildLog(planFromLog(build.logs), build.logs, build.state)
 }
 
 /**

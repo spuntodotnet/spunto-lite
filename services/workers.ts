@@ -28,6 +28,7 @@ import { resolveSecretsForSpawn } from "./secrets"
 import { serviceEnvForWorkers } from "./services"
 import { getSettings } from "./settings"
 import { readHostPrivateKey } from "../lib/ssh-keys"
+import { planBuildSteps, applyBuildLog, stampBuildSteps } from "../lib/build-steps"
 
 /**
  * The tag carries two versions: the project's, and the *recipe's* — what `buildImageScript`
@@ -73,19 +74,29 @@ export async function ensureProjectImage(project: Project, version: number, forc
   })
 
   let logs = ""
+  // The plan is known before the first line is printed — that's what lets the UI grey out the
+  // blocks still to come instead of growing a list. The log then only moves them along.
+  let steps = planBuildSteps(project)
+  const advance = (state: "building" | "ready" | "error") => {
+    steps = stampBuildSteps(steps, applyBuildLog(steps, logs, state), new Date().toISOString())
+    return steps
+  }
+
   const flush = (chunk: string) => {
     logs += chunk
-    // Periodic persistence so the UI can tail progress.
-    db.update(projectImageBuilds).set({ logs }).where(eq(projectImageBuilds.id, buildId)).run()
+    // Periodic persistence so the UI can tail progress. Steps ride along on the same write:
+    // they're derived from the log we're already storing, so this costs one JSON encode, and
+    // the two can never disagree about how far the build got.
+    db.update(projectImageBuilds).set({ logs, steps: advance("building") }).where(eq(projectImageBuilds.id, buildId)).run()
   }
 
   try {
     await buildProjectImage({ baseImage: project.image, buildScript: script, imageRef: ref, noCache: force, onLog: flush })
-    db.update(projectImageBuilds).set({ state: "ready", logs }).where(eq(projectImageBuilds.id, buildId)).run()
+    db.update(projectImageBuilds).set({ state: "ready", logs, steps: advance("ready") }).where(eq(projectImageBuilds.id, buildId)).run()
     return ref
   } catch (err) {
     logs += `\n[build] ERROR: ${(err as Error).message}\n`
-    db.update(projectImageBuilds).set({ state: "error", logs }).where(eq(projectImageBuilds.id, buildId)).run()
+    db.update(projectImageBuilds).set({ state: "error", logs, steps: advance("error") }).where(eq(projectImageBuilds.id, buildId)).run()
     throw err
   }
 }

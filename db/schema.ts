@@ -1,8 +1,10 @@
 import { sql } from "drizzle-orm"
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core"
 import type { SharedVolume } from "../lib/shared-volumes"
+import type { BuildStep } from "../lib/build-steps"
 
 export type { SharedVolume }
+export type { BuildStep }
 
 // ─── Shared JSON-ish shapes ──────────────────────────────────────────────────
 
@@ -199,6 +201,10 @@ export const projectImageBuilds = sqliteTable("project_image_builds", {
   // building | ready | error
   state: text("state").notNull().default("building"),
   logs: text("logs").notNull().default(""),
+  // The build as blocks, timestamped as they run — what the log cannot carry, since it has no
+  // clock in it. Nullable, and stays null for every build recorded before this column existed:
+  // those are drawn from their log alone, without durations. See lib/build-steps.ts.
+  steps: text("steps", { mode: "json" }).$type<BuildStep[] | null>(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 })
 

@@ -162,6 +162,13 @@ test.describe("build log from the project panel", () => {
     // puts the characters in the page, one span per cell — hence the loose match
     // on a word rather than on a whole line.
     await expect(panel.locator(".xterm-rows")).toContainText(/ERROR/, { timeout: 15_000 })
+
+    // The blocks beside the log. This project has no feature and no extension, so the plan is
+    // base image → runtime → finalize, and the pull is what failed: nothing got done.
+    await expect(panel.getByText("Build steps")).toBeVisible()
+    await expect(panel.getByText("0/3")).toBeVisible()
+    await expect(panel.getByText("Pull base image")).toBeVisible()
+    await expect(panel.getByText("Finalize image")).toBeVisible()
   })
 
   test("the panel can launch another build, and asks for a forced one", async ({ page, request }) => {
