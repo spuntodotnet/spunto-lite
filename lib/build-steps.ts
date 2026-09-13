@@ -29,6 +29,11 @@ export type BuildStep = {
 
 type PlanInput = {
   image: string
+  /**
+   * Every feature the build installs, in order — `imageFeatures()` from `setup-script.ts`, which
+   * is the same list the script itself is generated from. Passed in rather than imported so this
+   * module stays free of the script builder: half of it runs in the browser, for old builds.
+   */
   features: { id: string; ociRef?: string }[]
   vscodeExtensions?: string[]
 }
@@ -40,17 +45,15 @@ const FINALIZE_STEP_ID = "finalize"
 
 const featureStepId = (id: string) => `feature:${id}`
 
+/** Printed only by the pre-spunto-pack script, which installed code-server and tmux itself. */
+const LEGACY_RUNTIME_MARKER = /^\[build\] Installing (code-server|tmux)\.\.\.$/m
+
 /** The blocks `buildImageScript` will run for this project, all still `pending`. */
 export function planBuildSteps(project: PlanInput): BuildStep[] {
+  // No block for the editor and the terminal: they are not a step of their own any more, they
+  // are what `spunto-pack` installs, and it is in the list below like any other feature.
   const steps: BuildStep[] = [
     { id: IMAGE_STEP_ID, kind: "image", label: "Pull base image", detail: project.image, state: "pending" },
-    {
-      id: RUNTIME_STEP_ID,
-      kind: "runtime",
-      label: "Editor and terminal",
-      detail: "code-server, tmux",
-      state: "pending",
-    },
   ]
 
   for (const f of project.features) {
@@ -90,8 +93,20 @@ export function planBuildSteps(project: PlanInput): BuildStep[] {
 export function planFromLog(logs: string): BuildStep[] {
   const steps: BuildStep[] = [
     { id: IMAGE_STEP_ID, kind: "image", label: "Pull base image", detail: baseImageFromLog(logs), state: "pending" },
-    { id: RUNTIME_STEP_ID, kind: "runtime", label: "Editor and terminal", detail: "code-server, tmux", state: "pending" },
   ]
+
+  // Releases before spunto-pack installed the editor and the terminal inline, with no feature of
+  // their own — that stretch of the build is only nameable from the marker it printed. Absent on
+  // any recent log, where the same work is `spunto-pack` and shows up as a feature below.
+  if (LEGACY_RUNTIME_MARKER.test(logs)) {
+    steps.push({
+      id: RUNTIME_STEP_ID,
+      kind: "runtime",
+      label: "Editor and terminal",
+      detail: "code-server, tmux",
+      state: "pending",
+    })
+  }
 
   for (const id of featureIdsInLog(logs)) {
     steps.push({ id: featureStepId(id), kind: "feature", label: id, state: "pending" })

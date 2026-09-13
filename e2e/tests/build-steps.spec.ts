@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test"
 
 import { applyBuildLog, planBuildSteps, planFromLog, stampBuildSteps } from "../../lib/build-steps"
+import { imageFeatures } from "../../lib/setup-script"
 
 // Pure tests, no server: `lib/build-steps.ts` is the whole contract between a build log and the
 // design system's `BuildSteps`. It runs on both sides — the server stamps it as the build goes,
@@ -14,9 +15,32 @@ const stateOf = (steps: { id: string; state: string }[], id: string) => steps.fi
 test.describe("build steps", () => {
   test("the plan is fully pending before a single line is logged", () => {
     const steps = planBuildSteps({ image: "node:24", features: FEATURES, vscodeExtensions: ["a.b"] })
-    // Base image, runtime, the feature, extensions, finalize — the table of contents of the image.
-    expect(steps.map((s) => s.id)).toEqual(["image", "runtime", "feature:claude-code", "extensions", "finalize"])
+    // Base image, the feature, extensions, finalize — the table of contents of the image.
+    expect(steps.map((s) => s.id)).toEqual(["image", "feature:claude-code", "extensions", "finalize"])
     expect(steps.every((s) => s.state === "pending")).toBe(true)
+  })
+
+  test("the plan lists the two features the image is made of, from the script's own list", () => {
+    // `imageFeatures` is what `buildImageScript` is generated from, so the plan cannot describe a
+    // recipe the build no longer follows — that is the whole reason it is read from there.
+    const steps = planBuildSteps({ image: "node:24", features: imageFeatures(FEATURES) })
+    expect(steps.map((s) => s.id)).toEqual([
+      "image",
+      "feature:common-utils",
+      "feature:spunto-pack",
+      "feature:claude-code",
+      "finalize",
+    ])
+    // Greyed out from the start rather than appearing as the build reaches them.
+    expect(steps.every((s) => s.state === "pending")).toBe(true)
+    expect(steps.find((s) => s.id === "feature:spunto-pack")?.detail).toContain("spunto-pack")
+  })
+
+  test("there is no separate editor-and-terminal block any more", () => {
+    // code-server and tmux are what spunto-pack installs; a block of their own would sit next to
+    // it claiming a duration for work the feature below did.
+    const steps = planBuildSteps({ image: "node:24", features: imageFeatures([]) })
+    expect(steps.map((s) => s.id)).not.toContain("runtime")
   })
 
   test("a feature with no OCI ref is skipped up front, not left pending forever", () => {
@@ -33,7 +57,6 @@ test.describe("build steps", () => {
       "building"
     )
     expect(stateOf(mid, "image")).toBe("done")
-    expect(stateOf(mid, "runtime")).toBe("done")
     expect(stateOf(mid, "feature:claude-code")).toBe("running")
     expect(stateOf(mid, "finalize")).toBe("pending")
   })
@@ -54,7 +77,6 @@ test.describe("build steps", () => {
       ["Step 3/3 : RUN bash /tmp/x", "[build] Installing feature: claude-code...", "[feature] claude-code FAILED (exit 1)"].join("\n"),
       "error"
     )
-    expect(stateOf(steps, "runtime")).toBe("done")
     expect(stateOf(steps, "feature:claude-code")).toBe("error")
   })
 
@@ -63,7 +85,7 @@ test.describe("build steps", () => {
     // plan was incomplete", never to a block silently missing from the list.
     const plan = planBuildSteps({ image: "node:24", features: [] })
     const steps = applyBuildLog(plan, "Step 3/3 : RUN bash /tmp/x\n[build] Installing feature: surprise...", "building")
-    expect(steps.map((s) => s.id)).toEqual(["image", "runtime", "feature:surprise", "finalize"])
+    expect(steps.map((s) => s.id)).toEqual(["image", "feature:surprise", "finalize"])
     // And before finalize, not after it.
     expect(steps.findIndex((s) => s.id === "feature:surprise")).toBeLessThan(steps.findIndex((s) => s.id === "finalize"))
   })
@@ -82,6 +104,8 @@ test.describe("build steps", () => {
     ].join("\n")
 
     const steps = applyBuildLog(planFromLog(logs), logs, "ready")
+    // The runtime block exists only here: that release installed code-server inline, with no
+    // feature to name it. A build made since gets `spunto-pack` in its place, as a feature.
     expect(steps.map((s) => s.id)).toEqual(["image", "runtime", "feature:claude-code", "finalize"])
     expect(steps.every((s) => s.state === "done")).toBe(true)
     // The base image ref survives, read back out of the FROM line.
@@ -90,9 +114,31 @@ test.describe("build steps", () => {
     expect(steps.every((s) => !s.startedAt && !s.completedAt)).toBe(true)
   })
 
+  test("a spunto-pack build read back from its log has no stray runtime block", () => {
+    // Same fallback path as above, on a log from the two-feature recipe: code-server and tmux
+    // are inside `spunto-pack` here, so the block that named them inline must not reappear.
+    const logs = [
+      "Step 1/3 : FROM mcr.microsoft.com/devcontainers/javascript-node:20",
+      "Step 3/3 : RUN bash /tmp/x",
+      "[build] Installing feature: common-utils...",
+      "[feature] common-utils installed",
+      "[build] Installing feature: spunto-pack...",
+      "[feature] spunto-pack installed",
+      "[build] Image build complete",
+    ].join("\n")
+
+    const steps = applyBuildLog(planFromLog(logs), logs, "ready")
+    expect(steps.map((s) => s.id)).toEqual([
+      "image",
+      "feature:common-utils",
+      "feature:spunto-pack",
+      "finalize",
+    ])
+  })
+
   test("an empty log still yields a readable shape rather than throwing", () => {
     const steps = applyBuildLog(planFromLog(""), "", "building")
-    expect(steps.map((s) => s.id)).toEqual(["image", "runtime", "finalize"])
+    expect(steps.map((s) => s.id)).toEqual(["image", "finalize"])
     expect(steps.every((s) => s.state === "pending")).toBe(true)
   })
 

@@ -6,6 +6,7 @@ import { BASE_DOMAIN } from "../lib/env"
 import { CODE_SERVER_EXTENSIONS_GALLERY } from "../lib/extension-registry"
 import {
   buildImageScript,
+  imageFeatures,
   buildSetupScript,
   buildStartScript,
   buildWorkerScript,
@@ -76,7 +77,10 @@ export async function ensureProjectImage(project: Project, version: number, forc
   let logs = ""
   // The plan is known before the first line is printed — that's what lets the UI grey out the
   // blocks still to come instead of growing a list. The log then only moves them along.
-  let steps = planBuildSteps(project)
+  // The same list `buildImageScript` is generated from — see `imageFeatures`. Reading it here
+  // rather than `project.features` is what puts common-utils and spunto-pack in the plan, greyed
+  // out, instead of appearing only once the build reaches them.
+  let steps = planBuildSteps({ ...project, features: imageFeatures(project.features) })
   const advance = (state: "building" | "ready" | "error") => {
     steps = stampBuildSteps(steps, applyBuildLog(steps, logs, state), new Date().toISOString())
     return steps

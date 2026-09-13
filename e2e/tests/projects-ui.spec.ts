@@ -163,11 +163,15 @@ test.describe("build log from the project panel", () => {
     // on a word rather than on a whole line.
     await expect(panel.locator(".xterm-rows")).toContainText(/ERROR/, { timeout: 15_000 })
 
-    // The blocks beside the log. This project has no feature and no extension, so the plan is
-    // base image → runtime → finalize, and the pull is what failed: nothing got done.
+    // The blocks beside the log. This project declares no feature of its own, but every image is
+    // made of two, so the plan is base image → common-utils → spunto-pack → finalize. The pull is
+    // what failed, so nothing got done.
     await expect(panel.getByText("Build steps")).toBeVisible()
-    await expect(panel.getByText("0/3")).toBeVisible()
+    await expect(panel.getByText("0/4")).toBeVisible()
     await expect(panel.getByText("Pull base image")).toBeVisible()
+    // Exact: the block's label, not its OCI ref on the line below — which also says spunto-pack.
+    await expect(panel.getByText("spunto-pack", { exact: true })).toBeVisible()
+    await expect(panel.getByText("ghcr.io/coderhammer/features/spunto-pack:1")).toBeVisible()
     await expect(panel.getByText("Finalize image")).toBeVisible()
   })
 

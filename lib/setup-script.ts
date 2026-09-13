@@ -237,6 +237,32 @@ const EXTENSION_INSTALL_SUMMARY = [
   "fi",
 ]
 
+/**
+ * Every feature the image build installs, in the order it installs them: the two it is made of,
+ * then the project's own.
+ *
+ * Exported because the build *log* is not the only thing that has to know this list — the step
+ * list drawn while the build runs needs it too, and needs it before the first line is printed,
+ * which is exactly what a log cannot provide. Having both read the same function is what keeps
+ * "what the build will do" and "what the build did" from drifting: change the recipe here and
+ * the plan follows, instead of a second copy of it silently describing the previous release.
+ *
+ * A project that picked common-utils itself gets its options merged over ours rather than a
+ * second install.
+ */
+export function imageFeatures(features: ProjectFeature[]): ProjectFeature[] {
+  const userCommonUtils = features.find((f) => f.id === "common-utils")
+  return [
+    {
+      id: "common-utils",
+      ociRef: userCommonUtils?.ociRef ?? COMMON_UTILS_REF,
+      options: { ...COMMON_UTILS_OPTIONS, ...userCommonUtils?.options },
+    },
+    { id: "spunto-pack", ociRef: SPUNTO_PACK_REF, options: SPUNTO_PACK_OPTIONS },
+    ...features.filter((f) => f.id !== "common-utils"),
+  ]
+}
+
 // ─── 1. buildImageScript (prebuild) ───────────────────────────────────────────
 
 /**
@@ -287,20 +313,7 @@ export function buildImageScript(params: {
 
   const hasDinD = params.features.some((f) => f.id === "docker-in-docker") || !!params.dind
 
-  // The two features every image is made of, ahead of the project's own. A project that picked
-  // common-utils itself gets its options merged over ours rather than a second install.
-  const userCommonUtils = params.features.find((f) => f.id === "common-utils")
-  const baseFeatures: ProjectFeature[] = [
-    {
-      id: "common-utils",
-      ociRef: userCommonUtils?.ociRef ?? COMMON_UTILS_REF,
-      options: { ...COMMON_UTILS_OPTIONS, ...userCommonUtils?.options },
-    },
-    { id: "spunto-pack", ociRef: SPUNTO_PACK_REF, options: SPUNTO_PACK_OPTIONS },
-  ]
-
-  const allFeatures = [...baseFeatures, ...params.features.filter((f) => f.id !== "common-utils")]
-  for (const { id, script } of resolveFeatures(allFeatures)) {
+  for (const { id, script } of resolveFeatures(imageFeatures(params.features))) {
     lines.push(`echo "[build] Installing feature: ${id}..."`, script)
   }
 
