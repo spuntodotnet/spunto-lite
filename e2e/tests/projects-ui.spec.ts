@@ -118,12 +118,32 @@ test.describe("build log from the project panel", () => {
     if (projectId) await request.delete(`/api/projects/${projectId}`)
   })
 
-  test("clicking the build-cache row opens that build's log", async ({ page }) => {
+  test("clicking the build-cache row opens that build's log", async ({ page, request }) => {
     await page.goto(`/projects/${projectId}`)
     await page.getByRole("button", { name: "Pre-build" }).click()
 
-    // The row becomes a button as soon as a build row exists — the page polls /builds
-    // every 3s, so this lands well before the build itself resolves either way.
+    // Wait for the build to be *over* before opening it, and not merely started.
+    // A build still in flight keeps changing its own log, which re-renders the
+    // panel for free and hides whether opening it printed anything — this test
+    // passed against a panel that only ever filled in because the build was
+    // still writing. A finished build's log is fixed, so what you see is exactly
+    // what opening the panel put there.
+    await expect
+      .poll(
+        async () => {
+          const builds = await (await request.get(`/api/projects/${projectId}/builds`)).json()
+          return builds[0]?.state
+        },
+        { timeout: 60_000 }
+      )
+      .toBe("error")
+
+    // Reload so the page's own /builds poll *starts* from the finished log. Without
+    // this the test only proves the panel fills in eventually: the poll that lands
+    // after the panel is open re-renders it either way, which is precisely how a
+    // panel that never printed on open still went green here.
+    await page.reload()
+
     const row = page.getByRole("button", { name: /local · Docker/ })
     await expect(row).toBeVisible({ timeout: 15_000 })
     await row.click()
@@ -134,5 +154,13 @@ test.describe("build log from the project panel", () => {
     // prefix on purpose: what the tag carries past the version is the build
     // recipe's business, not this test's.
     await expect(panel).toContainText(`mp-proj-${projectId}:v1`)
+
+    // The log itself, not just the bar around it. Asserting only the header let a
+    // regression through once: the terminal is mounted by the sheet, so printing
+    // into it from outside runs before it exists and leaves a panel that is
+    // correct in every respect except the one it is for. xterm's DOM renderer
+    // puts the characters in the page, one span per cell — hence the loose match
+    // on a word rather than on a whole line.
+    await expect(panel.locator(".xterm-rows")).toContainText(/ERROR/, { timeout: 15_000 })
   })
 })
