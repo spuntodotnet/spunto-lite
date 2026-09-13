@@ -1,6 +1,6 @@
 "use client"
 
-import { use } from "react"
+import { use, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
@@ -22,6 +22,10 @@ import { buttonVariants } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { WorkersPanel } from "@/components/workers-panel"
 import { SpawnWorkerButton } from "@/components/spawn-worker-button"
+import { BuildLogsSheet } from "@/components/build-logs-sheet"
+
+/** The single build target of a Lite install — named once, shown on the row and in its log panel. */
+const BUILD_TARGET_LABEL = "local · Docker"
 
 export default function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -61,6 +65,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["builds", id] }); toast.success("Pre-building image…") },
     onError: (e) => toast.error((e as Error).message),
   })
+  const [logsOpen, setLogsOpen] = useState(false)
 
   if (isError) {
     router.push("/projects")
@@ -112,8 +117,17 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             render={{ link: ({ href, className, children }) => <Link href={href} className={className}>{children}</Link> }}
             secrets={secrets}
             // Lite has exactly one build target — the local Docker daemon — where
-            // the dashboard lists one row per BYOC node.
-            buildTargets={[{ id: "local", label: "local · Docker", state: currentBuild?.state }]}
+            // the dashboard lists one row per BYOC node. Clicking it opens that
+            // build's log, same as clicking a node there; with no build yet there
+            // is nothing to open, and the row stays inert rather than dead.
+            buildTargets={[
+              {
+                id: "local",
+                label: BUILD_TARGET_LABEL,
+                state: currentBuild?.state,
+                onSelect: currentBuild ? () => setLogsOpen(true) : undefined,
+              },
+            ]}
             onPrebuild={() => prebuild.mutate()}
             prebuilding={prebuild.isPending || isBuilding}
             versions={versions.map((v) => ({ id: v.id, version: v.version, createdAt: v.createdAt, image: v.config.image }))}
@@ -164,6 +178,17 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           <WorkersPanel projectId={id} projectVersion={project.currentVersion} />
         </div>
       </div>
+
+      {/* The `builds` query above polls every 3s, so an open panel tails a running
+          build for free — it reads the same object the row's state comes from. */}
+      {currentBuild && (
+        <BuildLogsSheet
+          open={logsOpen}
+          onOpenChange={setLogsOpen}
+          build={currentBuild}
+          targetLabel={BUILD_TARGET_LABEL}
+        />
+      )}
     </div>
   )
 }

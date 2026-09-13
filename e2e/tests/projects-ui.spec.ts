@@ -85,4 +85,54 @@ test.describe("projects dashboard", () => {
     await page.goto("/projects/new")
     await expect(page).toHaveURL(/\/projects\/new$/)
   })
+
+  // A project that has never been built has no log to show, so the build-cache row
+  // must stay plain markup. Regression guard on the *absence* of an affordance: the
+  // design system turns a target into a <button> as soon as it gets an `onSelect`,
+  // and handing it one unconditionally is how this becomes a button that does nothing.
+  test("the build-cache row is inert until the project has a build", async ({ page }) => {
+    await page.goto(`/projects/${projectId}`)
+    await expect(page.getByText("Build cache")).toBeVisible()
+    await expect(page.getByText("not built")).toBeVisible()
+    await expect(page.getByRole("button", { name: /local · Docker/ })).toHaveCount(0)
+  })
+})
+
+// The build log used to be reachable only from a workspace page, and only while that
+// workspace had no container yet — which is the one moment you aren't looking for it.
+// A failed build is the case that matters: the panel is where you find out why.
+test.describe("build log from the project panel", () => {
+  let projectId: string
+
+  test.beforeEach(async ({ request }) => {
+    // A base image no registry can serve: the build fails within seconds, at the pull,
+    // without downloading anything. Enough to put a real row in `/builds` to open.
+    const res = await request.post("/api/projects", {
+      data: { name: `e2e-buildlog-${Date.now()}`, image: "spunto-lite.invalid/no-such-image:0" },
+    })
+    expect(res.status(), await res.text()).toBe(201)
+    projectId = (await res.json()).id
+  })
+
+  test.afterEach(async ({ request }) => {
+    if (projectId) await request.delete(`/api/projects/${projectId}`)
+  })
+
+  test("clicking the build-cache row opens that build's log", async ({ page }) => {
+    await page.goto(`/projects/${projectId}`)
+    await page.getByRole("button", { name: "Pre-build" }).click()
+
+    // The row becomes a button as soon as a build row exists — the page polls /builds
+    // every 3s, so this lands well before the build itself resolves either way.
+    const row = page.getByRole("button", { name: /local · Docker/ })
+    await expect(row).toBeVisible({ timeout: 15_000 })
+    await row.click()
+
+    const panel = page.getByRole("dialog", { name: "Build log" })
+    await expect(panel).toBeVisible()
+    // The image ref is what ties the log to the image it produced. Matched as a
+    // prefix on purpose: what the tag carries past the version is the build
+    // recipe's business, not this test's.
+    await expect(panel).toContainText(`mp-proj-${projectId}:v1`)
+  })
 })
