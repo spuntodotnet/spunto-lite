@@ -1,5 +1,6 @@
 import { getWorkerRow } from "@/services/workers"
-import { listTmuxSessions, createTmuxSession } from "@/lib/docker"
+import { listTerminalSessions, createTerminalSession } from "@/lib/docker"
+import { isAttached } from "@/lib/terminal-attachments"
 import { json } from "@/lib/http"
 import { newShortId } from "@/lib/id"
 
@@ -10,7 +11,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const { id } = await params
   const w = getWorkerRow(id)
   if (!w?.containerId) return json([])
-  return json(await listTmuxSessions(w.containerId).catch(() => []))
+  // Whether a session has a client is the WebSocket bridge's knowledge, not the container's —
+  // a dtach socket says who could connect, never who is.
+  return json(await listTerminalSessions(w.containerId, (name) => isAttached(id, name)).catch(() => []))
 }
 
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -18,6 +21,6 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const w = getWorkerRow(id)
   if (!w?.containerId) return json({ error: "Worker not running" }, { status: 400 })
   const name = `work-${newShortId().slice(0, 4)}`
-  await createTmuxSession(w.containerId, name)
+  await createTerminalSession(w.containerId, name)
   return json({ name }, { status: 201 })
 }

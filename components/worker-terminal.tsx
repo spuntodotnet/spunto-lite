@@ -18,8 +18,14 @@ function utf8ToB64(s: string): string {
   return btoa(bin)
 }
 
-// Bare interactive xterm bound to a tmux session over the terminal WebSocket.
+// Bare interactive xterm bound to a persistent dtach session over the terminal WebSocket.
 // The session strip renders the chrome above it.
+//
+// The emulator owns the mouse and the history here, which is the point of dtach: tmux used to
+// hold both (its `mouse on` is the only way to make the wheel scroll, and it swallows drags with
+// it), so scrollback was a tmux setting and selecting text meant fighting it. Now the wheel,
+// the selection and the search are the browser's — hence `scrollback` below, which is what
+// replaces tmux's `history-limit`.
 export function WorkerXterm({ workerId, session = "main" }: { workerId: string; session?: string }) {
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -38,6 +44,9 @@ export function WorkerXterm({ workerId, session = "main" }: { workerId: string; 
 
       term = new Terminal({
         cursorBlink: true,
+        // Matches the 50k lines tmux kept. The replay buffer restores what a *reattach* missed;
+        // this is what a live session keeps in the page.
+        scrollback: 50000,
         fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace',
         fontSize: 13,
         lineHeight: 1.4,

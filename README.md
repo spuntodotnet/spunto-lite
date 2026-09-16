@@ -48,6 +48,24 @@ HTTPS with a local mkcert certificate. See
   host daemon.
 - **SQLite** (via Drizzle) for projects/workers/secrets, in a Docker volume.
 - **`~/.ssh` mounted read-only** and injected into each worker for git identity.
+- **[`@spunto/build`](https://www.npmjs.com/package/@spunto/build)** for everything
+  the two Spuntos have to agree on: the image recipe and the shell it generates, the
+  build-log protocol, the extension-registry clients, the Docker naming scheme and the
+  portable project format. Same idea as `@spunto/design-system`, one layer down — that
+  one owns what the products look like, this one what they agree on. A workspace image
+  is your base image plus two devcontainer features,
+  [`common-utils`](https://github.com/devcontainers/features/tree/main/src/common-utils)
+  then [`spunto-pack`](https://github.com/coderhammer/features/tree/main/src/spunto-pack),
+  before the features the project declares; images are tagged
+  `mp-proj-<id>:v<version>-r<recipe>`, so a release that changes what goes into an image
+  rebuilds it instead of leaving your workers on the old one.
+- **A persistent terminal on dtach**, not a multiplexer. Closing the tab does not kill
+  the build: a throwaway `docker exec` attaches to a session that outlives it. dtach only
+  does persistence and forwards every byte, so the *browser* keeps the mouse, the
+  scrollback and the search — with tmux, the only way to make the wheel scroll history is
+  `mouse on`, which also swallows every drag and takes text selection with it. What dtach
+  does not do is remember the screen, so each session is recorded container-side with
+  `script(1)` and the tail replayed on attach.
 - **Shared services** — the local take on Spunto's *Ship* pillar. Declare a
   long-lived dependency once (Postgres, Elasticsearch, MinIO… image + env + ports
   + persistent volumes, presets included) under **Services**, and **every worker of

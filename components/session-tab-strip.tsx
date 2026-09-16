@@ -2,7 +2,7 @@
 
 import { Terminal as TerminalIcon, X, Plus } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { TmuxSession } from "@/hooks/use-tmux-sessions"
+import type { TerminalSession } from "@/hooks/use-terminal-sessions"
 
 export function SessionTabStrip({
   tabs,
@@ -12,7 +12,7 @@ export function SessionTabStrip({
   killSession,
   busy,
 }: {
-  tabs: TmuxSession[]
+  tabs: TerminalSession[]
   active: string
   setActive: (name: string) => void
   createSession: () => void
@@ -27,14 +27,17 @@ export function SessionTabStrip({
           <button
             key={s.name}
             onClick={() => setActive(s.name)}
-            title={`${s.name} · ${s.windows} window${s.windows > 1 ? "s" : ""}${s.attached ? " · attached" : ""}`}
+            title={[s.name, s.title || s.command, s.attached ? "attached" : "running in background"].filter(Boolean).join(" · ")}
             className={cn(
               "group flex shrink-0 items-center gap-1.5 rounded-md pl-2 pr-1 py-1 text-[11px] font-mono transition-colors",
               isActive ? "bg-[#ea5400]/15 text-[#ff7a3d]" : "text-zinc-500 hover:bg-white/5 hover:text-zinc-300",
             )}
           >
             <TerminalIcon className="h-3 w-3 shrink-0 opacity-70" />
-            <span className="max-w-[110px] truncate">{s.name}</span>
+            {/* What the running program calls itself (OSC 0/2), else the session name. tmux kept
+                this in `pane_title`; dtach remembers nothing, so the package digs the last title
+                written out of the replay log — and an empty one means nobody reported any. */}
+            <span className="max-w-[110px] truncate">{s.title || s.name}</span>
             {!s.attached && <span className="h-1 w-1 shrink-0 rounded-full bg-emerald-500/70" title="running in background" />}
             <span
               role="button"
