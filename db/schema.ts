@@ -1,10 +1,32 @@
 import { sql } from "drizzle-orm"
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core"
 import type { SharedVolume } from "../lib/shared-volumes"
+import type { BuildStep } from "@spunto/build/steps"
 
 export type { SharedVolume }
+export type { BuildStep }
 
 // ─── Shared JSON-ish shapes ──────────────────────────────────────────────────
+
+/**
+ * `ProjectFeature` is the package's, unchanged: it is the input the script generators take, so a
+ * second definition here would be one shape maintained twice.
+ *
+ * `SetupStatus` is the package's, *widened* by two phases. A worker writes this file inside its
+ * container and the control plane reads it back minutes later, so the type has to cover what is
+ * already on disk — not only what today's generator emits. `pending` and `features` are Lite-era
+ * phases older workers still report; everything else is identical, and `timings` comes along.
+ *
+ * `Repository` stays local: the package types `provider` as a plain string (Cloud reaches forges
+ * Lite has none of), and the union here is what turns a typo into a compile error.
+ */
+import type { ProjectFeature, SetupStatus as SharedSetupStatus } from "@spunto/build/types"
+
+export type { ProjectFeature }
+
+export type SetupStatus = Omit<SharedSetupStatus, "phase"> & {
+  phase: SharedSetupStatus["phase"] | "pending" | "features"
+}
 
 export type Repository = {
   id: string
@@ -16,29 +38,7 @@ export type Repository = {
   branch?: string
 }
 
-export type ProjectFeature = {
-  id: string
-  options?: Record<string, string>
-  ociRef?: string
-  localScript?: string
-}
 
-export type SetupStatus = {
-  phase:
-    | "pending"
-    | "initializing"
-    | "credentials"
-    | "dotfiles"
-    | "cloning"
-    | "features"
-    | "lifecycle"
-    | "ready"
-    | "error"
-  repos: { name: string; state: "pending" | "cloning" | "done" | "error" }[]
-  postCreate: "pending" | "running" | "done" | "error" | null
-  postStart: "pending" | "running" | "done" | "error" | null
-  error?: string
-}
 
 /**
  * One environment variable of a shared service. Either a literal `value` (plain
@@ -199,6 +199,10 @@ export const projectImageBuilds = sqliteTable("project_image_builds", {
   // building | ready | error
   state: text("state").notNull().default("building"),
   logs: text("logs").notNull().default(""),
+  // The build as blocks, timestamped as the markers in the log went by — what a log cannot carry,
+  // since it has no clock in it. Nullable, and stays null for every build recorded before this
+  // column existed: those are redrawn from their log alone. Shape owned by @spunto/build/steps.
+  steps: text("steps", { mode: "json" }).$type<BuildStep[] | null>(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 })
 

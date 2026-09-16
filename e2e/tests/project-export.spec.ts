@@ -36,7 +36,10 @@ test.describe("project export", () => {
       )
 
       const body = await res.json()
-      expect(body.kind).toBe("spunto-lite/project")
+      // The neutral kind: the file is the one @spunto/build/spec defines, so a spec exported here
+      // imports into Spunto Cloud. Files written by older releases still say `spunto-lite/project`
+      // and are still accepted on read — see the legacy-kind case below.
+      expect(body.kind).toBe("spunto/project")
       expect(body.version).toBe(1)
       expect(body.project).toMatchObject({
         name: "e2e Export Me",

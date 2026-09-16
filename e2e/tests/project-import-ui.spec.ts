@@ -103,11 +103,26 @@ test.describe("project import", () => {
     }
   })
 
+  // Files exported by every Lite release before @spunto/build announce themselves as
+  // `spunto-lite/project`, and they are on people's disks. Refusing them to tidy up a string
+  // would break the half of the feature that already shipped.
+  //
+  // Built by rewriting *only* the kind of a real export, so the test says exactly that and
+  // nothing else: same file, older signature, and it still has to fill the same form.
+  test("a spec written by an older release still imports", async ({ page }) => {
+    const legacy = { ...(exported as Record<string, unknown>), kind: "spunto-lite/project" }
+
+    await page.goto("/projects/new")
+    await page.getByLabel("Import project JSON").setInputFiles(jsonFile(legacy))
+
+    await expectPrefilled(page, name)
+  })
+
   test("a file that isn't a project export is rejected", async ({ page }) => {
     await page.goto("/projects/new")
     await page.getByLabel("Import project JSON").setInputFiles(jsonFile({ hello: "world" }))
 
-    await expect(page.getByText("Not a spunto-lite project export")).toBeVisible()
+    await expect(page.getByText("Not a Spunto project spec")).toBeVisible()
     await expect(page.locator("#project-name")).toHaveValue("")
   })
 })

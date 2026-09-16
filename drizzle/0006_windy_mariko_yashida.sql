@@ -1,0 +1,1 @@
+ALTER TABLE `project_image_builds` ADD `steps` text;

@@ -14,7 +14,7 @@ import { removeWorker as removeWorkerContainer, removeProjectImages, removeProje
 import { generateSSHKeyPair, derivePublicKey } from "../lib/ssh"
 import { AVAILABLE_FEATURES } from "../lib/catalogs"
 import type { CreateProjectInput, UpdateProjectInput } from "../lib/validation"
-import { PROJECT_EXPORT_KIND, PROJECT_EXPORT_VERSION, type ProjectExport } from "../lib/project-export"
+import { buildProjectSpec, type ProjectExport } from "../lib/project-export"
 import { setProjectSecret, listProjectSecrets } from "./secrets"
 
 /**
@@ -222,37 +222,32 @@ export async function deleteProject(id: string): Promise<boolean> {
 export function exportProject(id: string): ProjectExport | undefined {
   const p = getProjectRow(id)
   if (!p) return undefined
-  return {
-    kind: PROJECT_EXPORT_KIND,
-    version: PROJECT_EXPORT_VERSION,
-    exportedAt: new Date().toISOString(),
-    project: {
-      name: p.name,
-      // `?? undefined` so unset fields are omitted from the JSON rather than
-      // serialised as null — keeps the file directly re-postable to /api/projects.
-      description: p.description ?? undefined,
-      image: p.image,
-      // Drop ociRef/localScript: they're re-resolved from the catalog on import —
-      // except for a feature the catalog doesn't have, whose ref is the only thing
-      // that says where it comes from.
-      features: p.features.map((f) => ({
-        id: f.id,
-        options: f.options,
-        ...(AVAILABLE_FEATURES.some((c) => c.id === f.id) ? {} : { ociRef: f.ociRef }),
-      })),
-      vscodeExtensions: p.vscodeExtensions,
-      prewarmImages: p.prewarmImages,
-      dind: p.dind,
-      postCreateCommand: p.postCreateCommand ?? undefined,
-      postStartCommand: p.postStartCommand ?? undefined,
-      repositories: p.repositories,
-      forwardPorts: p.forwardPorts,
-      // The *declaration* travels — a name and a mount path, no data and nothing
-      // sensitive. The volume itself is per-instance and created on first spawn.
-      sharedVolumes: p.sharedVolumes,
-      secretNames: listProjectSecrets(id).map((s) => s.name),
-    },
-  }
+  return buildProjectSpec({
+    name: p.name,
+    // `?? undefined` so unset fields are omitted from the JSON rather than
+    // serialised as null — keeps the file directly re-postable to /api/projects.
+    description: p.description ?? undefined,
+    image: p.image,
+    // Drop ociRef/localScript: they're re-resolved from the catalog on import —
+    // except for a feature the catalog doesn't have, whose ref is the only thing
+    // that says where it comes from.
+    features: p.features.map((f) => ({
+      id: f.id,
+      options: f.options,
+      ...(AVAILABLE_FEATURES.some((c) => c.id === f.id) ? {} : { ociRef: f.ociRef }),
+    })),
+    vscodeExtensions: p.vscodeExtensions,
+    prewarmImages: p.prewarmImages,
+    dind: p.dind,
+    postCreateCommand: p.postCreateCommand ?? undefined,
+    postStartCommand: p.postStartCommand ?? undefined,
+    repositories: p.repositories,
+    forwardPorts: p.forwardPorts,
+    // The *declaration* travels — a name and a mount path, no data and nothing
+    // sensitive. The volume itself is per-instance and created on first spawn.
+    sharedVolumes: p.sharedVolumes,
+    secretNames: listProjectSecrets(id).map((s) => s.name),
+  })
 }
 
 export function listVersions(projectId: string) {

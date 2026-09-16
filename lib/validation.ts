@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { EXTENSION_ID_HINT, EXTENSION_ID_RE } from "./extensions"
+import { EXTENSION_ID_HINT, isExtensionId } from "./extensions"
 import {
   SHARED_VOLUME_NAME_HINT,
   SHARED_VOLUME_NAME_RE,
@@ -15,7 +15,9 @@ import {
  * travelling all the way to a `code-server --install-extension` that fails
  * ten minutes later inside a Docker build.
  */
-export const ExtensionIdSchema = z.string().regex(EXTENSION_ID_RE, EXTENSION_ID_HINT)
+// `refine` over `regex`: the grammar is the package's (it is what the build resolves ids
+// against), and it is a function rather than a pattern we could hand to zod.
+export const ExtensionIdSchema = z.string().refine(isExtensionId, EXTENSION_ID_HINT)
 
 export const RepositorySchema = z.object({
   id: z.string(),

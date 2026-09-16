@@ -32,7 +32,8 @@ import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import type { Worker, Project, ProjectImageBuild, SetupStatus } from "@/lib/types"
 import { Button, buttonVariants } from "@/components/ui/button"
-import { LogsPanel, LogTerminal } from "@/components/logs-panel"
+import { LogsPanel } from "@/components/logs-panel"
+import { BuildLogTerminal } from "@/components/build-log-terminal"
 import { TerminalSessions } from "@/components/terminal-sessions"
 import {
   DeleteWorkerDialog,
@@ -326,19 +327,22 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
 
           <div className="flex-1 min-h-0 bg-[#09090b]">
             {tab === "logs" && (
-              <div className="h-full p-2">
+              <div className="h-full">
                 {worker.containerId ? (
-                  <LogsPanel url={`/api/workers/${wid}/logs`} />
-                ) : activeBuild ? (
-                  <div className="flex flex-col h-full">
-                    <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/5 shrink-0">
-                      <span className="text-[10px] font-mono text-yellow-400/70">Build image</span>
-                      <span className={cn("h-1.5 w-1.5 rounded-full", activeBuild.state === "building" ? "bg-yellow-400 animate-pulse" : activeBuild.state === "ready" ? "bg-green-500" : "bg-red-500")} />
-                    </div>
-                    <div className="flex-1 min-h-0 p-2">
-                      <BuildLogs projectId={id} building={building} />
-                    </div>
+                  // A bare terminal, so it keeps the breathing room the surface itself has no
+                  // padding for. The build panel below brings its own — hence the padding here
+                  // rather than on the wrapper.
+                  <div className="h-full p-2">
+                    <LogsPanel url={`/api/workers/${wid}/logs`} />
                   </div>
+                ) : activeBuild ? (
+                  /* The same panel the project page opens over its build-cache row, on the
+                     build this workspace is waiting for — status chip, image ref and bar from
+                     the design system rather than a header re-drawn here. Fed by the `builds`
+                     query above: one poll, not a second one nested inside this branch. No
+                     rebuild button — on this page "rebuild" is the container, next to it in
+                     the control panel, and two of them would mean two different things. */
+                  <BuildLogTerminal build={activeBuild} title="Build image" className="border-0" />
                 ) : (
                   <div className="flex h-full items-center justify-center">
                     <p className="text-xs text-muted-foreground font-mono">No container yet</p>
@@ -517,13 +521,4 @@ function InfoRow({ label, value, mono, muted }: { label: string; value: string; 
       <span className={cn("text-[11px] font-medium", mono && "font-mono", muted && "text-muted-foreground")}>{value}</span>
     </div>
   )
-}
-
-function BuildLogs({ projectId, building }: { projectId: string; building: boolean }) {
-  const { data: builds = [] } = useQuery({
-    queryKey: ["builds", projectId],
-    queryFn: () => api.get<ProjectImageBuild[]>(`/api/projects/${projectId}/builds`),
-    refetchInterval: building ? 1500 : false,
-  })
-  return <LogTerminal text={builds[0]?.logs || ""} placeholder="Building…" />
 }

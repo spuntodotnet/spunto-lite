@@ -4,6 +4,22 @@ import { hostname } from "node:os"
 import { getGcpRegistryKey, normalizeGcpKey } from "../services/settings"
 import { gcpAccessTokenFromCredential } from "./gcp-token"
 import { sharedVolumeBinds, type SharedVolume } from "./shared-volumes"
+import {
+  SHARED_NETWORK,
+  workerContainerName,
+  workerNetworkName,
+  workerStatusPath,
+  workerVolumeName,
+  workerVolumePrefix,
+} from "@spunto/build/naming"
+import {
+  buildCreateSessionCommand,
+  buildKillSessionCommand,
+  LIST_SESSIONS_SCRIPT,
+  parseSessionList,
+  sanitizeSessionName,
+  type TerminalSession,
+} from "@spunto/build/terminal"
 
 // Docker operations, ported/simplified from apps/agent/src/docker.ts. The control
 // plane talks straight to the local daemon — no remote agent, no OTLP telemetry
@@ -64,12 +80,11 @@ export async function getRegistryConfigForImage(
   return { [auth.serveraddress]: { username: auth.username, password: auth.password } }
 }
 
-export function workerNetworkName(workerId: string): string {
-  return `mp-worker-${workerId}-net`
-}
-function containerName(workerId: string): string {
-  return `mp-worker-${workerId}`
-}
+// Re-exported rather than rebuilt: these names are a contract between the script that writes
+// them, the Docker client that looks them up and the UI that shows them, so they live in
+// @spunto/build/naming where both control planes read the same definition.
+export { workerNetworkName }
+const containerName = workerContainerName
 
 async function ensureNetwork(networkName: string): Promise<void> {
   const networks = await docker.listNetworks({ filters: { name: [networkName] } })
@@ -96,7 +111,7 @@ async function ensureNetwork(networkName: string): Promise<void> {
 //
 // Unlike a worker network, this one is *never* removed: it's infrastructure shared
 // by objects with independent lifecycles, so no single deletion owns it.
-export const SHARED_NETWORK_NAME = "mp-shared-net"
+export const SHARED_NETWORK_NAME = SHARED_NETWORK
 
 export async function ensureSharedNetwork(): Promise<void> {
   await ensureNetwork(SHARED_NETWORK_NAME)
@@ -199,10 +214,10 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
     return { containerId: existingId, isRestart: true }
   }
 
-  const workspaceVolume = `mp-worker-${params.workerId}-workspace`
+  const workspaceVolume = workerVolumeName(params.workerId, "workspace")
   await ensureVolume(workspaceVolume)
   if (params.hasDinD) {
-    for (const suffix of ["docker", "containerd"]) await ensureVolume(`mp-worker-${params.workerId}-${suffix}`)
+    for (const kind of ["docker", "containerd"] as const) await ensureVolume(workerVolumeName(params.workerId, kind))
   }
   // Project volumes are created on demand by the first worker that needs them,
   // and reused (never recreated) by every later one — that's the whole point.
@@ -228,7 +243,10 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
       Binds: [
         `${workspaceVolume}:/workspace`,
         ...(params.hasDinD
-          ? [`mp-worker-${params.workerId}-docker:/var/lib/docker`, `mp-worker-${params.workerId}-containerd:/var/lib/containerd`]
+          ? [
+              `${workerVolumeName(params.workerId, "docker")}:/var/lib/docker`,
+              `${workerVolumeName(params.workerId, "containerd")}:/var/lib/containerd`,
+            ]
           : []),
         // Last, but they can't shadow anything above: a mount path inside
         // /workspace (or on a DinD path) is rejected at validation time.
@@ -427,9 +445,13 @@ export async function removeContainerOnly(workerId: string, containerId: string 
  */
 export async function removeWorker(workerId: string, containerId: string | null): Promise<void> {
   await removeContainerOnly(workerId, containerId)
-  for (const suffix of ["workspace", "docker", "containerd"]) {
+  // By prefix rather than by listing kinds: a volume kind added later is still found by
+  // teardown written before it — the reason @spunto/build/naming exposes the prefix at all.
+  const prefix = workerVolumePrefix(workerId)
+  const owned = await docker.listVolumes().then((r) => (r.Volumes ?? []).filter((v) => v.Name.startsWith(prefix)))
+  for (const v of owned) {
     try {
-      await docker.getVolume(`mp-worker-${workerId}-${suffix}`).remove()
+      await docker.getVolume(v.Name).remove()
     } catch {}
   }
 }
@@ -686,9 +708,9 @@ export async function getGitStatus(
     })
 }
 
-/** Reads /home/vscode/.mp-status.json from the container (setup progress). */
+/** Reads the worker's status file from the container (setup progress). */
 export async function getSetupStatus(containerId: string): Promise<unknown | null> {
-  const out = await execCapture(containerId, ["cat", "/home/vscode/.mp-status.json"], 3000)
+  const out = await execCapture(containerId, ["cat", workerStatusPath("/home/vscode")], 3000)
   return out.trim() ? JSON.parse(out.trim()) : null
 }
 
@@ -699,32 +721,49 @@ export async function detectListeningPorts(containerId: string): Promise<number[
   return [...new Set(out.trim().split("\n").map((n) => parseInt(n)).filter((n) => n > 0 && n < 65536))]
 }
 
-// ─── tmux session management (persistent multi-session terminals) ─────────────
+// ─── Persistent terminal sessions (dtach) ─────────────────────────────────────
+//
+// The scripts are `@spunto/build/terminal`; what stays here is running them, which is the half
+// that needs a Docker socket. Every one of them interpolates the session name into shell, so it
+// must have been through `sanitizeSessionName` first — that is a security boundary, not tidiness.
 
-export type TmuxSession = { name: string; windows: number; attached: boolean; command: string }
+export type { TerminalSession }
 
-export async function listTmuxSessions(containerId: string): Promise<TmuxSession[]> {
-  const fmt = "#{session_name}|#{session_windows}|#{session_attached}|#{pane_current_command}"
-  const out = await execCapture(containerId, ["su", "vscode", "-c", `tmux list-sessions -F '${fmt}' 2>/dev/null || true`], 4000)
-  return out
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const [name, windows, attached, command] = line.split("|")
-      return { name, windows: parseInt(windows) || 1, attached: attached === "1", command: command || "" }
-    })
+/**
+ * Sessions that exist inside the worker.
+ *
+ * `isAttached` is asked of the control plane rather than of the container: a dtach session is a
+ * socket file, which says who *could* connect and never who is. tmux used to answer this itself,
+ * and it is the one piece of metadata lost in the move.
+ */
+export async function listTerminalSessions(
+  containerId: string,
+  isAttached: (session: string) => boolean,
+): Promise<TerminalSession[]> {
+  const out = await execCapture(containerId, ["su", "vscode", "-c", LIST_SESSIONS_SCRIPT], 4000)
+  return parseSessionList(out, isAttached).map((s) => ({ ...s, title: namedTitle(s.title) }))
 }
 
-export async function createTmuxSession(containerId: string, name: string): Promise<void> {
-  const safe = name.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 40) || "main"
-  await execCapture(containerId, ["su", "vscode", "-c", `tmux new-session -d -s '${safe}' 2>&1 || true`], 4000)
+/**
+ * Drops a title that is only the shell saying where it is.
+ *
+ * A title earns a tab label by *naming* the session — "npm run dev", "vim README.md". Zsh and
+ * bash both emit `user@host:cwd` over OSC on every prompt, which every session reports and which
+ * says nothing about this one; left in, it replaces "main" with a truncated hostname. This is the
+ * same idea as the package's `placeholders`, for a value it cannot know from inside the parse.
+ */
+function namedTitle(title: string): string {
+  return /^[^@\s]+@[^:\s]+:/.test(title) ? "" : title
 }
 
-export async function killTmuxSession(containerId: string, name: string): Promise<void> {
-  const safe = name.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 40)
-  if (!safe) return
-  await execCapture(containerId, ["su", "vscode", "-c", `tmux kill-session -t '${safe}' 2>&1 || true`], 4000)
+/** Creates a session without attaching to it — `dtach -n` daemonizes the master. */
+export async function createTerminalSession(containerId: string, name: string): Promise<void> {
+  await execCapture(containerId, ["su", "vscode", "-c", buildCreateSessionCommand(sanitizeSessionName(name))], 4000)
+}
+
+/** Kills a session: every process holding its socket, then the socket and the recording. */
+export async function killTerminalSession(containerId: string, name: string): Promise<void> {
+  await execCapture(containerId, ["su", "vscode", "-c", buildKillSessionCommand(sanitizeSessionName(name))], 4000)
 }
 
 // ─── Image build ──────────────────────────────────────────────────────────────
@@ -760,6 +799,12 @@ export async function buildProjectImage(params: {
   baseImage: string
   buildScript: string
   imageRef: string
+  /**
+   * Re-run every layer instead of reusing the cache. The build is one `RUN` over a script whose
+   * text rarely changes, so Docker would otherwise hand back the same cached layer and a
+   * "rebuild" would be a no-op that *looks* like a build.
+   */
+  noCache?: boolean
   onLog?: (chunk: string) => void
 }): Promise<void> {
   const dockerfile = Buffer.from(
@@ -780,7 +825,12 @@ export async function buildProjectImage(params: {
   await new Promise<void>((resolve, reject) => {
     docker.buildImage(
       contextStream as never,
-      { t: params.imageRef, pull: "true", ...(registryconfig ? { registryconfig } : {}) } as never,
+      {
+        t: params.imageRef,
+        pull: "true",
+        ...(params.noCache ? { nocache: true } : {}),
+        ...(registryconfig ? { registryconfig } : {}),
+      } as never,
       (err, stream) => {
         if (err) return reject(err)
         if (!stream) return reject(new Error("No build stream returned"))

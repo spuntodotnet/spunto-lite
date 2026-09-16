@@ -1,76 +1,43 @@
-// Portable project spec: the JSON exchanged by "Export" (download) and "Import"
-// (pre-fills the new-project form). Shared by the server route that builds the
-// file and the client that reads it back, so both agree on one shape.
+// The portable project file: what "Export" downloads and "Import" reads back.
 //
-// Deliberately excludes anything instance-scoped: id, version history, favorite,
-// the deploy key — and **secret values**, which are write-only by design. Only
-// secret *names* travel, so the import can lay out the rows to fill in.
+// The format is `@spunto/build/spec`, shared with Spunto Cloud — one file you can carry between
+// the two, which is what makes "prototype it locally, then move it to the cloud" a feature rather
+// than a slide. Files exported by earlier releases announce themselves as `spunto-lite/project`
+// and are still accepted on read; new ones always carry the neutral `spunto/project`.
+//
+// Deliberately excludes anything instance-scoped: id, version history, favorite, the deploy key —
+// and **secret values**, which are write-only by design. Only secret *names* travel, so the import
+// can lay out the rows to fill in.
+//
+// Shape here, policy at creation: the schema checks that a file is well-formed, not that every id
+// in it is installable. An extension id this accepts but the instance refuses is caught by
+// `/api/projects`, which validates its own payload anyway — and a file that a stricter reader
+// would have rejected outright is a file the user cannot even see the problem in.
 
-import { z } from "zod"
-import { ExtensionIdSchema, FeatureInputSchema, RepositorySchema, SharedVolumesSchema } from "./validation"
+import {
+  buildProjectSpec,
+  parseProjectSpec,
+  projectSpecFilename,
+  PROJECT_SPEC_KIND,
+  PROJECT_SPEC_VERSION,
+  type ProjectSpec,
+  type SpecProject,
+} from "@spunto/build/spec"
 
-export const PROJECT_EXPORT_KIND = "spunto-lite/project"
-export const PROJECT_EXPORT_VERSION = 1
+export { buildProjectSpec, PROJECT_SPEC_KIND, PROJECT_SPEC_VERSION }
+export type { SpecProject }
 
-// Repository ids are per-instance handles: keep them when present, but a
-// hand-written file may omit them — one is minted at import time.
-const ExportRepositorySchema = RepositorySchema.extend({ id: z.string().optional() })
-
-export const ProjectExportSchema = z.object({
-  kind: z.literal(PROJECT_EXPORT_KIND),
-  version: z.literal(PROJECT_EXPORT_VERSION),
-  exportedAt: z.string().optional(),
-  project: z.object({
-    name: z.string().min(1),
-    description: z.string().nullable().optional(),
-    image: z.string().min(1),
-    features: z.array(FeatureInputSchema).default([]),
-    vscodeExtensions: z.array(ExtensionIdSchema).default([]),
-    prewarmImages: z.array(z.string()).default([]),
-    dind: z.boolean().default(false),
-    postCreateCommand: z.string().nullable().optional(),
-    postStartCommand: z.string().nullable().optional(),
-    repositories: z.array(ExportRepositorySchema).default([]),
-    forwardPorts: z.array(z.number().int().min(1).max(65535)).default([]),
-    // The declaration only — a name and a mount path. Unlike a secret's value,
-    // there's nothing sensitive in it, and the volume is created on first spawn
-    // wherever the spec is imported.
-    sharedVolumes: SharedVolumesSchema.default([]),
-    // Names only — values never leave the instance.
-    secretNames: z.array(z.string()).default([]),
-  }),
-})
-
-export type ProjectExport = z.infer<typeof ProjectExportSchema>
+/** Kept as the local name for the envelope — the shape is the package's. */
+export type ProjectExport = ProjectSpec
 
 /** Download filename for a project's export, e.g. "my-app.spunto-project.json". */
-export function projectExportFilename(name: string): string {
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
-  return `${slug || "project"}.spunto-project.json`
-}
+export const projectExportFilename = projectSpecFilename
 
 /**
  * Parses the text of an uploaded file into a validated export.
  * Throws an `Error` whose message is safe to surface in a toast.
  */
-export function parseProjectExport(text: string): ProjectExport {
-  let raw: unknown
-  try {
-    raw = JSON.parse(text)
-  } catch {
-    throw new Error("Not a valid JSON file")
-  }
-  const parsed = ProjectExportSchema.safeParse(raw)
-  if (!parsed.success) {
-    const isExport = typeof raw === "object" && raw !== null && "kind" in raw
-    throw new Error(
-      isExport
-        ? `Unsupported project export: ${z.prettifyError(parsed.error).split("\n")[0]}`
-        : "Not a spunto-lite project export",
-    )
-  }
-  return parsed.data
-}
+export const parseProjectExport = parseProjectSpec
 
 /**
  * sessionStorage handoff for "import from the dashboard": the file is read and
