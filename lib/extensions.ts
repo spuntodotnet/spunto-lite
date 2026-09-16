@@ -1,42 +1,20 @@
-// Pure helpers around VS Code extension identifiers. No I/O — safe to import
-// from client components and from zod schemas (see lib/extension-registry.ts
-// for the clients that actually talk to a registry).
+// Spunto Lite's thin layer over `@spunto/build/extensions` — what the package has no opinion on.
+//
+// The identifier grammar itself (`isExtensionId`, `parseExtensionId`), the registry error type and
+// the failed-extension marker all live in the package, shared with Spunto Cloud: an id the picker
+// accepts has to be an id the image build can install, and that is exactly the kind of agreement
+// that stops holding the moment each side keeps its own copy.
+//
+// What stays here is the wording shown to a human and the zod-facing shape, neither of which is a
+// protocol.
 
-/**
- * Registry call that couldn't be completed (network, timeout, 5xx). Shared by
- * both registry clients so callers can tell "we couldn't ask" apart from a real
- * "no such extension" verdict, whichever gallery is configured.
- */
-export class RegistryError extends Error {}
+export { isExtensionId, parseExtensionId, RegistryError } from "@spunto/build/extensions"
+export type { ExtensionSuggestion } from "@spunto/build/extensions"
 
-/**
- * `publisher.extension-name`, the identifier code-server resolves against the
- * registry. Exactly one dot: neither half may contain another one.
- */
-export const EXTENSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*\.[A-Za-z0-9][A-Za-z0-9_-]*$/
+// The build log marker for an extension code-server could not install, and its parser. The image
+// build prints it (the generator is in the package too), the project page greps for it — so a
+// failed install shows up in the UI instead of only in the raw log.
+export { EXTENSION_FAILED_MARKER, parseFailedExtensions } from "@spunto/build/steps"
 
+/** Shown next to a rejected id, in the form and in API errors. */
 export const EXTENSION_ID_HINT = "Expected publisher.extension-id (e.g. esbenp.prettier-vscode)"
-
-export function isExtensionId(value: string): boolean {
-  return EXTENSION_ID_RE.test(value)
-}
-
-/**
- * Prefix the image build prints for every extension code-server could not
- * install. Shared with the UI, which greps the build log for it so a failed
- * install shows up on the project page instead of only in the raw log.
- */
-export const EXTENSION_FAILED_MARKER = "[build] EXTENSION FAILED:"
-
-/** Extension ids the given build log reports as failed, in order, deduplicated. */
-export function parseFailedExtensions(logs: string): string[] {
-  const re = /^\[build\] EXTENSION FAILED: (\S+)/gm
-  return [...new Set(Array.from(logs.matchAll(re), (m) => m[1]))]
-}
-
-/** Splits a validated id into its two halves; null when the id is malformed. */
-export function parseExtensionId(id: string): { namespace: string; name: string } | null {
-  if (!isExtensionId(id)) return null
-  const dot = id.indexOf(".")
-  return { namespace: id.slice(0, dot), name: id.slice(dot + 1) }
-}
