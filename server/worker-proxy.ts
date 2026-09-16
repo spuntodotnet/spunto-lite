@@ -34,7 +34,7 @@ export function parseProxyHost(host?: string): ProxyRoute | null {
   const lower = host.toLowerCase()
   const suffix = BASE_DOMAINS.map((d) => "." + d).find((s) => lower.endsWith(s))
   if (!suffix) return null
-  let h = lower.slice(0, -suffix.length)
+  const h = lower.slice(0, -suffix.length)
   if (!h) return null
 
   if (h.startsWith("svc-")) {
