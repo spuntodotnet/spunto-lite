@@ -4,6 +4,14 @@ import { hostname } from "node:os"
 import { getGcpRegistryKey, normalizeGcpKey } from "../services/settings"
 import { gcpAccessTokenFromCredential } from "./gcp-token"
 import { sharedVolumeBinds, type SharedVolume } from "./shared-volumes"
+import {
+  SHARED_NETWORK,
+  workerContainerName,
+  workerNetworkName,
+  workerStatusPath,
+  workerVolumeName,
+  workerVolumePrefix,
+} from "@spunto/build/naming"
 
 // Docker operations, ported/simplified from apps/agent/src/docker.ts. The control
 // plane talks straight to the local daemon — no remote agent, no OTLP telemetry
@@ -64,12 +72,11 @@ export async function getRegistryConfigForImage(
   return { [auth.serveraddress]: { username: auth.username, password: auth.password } }
 }
 
-export function workerNetworkName(workerId: string): string {
-  return `mp-worker-${workerId}-net`
-}
-function containerName(workerId: string): string {
-  return `mp-worker-${workerId}`
-}
+// Re-exported rather than rebuilt: these names are a contract between the script that writes
+// them, the Docker client that looks them up and the UI that shows them, so they live in
+// @spunto/build/naming where both control planes read the same definition.
+export { workerNetworkName }
+const containerName = workerContainerName
 
 async function ensureNetwork(networkName: string): Promise<void> {
   const networks = await docker.listNetworks({ filters: { name: [networkName] } })
@@ -96,7 +103,7 @@ async function ensureNetwork(networkName: string): Promise<void> {
 //
 // Unlike a worker network, this one is *never* removed: it's infrastructure shared
 // by objects with independent lifecycles, so no single deletion owns it.
-export const SHARED_NETWORK_NAME = "mp-shared-net"
+export const SHARED_NETWORK_NAME = SHARED_NETWORK
 
 export async function ensureSharedNetwork(): Promise<void> {
   await ensureNetwork(SHARED_NETWORK_NAME)
@@ -199,10 +206,10 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
     return { containerId: existingId, isRestart: true }
   }
 
-  const workspaceVolume = `mp-worker-${params.workerId}-workspace`
+  const workspaceVolume = workerVolumeName(params.workerId, "workspace")
   await ensureVolume(workspaceVolume)
   if (params.hasDinD) {
-    for (const suffix of ["docker", "containerd"]) await ensureVolume(`mp-worker-${params.workerId}-${suffix}`)
+    for (const kind of ["docker", "containerd"] as const) await ensureVolume(workerVolumeName(params.workerId, kind))
   }
   // Project volumes are created on demand by the first worker that needs them,
   // and reused (never recreated) by every later one — that's the whole point.
@@ -228,7 +235,10 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
       Binds: [
         `${workspaceVolume}:/workspace`,
         ...(params.hasDinD
-          ? [`mp-worker-${params.workerId}-docker:/var/lib/docker`, `mp-worker-${params.workerId}-containerd:/var/lib/containerd`]
+          ? [
+              `${workerVolumeName(params.workerId, "docker")}:/var/lib/docker`,
+              `${workerVolumeName(params.workerId, "containerd")}:/var/lib/containerd`,
+            ]
           : []),
         // Last, but they can't shadow anything above: a mount path inside
         // /workspace (or on a DinD path) is rejected at validation time.
@@ -427,9 +437,13 @@ export async function removeContainerOnly(workerId: string, containerId: string 
  */
 export async function removeWorker(workerId: string, containerId: string | null): Promise<void> {
   await removeContainerOnly(workerId, containerId)
-  for (const suffix of ["workspace", "docker", "containerd"]) {
+  // By prefix rather than by listing kinds: a volume kind added later is still found by
+  // teardown written before it — the reason @spunto/build/naming exposes the prefix at all.
+  const prefix = workerVolumePrefix(workerId)
+  const owned = await docker.listVolumes().then((r) => (r.Volumes ?? []).filter((v) => v.Name.startsWith(prefix)))
+  for (const v of owned) {
     try {
-      await docker.getVolume(`mp-worker-${workerId}-${suffix}`).remove()
+      await docker.getVolume(v.Name).remove()
     } catch {}
   }
 }
@@ -686,9 +700,9 @@ export async function getGitStatus(
     })
 }
 
-/** Reads /home/vscode/.mp-status.json from the container (setup progress). */
+/** Reads the worker's status file from the container (setup progress). */
 export async function getSetupStatus(containerId: string): Promise<unknown | null> {
-  const out = await execCapture(containerId, ["cat", "/home/vscode/.mp-status.json"], 3000)
+  const out = await execCapture(containerId, ["cat", workerStatusPath("/home/vscode")], 3000)
   return out.trim() ? JSON.parse(out.trim()) : null
 }
 
@@ -760,6 +774,12 @@ export async function buildProjectImage(params: {
   baseImage: string
   buildScript: string
   imageRef: string
+  /**
+   * Re-run every layer instead of reusing the cache. The build is one `RUN` over a script whose
+   * text rarely changes, so Docker would otherwise hand back the same cached layer and a
+   * "rebuild" would be a no-op that *looks* like a build.
+   */
+  noCache?: boolean
   onLog?: (chunk: string) => void
 }): Promise<void> {
   const dockerfile = Buffer.from(
@@ -780,7 +800,12 @@ export async function buildProjectImage(params: {
   await new Promise<void>((resolve, reject) => {
     docker.buildImage(
       contextStream as never,
-      { t: params.imageRef, pull: "true", ...(registryconfig ? { registryconfig } : {}) } as never,
+      {
+        t: params.imageRef,
+        pull: "true",
+        ...(params.noCache ? { nocache: true } : {}),
+        ...(registryconfig ? { registryconfig } : {}),
+      } as never,
       (err, stream) => {
         if (err) return reject(err)
         if (!stream) return reject(new Error("No build stream returned"))

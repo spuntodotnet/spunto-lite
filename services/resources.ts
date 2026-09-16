@@ -94,8 +94,11 @@ const WORKER_VOLUME_RE = /^mp-worker-(.+)-(workspace|docker|containerd)$/
 // mp-svc-<serviceId>-<name> — the service id is 12 lowercase alphanumerics (lib/id.ts),
 // so the split is unambiguous even for a volume name containing hyphens.
 const SERVICE_VOLUME_RE = /^mp-svc-([a-z0-9]{12})-(.+)$/
-// mp-proj-<projectId>:v<n>
-const PROJECT_IMAGE_RE = /^mp-proj-(.+):v(\d+)$/
+// mp-proj-<projectId>:v<n>[-r<recipe>] — the recipe suffix is optional because images built
+// before it exists are still on disk, and this page is what shows them to be pruned. Kept in step
+// with `imageRefFor` (services/workers.ts); `isProjectImageRef` from @spunto/build/naming cannot
+// be used here, as it predates the suffix and rejects every tag this release produces.
+const PROJECT_IMAGE_RE = /^mp-proj-(.+?):v(\d+)(?:-r\d+)?$/
 
 /**
  * Reconciles every worker's DB state against the live container (a light inspect,

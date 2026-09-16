@@ -2,14 +2,17 @@ import { eq, desc } from "drizzle-orm"
 import { db } from "../db/index"
 import { workers, projectImageBuilds, type Worker, type Project, type SetupStatus } from "../db/schema"
 import { newId, newShortId } from "../lib/id"
-import { BASE_DOMAIN } from "../lib/env"
+import { BASE_DOMAIN, EXTENSIONS_GALLERY_RAW } from "../lib/env"
 import { CODE_SERVER_EXTENSIONS_GALLERY } from "../lib/extension-registry"
 import {
   buildImageScript,
   buildSetupScript,
   buildStartScript,
   buildWorkerScript,
-} from "../lib/setup-script"
+  IMAGE_RECIPE_VERSION,
+} from "@spunto/build/script"
+import { projectImageRef } from "@spunto/build/naming"
+import { BuildStepTracker } from "@spunto/build/steps"
 import {
   docker,
   spawnContainer,
@@ -28,8 +31,21 @@ import { serviceEnvForWorkers } from "./services"
 import { getSettings } from "./settings"
 import { readHostPrivateKey } from "../lib/ssh-keys"
 
+/**
+ * The tag carries two versions: the project's, and the *recipe's* — what `buildImageScript` bakes
+ * in. An image is looked up by asking Docker whether the tag exists, so a project whose config
+ * never changed would otherwise keep spawning workers on an image built by an older release,
+ * indefinitely and invisibly. Bumping the recipe makes the lookup miss, which rebuilds. Images
+ * from an older recipe are left behind as ordinary dangling tags — `docker image prune` territory.
+ *
+ * Deviates from `projectImageRef` on purpose, which is why it composes it rather than re-deriving
+ * the slug: `@spunto/build/naming` does not put the recipe in the tag yet, and dropping the suffix
+ * would leave every existing project on its pre-spunto-pack image forever. Worth folding back into
+ * the package — `isProjectImageRef` does not match these refs, so nothing in the package may be
+ * used to recognise them (see `imageRefBelongsToProject` below).
+ */
 function imageRefFor(projectId: string, version: number): string {
-  return `mp-proj-${projectId}:v${version}`
+  return `${projectImageRef(projectId, version)}-r${IMAGE_RECIPE_VERSION}`
 }
 
 function hasDinD(project: Project): boolean {
@@ -42,43 +58,77 @@ async function imageExists(ref: string): Promise<boolean> {
   return docker.getImage(ref).inspect().then(() => true).catch(() => false)
 }
 
-/** Builds the per-(project,version) image if it isn't already present. Returns the image ref. */
-export async function ensureProjectImage(project: Project, version: number): Promise<string> {
+/**
+ * Builds the per-(project,version) image if it isn't already present. Returns the image ref.
+ *
+ * `force` is what separates "make sure this exists" from "build it again": spawning a worker wants
+ * the first and stops at the existence check. Someone who just read a build log and asked for
+ * another one wants the second — for them the existence check is the whole problem, since the
+ * image existing is precisely the state they are trying to leave.
+ */
+export async function ensureProjectImage(project: Project, version: number, force = false): Promise<string> {
   const ref = imageRefFor(project.id, version)
-  if (await imageExists(ref)) return ref
+  if (!force && (await imageExists(ref))) return ref
 
   const buildId = newId()
   db.insert(projectImageBuilds).values({ id: buildId, projectId: project.id, version, imageRef: ref, state: "building", logs: "" }).run()
 
-  const { script } = buildImageScript({
+  // The plan comes out of the *same call* that emits the script, so the blocks a UI greys out
+  // upfront cannot list something the script doesn't run. That is the whole reason it is returned
+  // here rather than derived from `project.features` on the side.
+  const { script, steps } = buildImageScript({
     features: project.features,
     vscodeExtensions: project.vscodeExtensions,
     dind: project.dind,
+    // Read from the environment here and passed in: the generator takes no configuration from
+    // `process.env` (that is the package's admission rule), so the one place that knows which
+    // registry this install resolves ids against is the caller.
+    extensionsGallery: EXTENSIONS_GALLERY_RAW,
   })
 
+  // The script brackets each block with a marker line; the tracker reads them back out of the log
+  // stream we already forward, turns them into banners, and keeps the step list current. No second
+  // channel, and no heuristics on log wording — the emitter and the parser are the same package.
+  const tracker = new BuildStepTracker(steps)
+  db.update(projectImageBuilds).set({ steps: tracker.steps }).where(eq(projectImageBuilds.id, buildId)).run()
+
   let logs = ""
+  const persist = (state?: "ready" | "error") => {
+    db
+      .update(projectImageBuilds)
+      .set({ logs, steps: tracker.steps, ...(state ? { state } : {}) })
+      .where(eq(projectImageBuilds.id, buildId))
+      .run()
+  }
+
   const flush = (chunk: string) => {
-    logs += chunk
-    // Periodic persistence so the UI can tail progress.
-    db.update(projectImageBuilds).set({ logs }).where(eq(projectImageBuilds.id, buildId)).run()
+    // What gets stored is the tracker's output, not the raw chunk: markers are swapped for the
+    // banners a human reads, so the stored log and the live one are the same text.
+    logs += tracker.ingest(chunk).text
+    persist()
   }
 
   try {
-    await buildProjectImage({ baseImage: project.image, buildScript: script, imageRef: ref, onLog: flush })
-    db.update(projectImageBuilds).set({ state: "ready", logs }).where(eq(projectImageBuilds.id, buildId)).run()
+    await buildProjectImage({ baseImage: project.image, buildScript: script, imageRef: ref, noCache: force, onLog: flush })
+    logs += tracker.finish("ready").text
+    persist("ready")
     return ref
   } catch (err) {
+    logs += tracker.finish("error").text
     logs += `\n[build] ERROR: ${(err as Error).message}\n`
-    db.update(projectImageBuilds).set({ state: "error", logs }).where(eq(projectImageBuilds.id, buildId)).run()
+    persist("error")
     throw err
   }
 }
 
-/** Fire-and-forget pre-build of the current version's image (no-op if already built). */
-export function triggerBuild(projectId: string): boolean {
+/**
+ * Fire-and-forget build of the current version's image. No-op if it is already built, unless
+ * `force` — which rebuilds it from scratch, cache included.
+ */
+export function triggerBuild(projectId: string, force = false): boolean {
   const project = getProjectRow(projectId)
   if (!project) return false
-  void ensureProjectImage(project, project.currentVersion).catch((e) => console.error(`[build ${projectId}]`, e))
+  void ensureProjectImage(project, project.currentVersion, force).catch((e) => console.error(`[build ${projectId}]`, e))
   return true
 }
 
@@ -98,7 +148,7 @@ export function listBuilds(projectId: string) {
  * project row (not the version snapshot), so a per-worker branch can only travel
  * through this argument, never through `project.repositories`.
  */
-function buildFullScript(project: Project, branch?: string | null): string {
+function buildFullScript(project: Project, workerId: string, branch?: string | null): string {
   const settings = getSettings()
   const secrets = resolveSecretsForSpawn(project.id)
   const userSshPrivateKey = readHostPrivateKey(settings.sshKeyPath) ?? undefined
@@ -111,6 +161,7 @@ function buildFullScript(project: Project, branch?: string | null): string {
       dind: project.dind,
       postCreateCommand: project.postCreateCommand,
     },
+    workerId,
     userInfo: settings.gitUserName ? { name: settings.gitUserName, email: settings.gitUserEmail } : undefined,
     userSshPrivateKey,
     userEnvSecrets: secrets,
@@ -128,6 +179,7 @@ function buildFullScript(project: Project, branch?: string | null): string {
       postStartCommand: project.postStartCommand,
       repositories: project.repositories,
     },
+    extensionsGallery: EXTENSIONS_GALLERY_RAW,
   })
 
   return buildWorkerScript({
@@ -168,7 +220,7 @@ async function runSpawnPipeline(workerId: string, project: Project, version: num
     const image = await ensureProjectImage(project, version)
 
     setWorkerState(workerId, "starting")
-    const script = buildFullScript(project, branch)
+    const script = buildFullScript(project, workerId, branch)
     const env = spawnEnv(project, workerId)
 
     const { containerId } = await spawnContainer({

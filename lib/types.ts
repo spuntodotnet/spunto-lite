@@ -1,5 +1,28 @@
+import type { BuildStep } from "@spunto/build/steps"
+export type { BuildStep }
+
 // Client-facing types (kept separate from db/schema.ts so client bundles never
 // pull in better-sqlite3/drizzle runtime).
+
+/**
+ * `ProjectFeature` is the package's, unchanged: it is the input the script generators take, so a
+ * second definition here would be one shape maintained twice.
+ *
+ * `SetupStatus` is the package's, *widened* by two phases. A worker writes this file inside its
+ * container and the control plane reads it back minutes later, so the type has to cover what is
+ * already on disk — not only what today's generator emits. `pending` and `features` are Lite-era
+ * phases older workers still report; everything else is identical, and `timings` comes along.
+ *
+ * `Repository` stays local: the package types `provider` as a plain string (Cloud reaches forges
+ * Lite has none of), and the union here is what turns a typo into a compile error.
+ */
+import type { ProjectFeature, SetupStatus as SharedSetupStatus } from "@spunto/build/types"
+
+export type { ProjectFeature }
+
+export type SetupStatus = Omit<SharedSetupStatus, "phase"> & {
+  phase: SharedSetupStatus["phase"] | "pending" | "features"
+}
 
 export type Repository = {
   id: string
@@ -10,18 +33,10 @@ export type Repository = {
   branch?: string
 }
 
-export type ProjectFeature = { id: string; options?: Record<string, string>; ociRef?: string; localScript?: string }
 
 /** A project-level volume mounted in every worker of the project. */
 export type SharedVolume = { name: string; mountPath: string }
 
-export type SetupStatus = {
-  phase: "pending" | "initializing" | "credentials" | "dotfiles" | "cloning" | "features" | "lifecycle" | "ready" | "error"
-  repos: { name: string; state: "pending" | "cloning" | "done" | "error" }[]
-  postCreate: "pending" | "running" | "done" | "error" | null
-  postStart: "pending" | "running" | "done" | "error" | null
-  error?: string
-}
 
 export type Project = {
   id: string
@@ -103,6 +118,12 @@ export type ProjectImageBuild = {
   imageRef: string
   state: "building" | "ready" | "error"
   logs: string
+  /**
+   * The build as timestamped blocks. Null on every build recorded before the column existed —
+   * those are redrawn from their log alone, without durations. Treat absence as "this build
+   * predates steps", never as "this build had none".
+   */
+  steps: BuildStep[] | null
   createdAt: string
 }
 
