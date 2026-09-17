@@ -30,6 +30,7 @@ import { resolveSecretsForSpawn } from "./secrets"
 import { serviceEnvForWorkers } from "./services"
 import { getSettings } from "./settings"
 import { readHostPrivateKey } from "../lib/ssh-keys"
+import { normalizeDotfilesRepo, rootSshConfigFor } from "../lib/dotfiles"
 
 /**
  * The tag carries two versions: the project's, and the *recipe's* — what `buildImageScript` bakes
@@ -166,7 +167,7 @@ function buildFullScript(project: Project, workerId: string, branch?: string | n
     userSshPrivateKey,
     userEnvSecrets: secrets,
     projectDeployKey,
-    dotfilesRepo: settings.dotfilesRepo ?? undefined,
+    dotfilesRepo: normalizeDotfilesRepo(settings.dotfilesRepo),
     branch: branch ?? undefined,
   })
 
@@ -183,7 +184,7 @@ function buildFullScript(project: Project, workerId: string, branch?: string | n
   })
 
   return buildWorkerScript({
-    setupScript: setup,
+    setupScript: rootSshConfigFor(userSshPrivateKey) + setup,
     startScript: start,
     project: {
       postCreateCommand: project.postCreateCommand,
