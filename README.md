@@ -14,7 +14,7 @@ to your local Docker socket.
 
 ```bash
 cp .env.example .env          # optional — sane defaults work out of the box
-docker compose up -d --build
+docker compose up -d --build  # or ./start.sh, which does the same
 ```
 
 Or run the pre-built image straight from GHCR:
