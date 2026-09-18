@@ -195,11 +195,19 @@ n'est nécessaire pour ajouter une valeur — c'est un changement de code, des d
 
 Par ordre de rendement :
 
-1. **Ajouter `building` au vocabulaire partagé** (le paquet, puis le design system : une pastille
-   « Building image… », et `building` dans `SETUP_STATES`). Ça sert les deux produits — Cloud gagne
-   de pouvoir supprimer sa jointure côté client, nous gagnons la bonne étiquette et la suppression
-   de `toDsState`. C'est le seul changement de la liste qui rend un état à quelqu'un au lieu de
-   ranger du vocabulaire.
+1. **Ajouter `building` au vocabulaire partagé** — *fait, en attente de merge :*
+   [coderhammer/spunto#329](https://github.com/coderhammer/spunto/pull/329) (design system 0.24.0).
+   Ça sert les deux produits : Cloud gagne de pouvoir supprimer sa jointure côté client, nous
+   gagnons la bonne étiquette. C'est le seul changement de la liste qui rend un état à quelqu'un au
+   lieu de ranger du vocabulaire.
+
+   Deux choses que l'écriture a apprises, et qui corrigent ce paragraphe tel qu'il était d'abord
+   rédigé. **`building` ne va pas dans `SETUP_STATES`** : cet ensemble est celui des états qui se
+   réduisent à la clé générique `setup`, donc y mettre `building` lui ferait perdre son libellé. Il
+   prend son propre `if`, exactement comme `pulling`, juste avant. Et **l'adoption ne supprimera pas
+   `toDsState`, seulement sa moitié `building`** : `pending` est le *repli* de la table du design
+   system — un état inconnu y atterrit — donc lui donner `settingUp: true` ferait annoncer un setup
+   en vol pour n'importe quelle valeur jamais vue. L'adaptateur ne disparaît qu'au point 3.
 2. **Sortir le vocabulaire et le prédicat dans `@spunto/build`.** Le type union, plus
    `isSettingUp` / `isTerminal`, à côté de `SetupStatus` qui est déjà là. Le design system garde ses
    *couleurs* et ses *libellés* (c'est son métier) mais lit le vocabulaire du paquet ; les trois
@@ -208,7 +216,7 @@ Par ordre de rendement :
 3. **Renommer `pending` en `provisioning` chez nous** — même sens exactement, et une valeur
    transitoire : un worker en `pending` a bougé ou est mort, donc un `UPDATE workers SET
    state='provisioning' WHERE state='pending'` suffit, sans perte. À faire *après* le point 1, pour
-   ne pas perdre `building` en route.
+   ne pas perdre `building` en route. C'est ce pas-là, et pas le point 1, qui retire `toDsState`.
 4. **Nettoyer `setupStatus` :** retirer `features` (mort partout) et `pending` (doublon de `null`) de
    notre élargissement, et écrire `null` au spawn comme Cloud. Notre type redevient celui du paquet,
    sans `Omit<>`. À garder pour la fin, parce que c'est le seul point de la liste qui touche des
