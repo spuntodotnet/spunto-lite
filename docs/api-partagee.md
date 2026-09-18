@@ -92,7 +92,9 @@ des deux vocabulaires : son en-tête raconte que la table vivait en double et av
 prend un worker de n'importe quelle forme, tolère un état qu'elle ne connaît pas, et sait que
 « les apps à un seul `state` (Spunto Lite) tombent dans le dernier bloc ».
 
-Le vocabulaire brut, lui, est à 4 valeurs communes sur 10 :
+Le vocabulaire brut, lui, est à 4 valeurs communes sur 10 — et compter les valeurs est la mauvaise
+façon de lire la différence, parce que les deux produits ne font pas dire la même chose au mot
+« état ». Analyse détaillée : [`etats-worker.md`](etats-worker.md).
 
 | | `pending` | `building` | `provisioning` | `pulling` | `starting` | `ready` | `stopping` | `stopped` | `deleting` | `error` |
 |---|---|---|---|---|---|---|---|---|---|---|
