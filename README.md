@@ -58,7 +58,9 @@ HTTPS with a local mkcert certificate. See
   then [`spunto-pack`](https://github.com/coderhammer/features/tree/main/src/spunto-pack),
   before the features the project declares; images are tagged
   `mp-proj-<id>:v<version>-r<recipe>`, so a release that changes what goes into an image
-  rebuilds it instead of leaving your workers on the old one.
+  rebuilds it instead of leaving your workers on the old one. What the two Spuntos share
+  today and what they still duplicate — project creation, worker listing, the status
+  vocabularies — is written down in [`docs/api-partagee.md`](docs/api-partagee.md).
 - **A persistent terminal on dtach**, not a multiplexer. Closing the tab does not kill
   the build: a throwaway `docker exec` attaches to a session that outlives it. dtach only
   does persistence and forwards every byte, so the *browser* keeps the mouse, the
