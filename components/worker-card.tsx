@@ -39,18 +39,22 @@ import type { Worker } from "@/lib/types"
 /**
  * Lite's state machine → the vocabulary `resolveWorkerStatus` speaks.
  *
- * Only two states need translating. `pending` and `building` are Lite's own: the
- * design system resolves anything it doesn't recognise to `pending`, which is
- * *not* flagged as "setting up" — so left as-is they would silently drop the
- * setup progress bar, the one thing worth looking at while a worker boots.
- * `provisioning` is the design system's name for the same moment.
+ * One state left to translate. `building` is the package's own since 0.25.0 —
+ * pill included — so it now travels untouched and the ten minutes of a `docker
+ * build` read "Building image…" again instead of a vague "Setting up…".
  *
- * Known cost: the pill then reads "Setting up…" where Lite said "Building
- * image…". The package has a `pulling` state but no `building` one, and calling
- * a `docker build` a pull would be worse than being vague.
+ * `pending` stays, and not for want of trying: in the package's table `pending`
+ * is the **fallback**, where any state it has never seen lands. It is therefore
+ * deliberately not flagged as "setting up", and teaching it otherwise would make
+ * an unknown value claim a setup is in flight. Left untranslated it would
+ * silently drop the setup progress bar, the one thing worth looking at while a
+ * worker boots; `provisioning` is the package's name for the same moment.
+ *
+ * This function goes away when Lite's own state is renamed `provisioning` —
+ * see `docs/etats-worker.md` § 8.
  */
 function toDsState(state: string): string {
-  return state === "pending" || state === "building" ? "provisioning" : state
+  return state === "pending" ? "provisioning" : state
 }
 
 export function cfgFor(state: string): WorkerStatus {
