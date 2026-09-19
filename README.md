@@ -47,7 +47,12 @@ HTTPS with a local mkcert certificate. See
 - **`dockerode`** → `/var/run/docker.sock`: workers are sibling containers on the
   host daemon.
 - **SQLite** (via Drizzle) for projects/workers/secrets, in a Docker volume.
-- **`~/.ssh` mounted read-only** and injected into each worker for git identity.
+- **`~/.ssh` mounted read-only** and injected into each worker — it is both the git
+  identity and the *only* clone credential. A repository is declared as a **clone
+  URL**, never as a host plus an `owner/repo`: there is no forge integration here,
+  no app to install and no token to mint, so any host your key reaches works the
+  same way — a hosted forge, a self-hosted GitLab, a bare repo on a NAS. Authorize
+  the key once, wherever, and every project clones and pushes.
 - **[`@spunto/build`](https://www.npmjs.com/package/@spunto/build)** for everything
   the two Spuntos have to agree on: the image recipe and the shell it generates, the
   build-log protocol, the extension-registry clients, the Docker naming scheme and the

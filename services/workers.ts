@@ -25,7 +25,7 @@ import {
   getSetupStatus,
   buildProjectImage,
 } from "../lib/docker"
-import { getProjectRow, ensureDeployKey } from "./projects"
+import { getProjectRow } from "./projects"
 import { resolveSecretsForSpawn } from "./secrets"
 import { serviceEnvForWorkers } from "./services"
 import { getSettings } from "./settings"
@@ -152,7 +152,12 @@ function buildFullScript(project: Project, workerId: string, branch?: string | n
   const settings = getSettings()
   const secrets = resolveSecretsForSpawn(project.id)
   const userSshPrivateKey = readHostPrivateKey(settings.sshKeyPath) ?? undefined
-  const projectDeployKey = ensureDeployKey(project) ?? undefined
+  // One key clones everything. The package takes two — a member's own key for a repository it
+  // reaches through a forge integration, a per-project deploy key for a raw URL — and a raw URL is
+  // Lite's only kind, so the mounted key is handed over as both. It is the same key `git push`
+  // uses inside the workspace, which is the whole promise: authorize it once on whatever host,
+  // and every project clones.
+  const projectDeployKey = userSshPrivateKey
 
   const { script: setup } = buildSetupScript({
     project: {

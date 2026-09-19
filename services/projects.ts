@@ -9,9 +9,7 @@ import {
   type ProjectVersionConfig,
 } from "../db/schema"
 import { newId } from "../lib/id"
-import { encrypt, decrypt } from "../lib/crypto"
 import { removeWorker as removeWorkerContainer, removeProjectImages, removeProjectVolumes } from "../lib/docker"
-import { generateSSHKeyPair, derivePublicKey } from "../lib/ssh"
 import { AVAILABLE_FEATURES } from "../lib/catalogs"
 import type { CreateProjectInput, UpdateProjectInput } from "../lib/validation"
 import { buildProjectSpec, type ProjectExport } from "../lib/project-export"
@@ -55,35 +53,20 @@ function createVersion(projectId: string, version: number, config: ProjectVersio
   db.insert(projectVersions).values({ id: newId(), projectId, version, config }).run()
 }
 
-/** Public shape: strips the encrypted deploy key, derives the public half. */
-export type SerializedProject = Omit<Project, "deployKeyPrivate"> & { deployPublicKey: string | null }
+/**
+ * Public shape. Identical to the row today, and kept as its own name because the project row has
+ * held a secret before and may again.
+ *
+ * It used to carry a `deployPublicKey`: a per-project key Lite generated to clone a raw-URL
+ * repository. It went away with the provider notion — one mounted SSH key clones everything now
+ * (see `Repository`). Worth recording *why*, because it read like a feature: nothing ever rendered
+ * its public half, so there was no way to register it on a host, so it could only ever clone a
+ * public repository. A private one failed with a key the user could not see, let alone install.
+ */
+export type SerializedProject = Project
 
 export function serializeProject(p: Project): SerializedProject {
-  const { deployKeyPrivate, ...rest } = p
-  let deployPublicKey: string | null = null
-  if (deployKeyPrivate) {
-    try {
-      deployPublicKey = derivePublicKey(decrypt(deployKeyPrivate))
-    } catch {
-      deployPublicKey = null
-    }
-  }
-  return { ...rest, deployPublicKey }
-}
-
-/**
- * Ensures a project has a deploy key once it has ≥1 generic "git" repo.
- * Never regenerated once set (the public half is registered host-side).
- * Returns the decrypted private key, or null if no git repo needs one.
- */
-export function ensureDeployKey(p: Project): string | null {
-  const needsKey = p.repositories.some((r) => r.provider === "git")
-  if (!needsKey) return p.deployKeyPrivate ? decrypt(p.deployKeyPrivate) : null
-  if (p.deployKeyPrivate) return decrypt(p.deployKeyPrivate)
-  const { privateKey } = generateSSHKeyPair()
-  db.update(projects).set({ deployKeyPrivate: encrypt(privateKey) }).where(eq(projects.id, p.id)).run()
-  p.deployKeyPrivate = encrypt(privateKey)
-  return privateKey
+  return p
 }
 
 export function listProjects(): SerializedProject[] {
@@ -115,7 +98,6 @@ export function createProject(input: CreateProjectInput): SerializedProject {
     repositories: input.repositories,
     forwardPorts: input.forwardPorts,
     sharedVolumes: input.sharedVolumes,
-    deployKeyPrivate: null,
     currentVersion: 1,
     favorite: false,
     createdAt: new Date(),
@@ -126,9 +108,6 @@ export function createProject(input: CreateProjectInput): SerializedProject {
   // Inline secrets → project_secrets (kept out of the versioned config).
   for (const s of input.secrets ?? []) setProjectSecret(id, s.name, s.value)
 
-  // Generate a deploy key eagerly if a generic git repo is present.
-  const fresh = getProjectRow(id)!
-  ensureDeployKey(fresh)
   return serializeProject(getProjectRow(id)!)
 }
 
@@ -178,7 +157,6 @@ export function updateProject(id: string, input: UpdateProjectInput): Serialized
 
   if (input.secrets) for (const s of input.secrets) setProjectSecret(id, s.name, s.value)
 
-  ensureDeployKey(getProjectRow(id)!)
   return serializeProject(getProjectRow(id)!)
 }
 
@@ -216,7 +194,7 @@ export async function deleteProject(id: string): Promise<boolean> {
 
 /**
  * Builds the portable spec of a project (see `lib/project-export.ts`).
- * Instance-scoped fields (id, version, favorite, deploy key) are left out, and
+ * Instance-scoped fields (id, version, favorite) are left out, and
  * secrets travel as **names only** — values are write-only and never exported.
  */
 export function exportProject(id: string): ProjectExport | undefined {

@@ -102,8 +102,6 @@ test.describe("project form → stored project", () => {
         branch: "develop",
       },
     ])
-    // A generic git repo earns the project a deploy key.
-    expect(stored.deployPublicKey).toContain("ssh-")
     expect(await (await request.get(`/api/projects/${id}/secrets`)).json()).toMatchObject([{ name: "TOKEN" }])
   })
 
@@ -222,15 +220,22 @@ test.describe("project form → stored project", () => {
           postStartCommand: "go run .",
           forwardPorts: [8080],
           repositories: [
-            // `gitlab` is a provider the design system's repo list doesn't model: it
-            // must survive an edit untouched rather than be rewritten to `github`.
-            { id: "r-infra", provider: "gitlab", project: "acme/infra", workspacePath: "infra", branch: "main" },
+            // Two rows, so an edit that touches neither has to give both back untouched —
+            // the form drawing one row and dropping the other is the regression this pins.
+            {
+              id: "r-infra",
+              provider: "git",
+              project: "acme/infra",
+              workspacePath: "infra",
+              cloneUrl: "git@example.com:acme/infra.git",
+              branch: "main",
+            },
             {
               id: "r-api",
               provider: "git",
               project: "acme/api",
               workspacePath: "api",
-              cloneUrl: "git@gitlab.com:acme/api.git",
+              cloneUrl: "git@example.org:acme/api.git",
             },
           ],
         },

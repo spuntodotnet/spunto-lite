@@ -7,7 +7,6 @@ import { toast } from "@spunto/design-system"
 import {
   EDIT_SECTIONS,
   ProjectForm as DesignSystemProjectForm,
-  type GitProvider,
   type ProjectFeatureSelection,
   type ProjectFormCustomSection,
   type ProjectFormSectionId,
@@ -43,25 +42,6 @@ import type {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-
-/**
- * The one git host Lite knows how to address, declared for the package's benefit.
- *
- * Not a connection: there is no app to install and nothing to authorize. A repo is written
- * `owner/repo` and cloned with the SSH key mounted from the host (Settings → SSH key), which is
- * why `connected` is simply true — the credential is there or the clone fails, and no OAuth dance
- * would change that. `operations` says `cloneCredential` and *not* `listRepos`: we can reference a
- * repository, we cannot enumerate one, so the field stays a free-text input instead of an empty
- * picker.
- *
- * GitLab and Bitbucket are absent on purpose. They exist in Lite's stored data — a project
- * imported from a Cloud spec can carry one — but the form has never offered them as a choice, and
- * `toProjectPayload` keeps such a row intact through `storedProvider`. Listing them here would add
- * two buttons for hosts we cannot reach any better than through "Add Git URL".
- */
-const GIT_PROVIDERS: GitProvider[] = [
-  { id: "github", name: "GitHub", connected: true, operations: ["cloneCredential"] },
-]
 
 /**
  * Sections Lite doesn't show. Anything absent from `sections` doesn't exist in
@@ -318,18 +298,10 @@ export function ProjectForm({ initial }: { initial?: Project }) {
         features={features}
         onSearchExtensions={searchExtensions}
         customSections={[SHARED_VOLUMES_SECTION]}
-        // Lite has no GitHub App and no repo combobox of its own, so the package's
-        // plain `owner/repo` input is exactly right — `renderRepoField` stays unset
-        // rather than wrapping a plain input in a slot.
-        //
-        // `gitProviders` is not optional decoration: since 0.24.0 the package gates
-        // "Add repository" on there being a connected provider, so declaring none
-        // leaves "Add Git URL" as the only way to add a repo. One entry says what is
-        // true here — a repo is addressed as `owner/repo` and cloned with the user's
-        // own SSH key, mounted from the host — and `cloneCredential` alone, without
-        // `listRepos`, is precisely "you can reference repositories, I cannot list
-        // them for you". That keeps the field the free-text input it already was.
-        gitProviders={GIT_PROVIDERS}
+        // No `gitProviders`, and no `renderRepoField`: Lite reaches no forge, so it declares no
+        // hosting provider. The package then draws the one control that matches — "Add Git URL",
+        // a clone URL cloned with the mounted SSH key — and drops the repository picker and the
+        // "connect an integration" prompt, which would both be offers Lite cannot honour.
         extras={{
           features: (
             <FeatureVersions

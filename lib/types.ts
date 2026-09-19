@@ -13,8 +13,8 @@ export type { BuildStep }
  * already on disk — not only what today's generator emits. `pending` and `features` are Lite-era
  * phases older workers still report; everything else is identical, and `timings` comes along.
  *
- * `Repository` stays local: the package types `provider` as a plain string (Cloud reaches forges
- * Lite has none of), and the union here is what turns a typo into a compile error.
+ * `Repository` stays local, and narrower than the package's: Lite clones URLs with one SSH key
+ * and knows nothing of forges, so `provider` is pinned rather than open (see the type's note).
  */
 import type { ProjectFeature, SetupStatus as SharedSetupStatus } from "@spunto/build/types"
 
@@ -24,12 +24,29 @@ export type SetupStatus = Omit<SharedSetupStatus, "phase"> & {
   phase: SharedSetupStatus["phase"] | "pending" | "features"
 }
 
+/**
+ * A repository to clone into a worker's workspace: a URL, and a path to put it at.
+ *
+ * **No hosting provider, and that is the design.** Lite has no forge integration — no app to
+ * install, no token to mint, no API to ask what repositories you own. Every repository is cloned
+ * over SSH with the one key you mounted (Settings → SSH key), which behaves the same against any
+ * host. A provider field would only be somewhere to keep an assumption about a host we never talk
+ * to, and it is exactly the assumption that made `owner/repo` mean one company's domain.
+ *
+ * `provider` survives as a constant because the shared package still carries it — Spunto Cloud
+ * reaches forges through integrations, and the generated clone command branches on it. `git` is
+ * the package's name for "clone this URL with the key you were handed", which is Lite's only mode.
+ */
 export type Repository = {
   id: string
-  provider: "github" | "gitlab" | "bitbucket" | "git"
+  /** Always `git`. See the note above. */
+  provider: "git"
+  /** Display label, derived from the clone URL — the last path segment. */
   project: string
   workspacePath: string
-  cloneUrl?: string
+  /** SSH or HTTPS clone URL, exactly as git takes it. */
+  cloneUrl: string
+  /** Default branch to check out. Empty/absent = the remote's default (HEAD). */
   branch?: string
 }
 
@@ -55,7 +72,6 @@ export type Project = {
   currentVersion: number
   favorite: boolean
   createdAt: string
-  deployPublicKey: string | null
 }
 
 export type WorkerState = "provisioning" | "building" | "starting" | "ready" | "stopped" | "error"
@@ -112,7 +128,7 @@ export type ProjectVersion = {
   id: string
   projectId: string
   version: number
-  config: Omit<Project, "id" | "currentVersion" | "favorite" | "createdAt" | "deployPublicKey">
+  config: Omit<Project, "id" | "currentVersion" | "favorite" | "createdAt">
   createdAt: string
 }
 
