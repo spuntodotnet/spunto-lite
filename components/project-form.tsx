@@ -298,9 +298,10 @@ export function ProjectForm({ initial }: { initial?: Project }) {
         features={features}
         onSearchExtensions={searchExtensions}
         customSections={[SHARED_VOLUMES_SECTION]}
-        // Lite has no GitHub App and no repo combobox of its own, so the package's
-        // `<input list>` + `<datalist>` fallback is exactly right — `renderRepoField`
-        // stays unset rather than wrapping a plain input in a slot.
+        // No `gitProviders`, and no `renderRepoField`: Lite reaches no forge, so it declares no
+        // hosting provider. The package then draws the one control that matches — "Add Git URL",
+        // a clone URL cloned with the mounted SSH key — and drops the repository picker and the
+        // "connect an integration" prompt, which would both be offers Lite cannot honour.
         extras={{
           features: (
             <FeatureVersions

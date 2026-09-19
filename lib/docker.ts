@@ -496,11 +496,15 @@ export async function removeProjectVolumes(projectId: string): Promise<void> {
 }
 
 /**
- * Live state of a service container. Richer than `getContainerState` because a
- * service that *died* has to be told apart from one that was stopped on purpose:
- * the exit code and the daemon's own error message are what the UI shows.
+ * Live state of a container. Richer than `getContainerState` because a container that *died* has
+ * to be told apart from one that was stopped on purpose: the exit code and the daemon's own error
+ * message are what the UI shows.
+ *
+ * Both a service and a worker read it. It was a service-only helper at first, which is how
+ * workers spent a while unable to tell a crash from a deliberate stop — the same `inspect()` call
+ * carries the answer, `getContainerState` just throws it away.
  */
-export async function inspectServiceContainer(
+export async function inspectContainer(
   containerId: string,
 ): Promise<
   | { state: "running" }

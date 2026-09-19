@@ -147,7 +147,7 @@ export default function SettingsPage() {
             <FileCode2 className="size-4" /> Dotfiles
           </CardTitle>
           <CardDescription>
-            A personal dotfiles repo (GitHub Codespaces-style). Cloned into{" "}
+            A personal dotfiles repo, cloned into{" "}
             <code className="font-mono text-xs">~/dotfiles</code> on each worker&apos;s first boot; its install script (
             <code className="font-mono text-xs">install.sh</code>, <code className="font-mono text-xs">bootstrap.sh</code>,{" "}
             <code className="font-mono text-xs">setup.sh</code> or <code className="font-mono text-xs">script/setup</code>)
@@ -161,9 +161,11 @@ export default function SettingsPage() {
             id="df"
             value={dotfilesRepo}
             onChange={(e) => setDotfilesRepo(e.target.value)}
-            placeholder="owner/dotfiles or git@github.com:owner/dotfiles.git"
+            placeholder="git@example.com:me/dotfiles.git"
           />
-          <p className="text-xs text-muted-foreground">Leave empty to disable.</p>
+          <p className="text-xs text-muted-foreground">
+            A full clone URL — SSH or HTTPS. Leave empty to disable.
+          </p>
         </CardContent>
       </Card>
 

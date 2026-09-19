@@ -37,24 +37,22 @@ import type { Worker } from "@/lib/types"
 // ─── Status ──────────────────────────────────────────────────────────────────
 
 /**
- * Lite's state machine → the vocabulary `resolveWorkerStatus` speaks.
+ * A Lite state, straight to the design system — no translation left.
  *
- * Only two states need translating. `pending` and `building` are Lite's own: the
- * design system resolves anything it doesn't recognise to `pending`, which is
- * *not* flagged as "setting up" — so left as-is they would silently drop the
- * setup progress bar, the one thing worth looking at while a worker boots.
- * `provisioning` is the design system's name for the same moment.
+ * There used to be one: Lite called the two moments before a container exists
+ * `pending` and `building`, and the package knew neither, resolving both to its
+ * own `pending` *fallback* — which is deliberately not flagged as "setting up",
+ * so the setup progress bar silently vanished for the whole boot. `building` is
+ * the package's own since 0.25.0, `pending` is now spelled `provisioning` like
+ * the package spells it, and a state travels as itself.
  *
- * Known cost: the pill then reads "Setting up…" where Lite said "Building
- * image…". The package has a `pulling` state but no `building` one, and calling
- * a `docker build` a pull would be worse than being vague.
+ * Worth keeping in mind before adding a seventh: an unknown value still lands on
+ * that same `pending` fallback rather than throwing, so the failure mode of a
+ * state the package doesn't know is a vague pill, not a crash — quiet, and only
+ * visible by looking.
  */
-function toDsState(state: string): string {
-  return state === "pending" || state === "building" ? "provisioning" : state
-}
-
 export function cfgFor(state: string): WorkerStatus {
-  return resolveWorkerStatus({ id: "", state: toDsState(state) })
+  return resolveWorkerStatus({ id: "", state })
 }
 
 export function isSettingUp(state: string): boolean {
@@ -223,13 +221,17 @@ function workerMenu(
   onDelete: () => void,
 ): ActionMenuEntry[] {
   const running = worker.state === "ready"
-  const stopped = worker.state === "stopped"
+  // Down, whichever way it got there. `stopped` alone left an `error` worker with a "Stop" that
+  // had nothing to stop and no way back up from the card — invisible while `error` only meant a
+  // failed setup, and the everyday case now that a container dying on its own lands there too.
+  // Same rule as the worker page's own Start button.
+  const down = worker.state === "stopped" || worker.state === "error"
 
   return [
     // Only a live worker serves code-server.
     running && { label: "Open in VS Code", icon: Code2, href: workerBaseUrl(worker.id), target: "_blank" },
     "separator",
-    stopped
+    down
       ? { label: "Start", icon: Play, onClick: () => m.start.mutate(), loading: m.start.isPending }
       : { label: "Stop", icon: Square, onClick: () => m.stop.mutate(), loading: m.stop.isPending },
     {
@@ -311,8 +313,7 @@ export function WorkerCard({
   return (
     <>
       <DsWorkerCard
-        // Everything but the state passes through untouched; see `toDsState`.
-        worker={{ ...worker, state: toDsState(worker.state) }}
+        worker={worker}
         href={cockpitHref}
         render={{ link: ({ href, className, children }) => <Link href={href} className={className}>{children}</Link> }}
         gitStatus={repos}

@@ -127,10 +127,13 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
 
   const controlPanel = (
     <div className="p-4 space-y-5">
-      {worker.state === "error" && status?.error && (
+      {/* Two sources, one banner: a setup that failed says where it stopped (`setupStatus.error`),
+          a container that died on its own says why (`worker.error`). The setup story wins when both
+          are there — it is the earlier failure, and the one with a phase attached. */}
+      {worker.state === "error" && (status?.error || worker.error) && (
         <div className="flex items-center gap-2 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-500">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          <span className="font-mono truncate">{status.error}</span>
+          <span className="font-mono truncate">{status?.error ?? worker.error}</span>
         </div>
       )}
 

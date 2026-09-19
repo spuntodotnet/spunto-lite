@@ -47,7 +47,12 @@ HTTPS with a local mkcert certificate. See
 - **`dockerode`** → `/var/run/docker.sock`: workers are sibling containers on the
   host daemon.
 - **SQLite** (via Drizzle) for projects/workers/secrets, in a Docker volume.
-- **`~/.ssh` mounted read-only** and injected into each worker for git identity.
+- **`~/.ssh` mounted read-only** and injected into each worker — it is both the git
+  identity and the *only* clone credential. A repository is declared as a **clone
+  URL**, never as a host plus an `owner/repo`: there is no forge integration here,
+  no app to install and no token to mint, so any host your key reaches works the
+  same way — a hosted forge, a self-hosted GitLab, a bare repo on a NAS. Authorize
+  the key once, wherever, and every project clones and pushes.
 - **[`@spunto/build`](https://www.npmjs.com/package/@spunto/build)** for everything
   the two Spuntos have to agree on: the image recipe and the shell it generates, the
   build-log protocol, the extension-registry clients, the Docker naming scheme and the
@@ -58,7 +63,9 @@ HTTPS with a local mkcert certificate. See
   then [`spunto-pack`](https://github.com/coderhammer/features/tree/main/src/spunto-pack),
   before the features the project declares; images are tagged
   `mp-proj-<id>:v<version>-r<recipe>`, so a release that changes what goes into an image
-  rebuilds it instead of leaving your workers on the old one.
+  rebuilds it instead of leaving your workers on the old one. What the two Spuntos share
+  today and what they still duplicate — project creation, worker listing, the status
+  vocabularies — is written down in [`docs/api-partagee.md`](docs/api-partagee.md).
 - **A persistent terminal on dtach**, not a multiplexer. Closing the tab does not kill
   the build: a throwaway `docker exec` attaches to a session that outlives it. dtach only
   does persistence and forwards every byte, so the *browser* keeps the mouse, the

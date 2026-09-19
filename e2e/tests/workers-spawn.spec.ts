@@ -13,7 +13,9 @@ async function createProject(request: APIRequestContext, name: string) {
     data: {
       name,
       image: IMAGE,
-      repositories: [{ id: "r1", provider: "github", project: "octocat/Hello-World", workspacePath: "app" }],
+      repositories: [
+        { id: "r1", provider: "git", project: "acme/app", workspacePath: "app", cloneUrl: "git@example.com:acme/app.git" },
+      ],
     },
   })
   expect(res.status(), await res.text()).toBe(201)
