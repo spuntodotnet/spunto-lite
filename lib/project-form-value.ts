@@ -180,7 +180,12 @@ export function toProjectPayload(value: LiteFormValue): ProjectPayload {
       // it and hasn't filled it in.
       .filter((r) => (r.provider === "git" ? r.cloneUrl?.trim() : r.project.trim()))
       .map((r) => {
-        const provider = r.storedProvider ?? r.provider
+        // The exact inverse of `toFormRepo` above, and it has to narrow: the package types
+        // `provider` as a plain `string` (the set of forges belongs to the deployment, not to a
+        // shared package), while Lite's API takes its own four. Total by construction rather than
+        // by a fallback we'd have to invent — the form only ever writes the two providers it
+        // offers, and a stored `gitlab`/`bitbucket` travels in `storedProvider`.
+        const provider = r.storedProvider ?? (r.provider === "git" ? "git" : "github")
         return {
           id: r.id,
           provider,
