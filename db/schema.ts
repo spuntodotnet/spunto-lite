@@ -141,6 +141,13 @@ export const workers = sqliteTable("workers", {
   // provisioning | building | starting | ready | stopped | error — the vocabulary of
   // `@spunto/design-system/workers`, so a state needs no translating on its way to a pill.
   state: text("state").notNull().default("provisioning"),
+  /**
+   * Why a running worker's container went down, when nobody asked it to — the daemon's own
+   * message, or the exit code it reported. Null for every other path, including a setup that
+   * failed: that story belongs to `setupStatus.error`, which records *where* in the setup it
+   * stopped, and overwriting it here would lose that. Same shape as `services.error`.
+   */
+  error: text("error"),
   setupStatus: text("setup_status", { mode: "json" }).$type<SetupStatus | null>(),
   // Branch checked out at clone time, overriding each repository's own default.
   // Null = the remote's default branch. Persisted so a rebuild (which keeps the

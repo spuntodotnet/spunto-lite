@@ -21,7 +21,7 @@ import {
   removeWorker as removeWorkerContainer,
   removeContainerOnly,
   connectToSharedNetwork,
-  getContainerState,
+  inspectContainer,
   getSetupStatus,
   buildProjectImage,
 } from "../lib/docker"
@@ -262,6 +262,7 @@ export function spawnWorker(projectId: string, name?: string, branch?: string): 
     containerId: null,
     state: "provisioning",
     setupStatus: { phase: "pending", repos: [], postCreate: null, postStart: null },
+    error: null,
     branch: branch?.trim() || null,
     projectVersion: project.currentVersion,
     tags: [],
@@ -284,14 +285,16 @@ function derivePhase(setup: SetupStatus | null): string | null {
  */
 export async function refreshWorker(w: Worker): Promise<Worker> {
   if (!w.containerId) return w
-  const cState = await getContainerState(w.containerId).catch(() => "error" as const)
+  // `inspectContainer` and not `getContainerState`: the exit code is the whole difference
+  // between "you stopped it" and "it died", and it comes from the same `inspect()` call.
+  const live = await inspectContainer(w.containerId).catch(() => ({ state: "error" } as const))
 
-  if (cState === "not_found") {
+  if (live.state === "not_found") {
     if (w.state === "error") return w
-    db.update(workers).set({ state: "stopped", containerId: null }).where(eq(workers.id, w.id)).run()
-    return { ...w, state: "stopped", containerId: null }
+    db.update(workers).set({ state: "stopped", containerId: null, error: null }).where(eq(workers.id, w.id)).run()
+    return { ...w, state: "stopped", containerId: null, error: null }
   }
-  if (cState === "stopped") {
+  if (live.state === "stopped") {
     // A failed setup is terminal: don't let the next poll relabel it "stopped".
     if (w.state === "error") return w
     // A container that dies *during* setup didn't stop, it failed — a branch that
@@ -304,15 +307,26 @@ export async function refreshWorker(w: Worker): Promise<Worker> {
       const setup: SetupStatus = {
         ...(w.setupStatus ?? { phase: "error", repos: [], postCreate: null, postStart: null }),
         phase: "error",
-        error: w.setupStatus?.error ?? "Setup exited before the workspace was ready — see the logs",
+        error:
+          w.setupStatus?.error ??
+          `Setup exited with code ${live.exitCode} before the workspace was ready — see the logs`,
       }
       db.update(workers).set({ state: "error", setupStatus: setup }).where(eq(workers.id, w.id)).run()
       return { ...w, state: "error", setupStatus: setup }
     }
-    if (w.state !== "stopped") db.update(workers).set({ state: "stopped" }).where(eq(workers.id, w.id)).run()
-    return { ...w, state: "stopped" }
+    // We wrote "stopped" before the container went down, so reaching here with that state
+    // means the stop was ours. Anything else: the workspace was up and its container went
+    // away on its own — the case that used to be flattened into "stopped", leaving no way
+    // to tell an OOM kill from a click on Stop. Same rule as a service (`refreshService`):
+    // a clean exit is a stop, a non-zero one is a failure worth a message.
+    if (w.state === "stopped") return w
+    const crashed = live.exitCode !== 0
+    const error = crashed ? (live.error ?? `Container exited with code ${live.exitCode} — see the logs`) : null
+    const state = crashed ? "error" : "stopped"
+    db.update(workers).set({ state, error }).where(eq(workers.id, w.id)).run()
+    return { ...w, state, error }
   }
-  if (cState === "error") return w
+  if (live.state === "error") return w
 
   // running — read setup status
   let setup: SetupStatus | null = w.setupStatus
@@ -323,8 +337,8 @@ export async function refreshWorker(w: Worker): Promise<Worker> {
   }
   const phase = derivePhase(setup)
   const state = phase === "ready" ? "ready" : phase === "error" ? "error" : "starting"
-  db.update(workers).set({ state, setupStatus: setup ?? w.setupStatus }).where(eq(workers.id, w.id)).run()
-  return { ...w, state, setupStatus: setup ?? w.setupStatus }
+  db.update(workers).set({ state, setupStatus: setup ?? w.setupStatus, error: null }).where(eq(workers.id, w.id)).run()
+  return { ...w, state, setupStatus: setup ?? w.setupStatus, error: null }
 }
 
 export function getWorkerRow(id: string): Worker | undefined {
@@ -359,8 +373,8 @@ export async function stopWorker(id: string): Promise<Worker | undefined> {
   const w = getWorkerRow(id)
   if (!w?.containerId) return w
   await stopContainer(w.containerId)
-  db.update(workers).set({ state: "stopped" }).where(eq(workers.id, id)).run()
-  return { ...w, state: "stopped" }
+  db.update(workers).set({ state: "stopped", error: null }).where(eq(workers.id, id)).run()
+  return { ...w, state: "stopped", error: null }
 }
 
 export async function startWorker(id: string): Promise<Worker | undefined> {
@@ -370,8 +384,8 @@ export async function startWorker(id: string): Promise<Worker | undefined> {
   // Containers created before the shared network existed aren't attached to it;
   // joining on every start makes them reach the shared services too (no-op otherwise).
   await connectToSharedNetwork(w.containerId, [`worker-${id}`])
-  db.update(workers).set({ state: "starting" }).where(eq(workers.id, id)).run()
-  return { ...w, state: "starting" }
+  db.update(workers).set({ state: "starting", error: null }).where(eq(workers.id, id)).run()
+  return { ...w, state: "starting", error: null }
 }
 
 export async function deleteWorker(id: string): Promise<void> {
@@ -395,7 +409,7 @@ export async function rebuildWorker(id: string): Promise<Worker | undefined> {
   if (!project) return undefined
   await removeContainerOnly(w.id, w.containerId).catch(() => {})
   db.update(workers)
-    .set({ containerId: null, state: "provisioning", projectVersion: project.currentVersion, setupStatus: { phase: "pending", repos: [], postCreate: null, postStart: null } })
+    .set({ containerId: null, state: "provisioning", projectVersion: project.currentVersion, error: null, setupStatus: { phase: "pending", repos: [], postCreate: null, postStart: null } })
     .where(eq(workers.id, id))
     .run()
   void runSpawnPipeline(id, project, project.currentVersion, w.branch)

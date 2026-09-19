@@ -221,13 +221,17 @@ function workerMenu(
   onDelete: () => void,
 ): ActionMenuEntry[] {
   const running = worker.state === "ready"
-  const stopped = worker.state === "stopped"
+  // Down, whichever way it got there. `stopped` alone left an `error` worker with a "Stop" that
+  // had nothing to stop and no way back up from the card — invisible while `error` only meant a
+  // failed setup, and the everyday case now that a container dying on its own lands there too.
+  // Same rule as the worker page's own Start button.
+  const down = worker.state === "stopped" || worker.state === "error"
 
   return [
     // Only a live worker serves code-server.
     running && { label: "Open in VS Code", icon: Code2, href: workerBaseUrl(worker.id), target: "_blank" },
     "separator",
-    stopped
+    down
       ? { label: "Start", icon: Play, onClick: () => m.start.mutate(), loading: m.start.isPending }
       : { label: "Stop", icon: Square, onClick: () => m.stop.mutate(), loading: m.stop.isPending },
     {

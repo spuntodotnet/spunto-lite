@@ -7,7 +7,7 @@ import {
   removeServiceContainer,
   removeService as removeServiceDocker,
   stopContainer,
-  inspectServiceContainer,
+  inspectContainer,
 } from "../lib/docker"
 import { getUserSecretValue } from "./secrets"
 import type { CreateServiceInput, UpdateServiceInput } from "../lib/validation"
@@ -288,7 +288,7 @@ export async function refreshService(s: Service): Promise<Service> {
   // nothing to reconcile against, and clobbering "provisioning" would fight it.
   if (!s.containerId) return s
 
-  const live = await inspectServiceContainer(s.containerId)
+  const live = await inspectContainer(s.containerId)
   if (live.state === "error") return s
 
   if (live.state === "not_found") {

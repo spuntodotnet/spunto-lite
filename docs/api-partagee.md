@@ -122,7 +122,7 @@ Le reste des statuts, plus brièvement :
   a pas — chez nous c'est le dernier build d'image qui porte l'information
   (`building | ready | error`, vocabulaire identique des deux côtés). Le design system exporte
   `ProjectStatePill`, que Lite n'utilise pas.
-- **Services partagés** : les états de nos services (`pending | starting | ready | stopped |
+- **Services partagés** : les états de nos services (`provisioning | starting | ready | stopped |
   error`) reprennent volontairement ceux d'un worker. Le pendant Cloud, ce sont les services d'un
   déploiement, avec leur propre échelle (`stopped | pulling | starting | running | stopping |
   error`) — deux features différentes qui se ressemblent, pas une divergence à corriger.

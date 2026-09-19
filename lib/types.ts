@@ -71,6 +71,11 @@ export type Worker = {
   branch: string | null
   projectVersion: number
   tags: string[]
+  /**
+   * Why the container went down on its own, when nobody asked — exit code or the daemon's
+   * message. Null otherwise; a failed *setup* reports itself in `setupStatus.error` instead.
+   */
+  error: string | null
   createdAt: string
 }
 

@@ -48,29 +48,29 @@ sur blanc dans leur doc, et c'est la raison d'être du second champ.
 déduit un `state` unique et l'écrit en base. Pas de désaccord possible — mais pas d'expressivité
 non plus.
 
-**Conséquence directe, et c'est un vrai manque fonctionnel : Lite ne sait pas distinguer « tu l'as
-arrêté » de « il est mort ».** Un worker `ready` dont le conteneur part en OOM devient `stopped`,
-exactement comme celui qu'on a arrêté au bouton. Le code le fait explicitement
-(`services/workers.ts:294-313`) : `cState === "stopped"` et un état précédent qui n'est pas un état
-de setup → `stopped`. Et un conteneur supprimé dans le dos de l'app (`not_found`) devient `stopped`
-avec `containerId` remis à `null`, là où Cloud garderait `state: "ready"` + `dockerState:
-"not_found"`.
+**Cet axe unique a longtemps coûté une distinction : Lite ne savait pas dire « tu l'as arrêté » de
+« il est mort ».** Un worker `ready` dont le conteneur partait en OOM devenait `stopped`, exactement
+comme celui qu'on avait arrêté au bouton — et le plus frappant est que Lite avait déjà résolu le
+problème **pour les services**, une fonction plus haut dans le même fichier : `refreshService`
+inspecte le code de sortie et passe en `error` avec un message quand le conteneur est mort de
+lui-même. `getContainerState`, celle que les workers utilisaient, jetait l'`ExitCode` et le
+`State.Error` que Docker donne pourtant dans le même `inspect()`.
 
-Le plus frappant, c'est que **Lite a déjà résolu ce problème — pour les services, pas pour les
-workers.** Dans le même fichier, une fonction plus haut :
+C'est réparé (§ 8, point 5), et en reprenant la forme des services plutôt qu'en inventant la nôtre :
+`inspectServiceContainer` est devenue `inspectContainer`, et un conteneur qui meurt sans qu'on l'ait
+demandé passe le worker en `error` avec le code de sortie — `Container exited with code 137` pour un
+OOM kill. **Pas de nouvel état** : `error` existait, et le message avait besoin d'un endroit où
+vivre plus que la pastille d'un nom de plus.
 
-```ts
-/**
- * Live state of a service container. Richer than `getContainerState` because a
- * service that *died* has to be told apart from one that was stopped on purpose:
- * the exit code and the daemon's own error message are what the UI shows.
- */
-export async function inspectServiceContainer(containerId: string)  // lib/docker.ts:503
-```
+Le partage des rôles est net, et c'est ce qui rend la chose lisible : un **setup** qui échoue se
+raconte dans `setupStatus.error`, avec la phase où il s'est arrêté ; un **conteneur** qui meurt
+après coup se raconte dans la colonne `error` du worker. Le second n'écrase pas le premier — vérifié
+en tuant un worker `ready` : son `setupStatus.phase` vaut toujours `ready`, ce qui est la vérité.
 
-`getContainerState` (`lib/docker.ts:525`), celle que les workers utilisent, jette l'`ExitCode` et le
-`State.Error` que Docker donne pourtant dans le même `inspect()`. La distinction qu'on a jugée
-indispensable pour un Postgres partagé, on ne la fait pas pour un workspace.
+Ce qui reste du manque, et qui est assumé : un conteneur supprimé dans le dos de l'app
+(`not_found`) devient `stopped`, là où Cloud garderait `state: "ready"` + `dockerState:
+"not_found"`. Dire « quelqu'un a supprimé ton conteneur » demanderait le second axe, pas un mot de
+plus sur le premier.
 
 ## 3. Push vs pull : qui écrit l'état
 
@@ -240,12 +240,21 @@ Par ordre de rendement :
    sans `Omit<>`. À garder pour la fin, parce que c'est le seul point de la liste qui touche des
    données déjà écrites en base — les vieux workers qui portent `phase: "features"` doivent être
    lus sans planter (le design system les résout déjà sur son `default`).
-5. **Distinguer « mort » de « arrêté » chez nous**, en utilisant pour les workers ce que
-   `inspectServiceContainer` fait déjà pour les services. Ça ne demande pas le second axe de Cloud
-   (pas de node, pas de RPC qui échoue seul) : un `exited` distinct de `stopped`, plus l'`ExitCode`
-   que Docker donne déjà, suffirait — et `exited` est **déjà** dans la table du design system.
-   Indépendant du reste, et c'est le seul point qui corrige un vrai manque plutôt qu'une
-   divergence.
+5. **Distinguer « mort » de « arrêté » chez nous** — *fait*, et pas comme ce paragraphe le
+   proposait. Il suggérait un état `exited` distinct de `stopped`, au motif qu'`exited` est déjà
+   dans la table du design system. En regardant le code, les services avaient déjà répondu à la
+   même question et mieux : `error` plus un message portant le code de sortie. Aucun vocabulaire en
+   plus (donc rien à réaligner avec le paquet plus tard), et le message a un endroit où vivre — ce
+   qu'une pastille seule ne peut pas porter. `inspectServiceContainer` est devenue
+   `inspectContainer`, lue par les deux.
+
+   Vérifié sur un vrai worker : `docker kill -9` → `error` + `Container exited with code 137`,
+   `setupStatus.phase` toujours `ready` ; un arrêt par l'app → `stopped`, sans message ; un
+   redémarrage repart d'une ardoise propre.
+
+   Au passage, un défaut que ce changement allait rendre quotidien : le menu de la carte n'offrait
+   `Start` que pour `stopped`, donc un worker en `error` n'avait qu'un « Stop » sans rien à arrêter.
+   Invisible tant qu'`error` ne voulait dire que « setup raté ».
 
 Ce qu'il ne faut pas aligner : `dockerState` et `nodeId` (un plan de contrôle mono-machine n'a ni
 node ni RPC qui échoue séparément), `stopping` et `deleting` (nos appels sont synchrones — un état
