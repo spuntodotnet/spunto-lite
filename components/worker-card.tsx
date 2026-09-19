@@ -37,28 +37,22 @@ import type { Worker } from "@/lib/types"
 // ─── Status ──────────────────────────────────────────────────────────────────
 
 /**
- * Lite's state machine → the vocabulary `resolveWorkerStatus` speaks.
+ * A Lite state, straight to the design system — no translation left.
  *
- * One state left to translate. `building` is the package's own since 0.25.0 —
- * pill included — so it now travels untouched and the ten minutes of a `docker
- * build` read "Building image…" again instead of a vague "Setting up…".
+ * There used to be one: Lite called the two moments before a container exists
+ * `pending` and `building`, and the package knew neither, resolving both to its
+ * own `pending` *fallback* — which is deliberately not flagged as "setting up",
+ * so the setup progress bar silently vanished for the whole boot. `building` is
+ * the package's own since 0.25.0, `pending` is now spelled `provisioning` like
+ * the package spells it, and a state travels as itself.
  *
- * `pending` stays, and not for want of trying: in the package's table `pending`
- * is the **fallback**, where any state it has never seen lands. It is therefore
- * deliberately not flagged as "setting up", and teaching it otherwise would make
- * an unknown value claim a setup is in flight. Left untranslated it would
- * silently drop the setup progress bar, the one thing worth looking at while a
- * worker boots; `provisioning` is the package's name for the same moment.
- *
- * This function goes away when Lite's own state is renamed `provisioning` —
- * see `docs/etats-worker.md` § 8.
+ * Worth keeping in mind before adding a seventh: an unknown value still lands on
+ * that same `pending` fallback rather than throwing, so the failure mode of a
+ * state the package doesn't know is a vague pill, not a crash — quiet, and only
+ * visible by looking.
  */
-function toDsState(state: string): string {
-  return state === "pending" ? "provisioning" : state
-}
-
 export function cfgFor(state: string): WorkerStatus {
-  return resolveWorkerStatus({ id: "", state: toDsState(state) })
+  return resolveWorkerStatus({ id: "", state })
 }
 
 export function isSettingUp(state: string): boolean {
@@ -315,8 +309,7 @@ export function WorkerCard({
   return (
     <>
       <DsWorkerCard
-        // Everything but the state passes through untouched; see `toDsState`.
-        worker={{ ...worker, state: toDsState(worker.state) }}
+        worker={worker}
         href={cockpitHref}
         render={{ link: ({ href, className, children }) => <Link href={href} className={className}>{children}</Link> }}
         gitStatus={repos}

@@ -138,8 +138,9 @@ export const workers = sqliteTable("workers", {
   projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   containerId: text("container_id"),
-  // pending | building | starting | ready | stopped | error
-  state: text("state").notNull().default("pending"),
+  // provisioning | building | starting | ready | stopped | error — the vocabulary of
+  // `@spunto/design-system/workers`, so a state needs no translating on its way to a pill.
+  state: text("state").notNull().default("provisioning"),
   setupStatus: text("setup_status", { mode: "json" }).$type<SetupStatus | null>(),
   // Branch checked out at clone time, overriding each repository's own default.
   // Null = the remote's default branch. Persisted so a rebuild (which keeps the
@@ -183,7 +184,7 @@ export const services = sqliteTable("services", {
   httpPort: integer("http_port"),
   restartPolicy: text("restart_policy").$type<ServiceRestartPolicy>().notNull().default("unless-stopped"),
   containerId: text("container_id"),
-  // pending | starting | ready | stopped | error — same vocabulary as workers, so
+  // provisioning | starting | ready | stopped | error — same vocabulary as workers, so
   // the UI's status pills are shared.
   state: text("state").notNull().default("stopped"),
   /** Last start failure (missing image, port already bound…), surfaced in the UI. */

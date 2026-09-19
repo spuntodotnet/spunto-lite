@@ -58,7 +58,7 @@ export type Project = {
   deployPublicKey: string | null
 }
 
-export type WorkerState = "pending" | "building" | "starting" | "ready" | "stopped" | "error"
+export type WorkerState = "provisioning" | "building" | "starting" | "ready" | "stopped" | "error"
 
 export type Worker = {
   id: string
@@ -83,7 +83,7 @@ export type ServicePort = { container: number; host?: number | null }
 export type ServiceVolume = { name: string; mountPath: string }
 export type ServiceRestartPolicy = "no" | "unless-stopped" | "always" | "on-failure"
 /** Same vocabulary as `WorkerState`, so the status pills are shared. */
-export type ServiceState = "pending" | "starting" | "ready" | "stopped" | "error"
+export type ServiceState = "provisioning" | "starting" | "ready" | "stopped" | "error"
 
 export type Service = {
   id: string

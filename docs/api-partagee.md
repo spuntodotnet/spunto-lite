@@ -18,9 +18,9 @@
 | Contenu de `setupStatus` | **oui, le type** | `@spunto/build/types` |
 | Fichier projet portable (`kind: "spunto/project"`) | **oui, le format** | `@spunto/build/spec` |
 | Formulaire de composition d'un projet | **oui, le composant** | `@spunto/design-system/projects` |
-| Pastilles et barre de progression d'un worker | **oui, via un adaptateur** | `@spunto/design-system/workers` |
+| Pastilles et barre de progression d'un worker | **oui**, et sans adaptateur depuis le renommage | `@spunto/design-system/workers` |
 | **Payload de création d'un projet** | non — deux schémas zod jumeaux, maintenus séparément | — |
-| **Vocabulaire des états d'un worker** | non — 4 valeurs communes sur 10 | — |
+| **Vocabulaire des états d'un worker** | *en partie* — 5 valeurs communes sur 9 depuis le renommage, et `building` est dans le paquet | — |
 | **Forme de l'objet `Worker` sur le fil** | non, mais compatible par accident | — |
 | **Routes, auth, scoping par organisation** | non, et c'est volontaire | — |
 | **Client d'API** | non — Lite n'a aucun document OpenAPI | — |
@@ -92,29 +92,24 @@ des deux vocabulaires : son en-tête raconte que la table vivait en double et av
 prend un worker de n'importe quelle forme, tolère un état qu'elle ne connaît pas, et sait que
 « les apps à un seul `state` (Spunto Lite) tombent dans le dernier bloc ».
 
-Le vocabulaire brut, lui, est à 4 valeurs communes sur 10 — et compter les valeurs est la mauvaise
+Le vocabulaire brut est à **5 valeurs communes sur 9** — et compter les valeurs est la mauvaise
 façon de lire la différence, parce que les deux produits ne font pas dire la même chose au mot
 « état ». Analyse détaillée : [`etats-worker.md`](etats-worker.md).
 
-| | `pending` | `building` | `provisioning` | `pulling` | `starting` | `ready` | `stopping` | `stopped` | `deleting` | `error` |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Lite | ✅ | ✅ | | | ✅ | ✅ | | ✅ | | ✅ |
-| Cloud | | | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| | `provisioning` | `building` | `pulling` | `starting` | `ready` | `stopping` | `stopped` | `deleting` | `error` |
+|---|---|---|---|---|---|---|---|---|---|
+| Lite | ✅ | ✅ | | ✅ | ✅ | | ✅ | | ✅ |
+| Cloud | ✅ | *(le paquet le connaît, l'API ne l'émet pas)* | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-Et Lite paie déjà la traduction, dans `components/worker-card.tsx` :
+Ça n'a pas toujours été le cas : Lite appelait `provisioning` « `pending` », et le design system
+résolvait son `building` et son `pending` sur son propre repli — d'où un adaptateur à l'entrée,
+`toDsState`, qui faisait lire « Setting up… » à dix minutes de `docker build`. Les deux moitiés ont
+été traitées : `building` est entré dans le paquet (design system 0.25.0), `pending` a été renommé
+`provisioning` des deux côtés — workers **et** services, dont le vocabulaire est partagé exprès.
+L'adaptateur n'existe plus, un état de Lite voyage désormais tel quel.
 
-```ts
-// `pending` et `building` sont ceux de Lite ; le design system résout un état
-// inconnu en `pending`, qui n'est PAS marqué « en cours d'installation » —
-// laissés tels quels, ils feraient disparaître la barre de progression.
-function toDsState(state: string): string {
-  return state === "pending" || state === "building" ? "provisioning" : state
-}
-```
-
-Le coût est documenté sur place : la pastille affiche « Setting up… » là où Lite disait « Building
-image… ». Le paquet a un `pulling`, pas de `building`, et appeler un `docker build` un pull serait
-pire que d'être vague.
+Restent quatre valeurs à Cloud seul, et elles ont toutes la même cause : son conteneur est au bout
+d'un WebSocket, donc arrêter, supprimer et transférer une image ont une durée qu'il faut nommer.
 
 Le reste des statuts, plus brièvement :
 
@@ -154,11 +149,14 @@ Le reste des statuts, plus brièvement :
    comme `ProjectFormValue` le fait côté UI. Ça passe la règle du paquet (pas d'ORM, pas de Hono,
    pas d'I/O), `zod` y est déjà en peer optionnelle, et ça referme d'un coup les trois dérives de
    validation listées plus haut. Coût faible, c'est le meilleur achat.
-2. **Un vocabulaire d'états worker partagé.** Le vrai choix n'est pas technique : soit Lite renomme
-   `pending`/`building` en `provisioning`/`pulling` et perd le mot juste, soit le paquet gagne un
-   `building` et le design system une pastille « Building image… ». La seconde option est la bonne :
-   Cloud construit aussi des images (il a `image-builds`), il n'a juste jamais eu de mot pour ce
-   moment côté worker. Une fois le vocabulaire dans le paquet, `toDsState` disparaît.
+2. **Un vocabulaire d'états worker partagé** — *fait pour la moitié qui se voit.* Le choix n'était
+   pas technique : renommer `building` en `pulling` et perdre le mot juste, ou donner au paquet le
+   mot qui manquait. C'est la seconde qui a été prise (design system 0.25.0), et `pending` est
+   devenu `provisioning` dans le même mouvement : `toDsState` n'existe plus. Ce qui reste est le
+   vocabulaire **lui-même**, encore déclaré deux fois — une union dans `lib/types.ts` ici, un enum
+   Drizzle là-bas — plus le prédicat « en cours d'installation », qui vit toujours en trois copies.
+   Le sortir dans `@spunto/build`, à côté de `SetupStatus` qui y est déjà, est le pas suivant.
+   Et côté Cloud, `apps/api` n'émet toujours pas `building` : sa page worker refait la jointure.
 3. **Un OpenAPI pour Lite.** Sans document, pas de client généré, pas de test de contrat, et aucun
    client tiers ne pourra jamais viser les deux. C'est le préalable à tout le reste, et le plus
    gros morceau.

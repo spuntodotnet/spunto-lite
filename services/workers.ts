@@ -260,7 +260,7 @@ export function spawnWorker(projectId: string, name?: string, branch?: string): 
     projectId,
     name: workerName,
     containerId: null,
-    state: "pending",
+    state: "provisioning",
     setupStatus: { phase: "pending", repos: [], postCreate: null, postStart: null },
     branch: branch?.trim() || null,
     projectVersion: project.currentVersion,
@@ -299,7 +299,7 @@ export async function refreshWorker(w: Worker): Promise<Worker> {
     // is unreadable once the container is gone (`docker exec` needs it running), so
     // derive the failure from the state we were in: `stopWorker` writes "stopped"
     // before the container actually goes down, so a user-requested stop never lands here.
-    const diedSettingUp = w.state === "pending" || w.state === "building" || w.state === "starting"
+    const diedSettingUp = w.state === "provisioning" || w.state === "building" || w.state === "starting"
     if (diedSettingUp) {
       const setup: SetupStatus = {
         ...(w.setupStatus ?? { phase: "error", repos: [], postCreate: null, postStart: null }),
@@ -395,7 +395,7 @@ export async function rebuildWorker(id: string): Promise<Worker | undefined> {
   if (!project) return undefined
   await removeContainerOnly(w.id, w.containerId).catch(() => {})
   db.update(workers)
-    .set({ containerId: null, state: "pending", projectVersion: project.currentVersion, setupStatus: { phase: "pending", repos: [], postCreate: null, postStart: null } })
+    .set({ containerId: null, state: "provisioning", projectVersion: project.currentVersion, setupStatus: { phase: "pending", repos: [], postCreate: null, postStart: null } })
     .where(eq(workers.id, id))
     .run()
   void runSpawnPipeline(id, project, project.currentVersion, w.branch)

@@ -4,16 +4,16 @@
 > Comparé : `spunto-lite@24a2408` et `coderhammer/spunto@32167ea`.
 > Le pendant côté Cloud est `docs/worker-states.md` (qui a deux états de retard, voir § 7).
 
-Quatre valeurs sont communes sur dix. Mais compter les valeurs est la mauvaise façon de lire la
-différence : **les deux produits ne font pas dire la même chose au mot « état »**. Cloud a deux axes
-qui peuvent se contredire, Lite en a un seul recalculé à la lecture. Le vocabulaire n'est que la
-conséquence visible de ça.
+Cinq valeurs sont communes sur neuf — c'était quatre sur dix avant les points 1 et 3 du § 8. Mais
+compter les valeurs est la mauvaise façon de lire la différence : **les deux produits ne font pas
+dire la même chose au mot « état »**. Cloud a deux axes qui peuvent se contredire, Lite en a un seul
+recalculé à la lecture. Le vocabulaire n'est que la conséquence visible de ça.
 
 ## 1. La liste, alignée sur ce qui se passe réellement
 
 | Ce qui se passe | Lite | Cloud |
 |---|---|---|
-| Ligne insérée, rien n'a commencé | `pending` | `provisioning` |
+| Ligne insérée, rien n'a commencé | `provisioning` | `provisioning` |
 | L'image du projet se construit | **`building`** | `provisioning` (le worker *attend* le build, qui est une ressource à part) |
 | L'image arrive sur la machine cible | *(compris dans `building`)* | **`pulling`** |
 | Conteneur créé, script de setup en cours | `starting` | `starting` |
@@ -158,14 +158,22 @@ const activeBuild = imageBuilds.find(b => b.nodeId === worker?.nodeId
 (`app/(app)/projects/[id]/workers/[wid]/page.tsx:76`), ce qui nous sert aussi à décider de poller
 toutes les 2 s et d'afficher le log de build.
 
-Et sur la **carte**, les deux produits affichent la même chose d'inutile pendant toute la
+Et sur la **carte**, les deux produits affichaient la même chose d'inutile pendant toute la
 construction d'une image : `settingUp` à vrai, `setupStatus` vide, donc « Setting up… 5 % » pendant
-dix minutes. Chez nous parce que `toDsState` écrase `building` en `provisioning`
-(`components/worker-card.tsx:52`), chez eux parce que l'état ne l'a jamais dit.
+dix minutes. Chez nous parce que l'adaptateur d'entrée écrasait `building` en `provisioning`, chez
+eux parce que l'état ne le dit pas.
 
-**Conclusion : `building` n'est pas une bizarrerie de Lite à normaliser, c'est un état que Cloud a
-aussi et qu'il paie de ne pas nommer.** La bonne direction est de l'ajouter au vocabulaire partagé,
-pas de le retirer d'ici.
+**Conclusion : `building` n'était pas une bizarrerie de Lite à normaliser, c'est un état que Cloud a
+aussi et qu'il paie de ne pas nommer.** D'où la direction prise : l'ajouter au vocabulaire partagé
+plutôt que le retirer d'ici. C'est fait (design system 0.25.0), la pastille lit « Building image… »,
+et l'adaptateur a disparu avec le renommage de `pending`.
+
+Ce que la carte affiche pendant un build, maintenant : pastille « Building image… » et, en dessous,
+« Setting up… 5 % ». Les deux ne se contredisent pas — la pastille dit ce que fait la plateforme, la
+barre où en est le setup *dans* le conteneur, qui n'a effectivement pas commencé, et `pulling` se
+lit pareil côté Cloud depuis toujours. Mais vu à l'écran les deux lignes se marchent un peu dessus :
+si on veut que la barre suive le libellé de cycle de vie quand il est plus précis que la phase,
+c'est un changement de paquet à part.
 
 ## 7. Le prédicat « en cours d'installation » existe en trois copies
 
@@ -216,10 +224,17 @@ Par ordre de rendement :
    *couleurs* et ses *libellés* (c'est son métier) mais lit le vocabulaire du paquet ; les trois
    copies du prédicat tombent à une. Règle du paquet respectée : c'est du type et des fonctions
    pures, pas d'ORM, pas d'I/O.
-3. **Renommer `pending` en `provisioning` chez nous** — même sens exactement, et une valeur
-   transitoire : un worker en `pending` a bougé ou est mort, donc un `UPDATE workers SET
-   state='provisioning' WHERE state='pending'` suffit, sans perte. À faire *après* le point 1, pour
-   ne pas perdre `building` en route. C'est ce pas-là, et pas le point 1, qui retire `toDsState`.
+3. **Renommer `pending` en `provisioning` chez nous** — *fait.* Même sens exactement, et une valeur
+   transitoire : une ligne qui la porte est en vol ou morte, donc un `UPDATE … WHERE state='pending'`
+   suffit, sans perte (migration `0007`, qui porte aussi le changement de défaut de la colonne).
+   Renommé **dans les deux tables** : les services partagent ce vocabulaire exprès, et ne renommer
+   que les workers aurait gardé l'adaptateur en vie pour eux tout en faisant diverger les deux
+   vocabulaires de Lite — pire que la situation de départ. `toDsState` n'existe plus.
+
+   Ce que le renommage laisse en place, et qu'il faut savoir : un état que le paquet ne connaît pas
+   atterrit toujours sur son repli `pending`, **sans** `settingUp`. Donc le prix d'un septième état
+   ajouté ici sans être ajouté là-bas n'est pas une erreur, c'est une pastille vague et une barre de
+   progression qui disparaît — quiet, et visible seulement en regardant.
 4. **Nettoyer `setupStatus` :** retirer `features` (mort partout) et `pending` (doublon de `null`) de
    notre élargissement, et écrire `null` au spawn comme Cloud. Notre type redevient celui du paquet,
    sans `Omit<>`. À garder pour la fin, parce que c'est le seul point de la liste qui touche des
