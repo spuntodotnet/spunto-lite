@@ -195,8 +195,11 @@ n'est nécessaire pour ajouter une valeur — c'est un changement de code, des d
 
 Par ordre de rendement :
 
-1. **Ajouter `building` au vocabulaire partagé** — *fait, en attente de merge :*
-   [coderhammer/spunto#329](https://github.com/coderhammer/spunto/pull/329) (design system 0.24.0).
+1. **Ajouter `building` au vocabulaire partagé** — *fait et adopté.*
+   [coderhammer/spunto#329](https://github.com/coderhammer/spunto/pull/329), publié en **0.25.0**
+   par [#335](https://github.com/coderhammer/spunto/pull/335) : le 0.24.0 avait été pris par une
+   autre PR portant le même numéro, et le job de publication étant un no-op sur une version qui
+   existe, le code est resté sur `main` sans sortir, sans qu'aucun check ne rougisse.
    Ça sert les deux produits : Cloud gagne de pouvoir supprimer sa jointure côté client, nous
    gagnons la bonne étiquette. C'est le seul changement de la liste qui rend un état à quelqu'un au
    lieu de ranger du vocabulaire.
