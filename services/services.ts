@@ -7,7 +7,7 @@ import {
   removeServiceContainer,
   removeService as removeServiceDocker,
   stopContainer,
-  inspectServiceContainer,
+  inspectContainer,
 } from "../lib/docker"
 import { getUserSecretValue } from "./secrets"
 import type { CreateServiceInput, UpdateServiceInput } from "../lib/validation"
@@ -195,7 +195,7 @@ export function createService(input: CreateServiceInput): Service {
     httpPort: input.httpPort ?? null,
     restartPolicy: input.restartPolicy,
     containerId: null,
-    state: input.start ? "pending" : "stopped",
+    state: input.start ? "provisioning" : "stopped",
     error: null,
     createdAt: new Date(),
   }
@@ -234,7 +234,7 @@ export async function updateService(id: string, input: UpdateServiceInput): Prom
   const wasUp = current.state === "ready" || current.state === "starting"
   await removeServiceContainer(id, current.containerId).catch(() => {})
   db.update(services)
-    .set({ containerId: null, state: wasUp ? "pending" : "stopped", error: null })
+    .set({ containerId: null, state: wasUp ? "provisioning" : "stopped", error: null })
     .where(eq(services.id, id))
     .run()
   if (wasUp) void runStartPipeline(id)
@@ -253,7 +253,7 @@ export async function deleteService(id: string): Promise<void> {
 export function startService(id: string): Service | undefined {
   const s = getServiceRow(id)
   if (!s) return undefined
-  setState(id, "pending")
+  setState(id, "provisioning")
   void runStartPipeline(id)
   return getServiceRow(id)
 }
@@ -285,10 +285,10 @@ export async function restartService(id: string): Promise<Service | undefined> {
  */
 export async function refreshService(s: Service): Promise<Service> {
   // No container yet: either never started, or a start pipeline is in flight —
-  // nothing to reconcile against, and clobbering "pending" would fight it.
+  // nothing to reconcile against, and clobbering "provisioning" would fight it.
   if (!s.containerId) return s
 
-  const live = await inspectServiceContainer(s.containerId)
+  const live = await inspectContainer(s.containerId)
   if (live.state === "error") return s
 
   if (live.state === "not_found") {

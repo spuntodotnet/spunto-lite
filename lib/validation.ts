@@ -19,14 +19,21 @@ import {
 // against), and it is a function rather than a pattern we could hand to zod.
 export const ExtensionIdSchema = z.string().refine(isExtensionId, EXTENSION_ID_HINT)
 
+/**
+ * A repository is a clone URL, full stop — see the `Repository` type for why Lite models no
+ * hosting provider. `provider` is a literal rather than an absent field because the shared
+ * package still reads it, and `cloneUrl` is required because without it there is nothing to
+ * clone: a row that reached the API with only a label used to be accepted and then fail, minutes
+ * later, inside a build log.
+ */
 export const RepositorySchema = z.object({
   id: z.string(),
-  provider: z.enum(["github", "gitlab", "bitbucket", "git"]),
-  // Display label, e.g. "owner/repo" for GitHub or a name derived from the clone URL.
+  provider: z.literal("git"),
+  /** Display label — derived from the URL by the form, free text as far as the API cares. */
   project: z.string(),
   workspacePath: z.string(),
-  // Raw clone URL for generic ("git") repos, e.g. git@gitlab.com:group/repo.git
-  cloneUrl: z.string().optional(),
+  /** e.g. `git@example.com:group/repo.git`, or an https URL. Cloned with the mounted SSH key. */
+  cloneUrl: z.string().min(1, "A repository needs a clone URL"),
   // Default branch to clone; absent/empty = the remote's default (HEAD).
   branch: z.string().optional(),
 })
@@ -188,7 +195,20 @@ export const SettingsSchema = z.object({
   gitUserName: z.string().nullable().optional(),
   gitUserEmail: z.string().nullable().optional(),
   sshKeyPath: z.string().nullable().optional(),
-  dotfilesRepo: z.string().nullable().optional(),
+  /**
+   * A **full** clone URL, or empty. Not an `owner/repo` shorthand, on purpose: the shared package
+   * expands a bare shorthand against one company's domain, which is an assumption Lite doesn't
+   * make anywhere else — a dotfiles repo lives wherever the SSH key reaches, and the URL is how
+   * you say where.
+   */
+  dotfilesRepo: z
+    .string()
+    .refine(
+      (v) => v.trim() === "" || /^(https?:\/\/|ssh:\/\/|git:\/\/|file:\/\/|[^/\s]+@[^/\s]+:)/.test(v.trim()),
+      "Use a full clone URL (git@host:owner/repo.git, https://…), not an owner/repo shorthand",
+    )
+    .nullable()
+    .optional(),
   // Plaintext SA key: string to set, null to clear, absent to leave unchanged.
   gcpRegistryKey: z.string().nullable().optional(),
 })

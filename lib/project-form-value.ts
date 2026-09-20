@@ -6,9 +6,10 @@
 // /api/projects is one readable object rather than a dozen `useState`s read at
 // submit time, and so a test can assert the payload directly.
 //
-// Lite's model is *not* the dashboard's: it keeps four repository providers where
-// the package models `github | git`. Where the two disagree, this module keeps
-// Lite's data intact — see `LiteRepo`.
+// Lite's model is *narrower* than the dashboard's: a repository is a clone URL and nothing else,
+// cloned with the one mounted SSH key (see the `Repository` type). So every row this module
+// produces is a `git` row, and the package's provider machinery — the picker, the per-host
+// grouping, the "connect an integration" prompt — is simply never fed.
 
 import {
   toProjectFormValue,
@@ -24,25 +25,6 @@ import type { Project, ProjectFeature, Repository, SharedVolume } from "./types"
 
 /** Pre-selected in the creation form, exactly as the hand-rolled form did. */
 export const DEFAULT_IMAGE = "mcr.microsoft.com/devcontainers/javascript-node:20"
-
-/**
- * A repo row as Lite carries it: the package's `ProjectRepo` (which models the
- * branch itself since 0.15) plus the one thing Lite's model has and the
- * package's doesn't.
- *
- * It rides along as an extra property on the same object rather than in a
- * side-map keyed by row id: `RepoList` is fully controlled and patches a row with
- * a spread, so whatever it doesn't know about survives the round trip, and the
- * form value stays the single source of truth (import, edit, submit all read it).
- */
-export type LiteRepo = ProjectRepo & {
-  /**
-   * Set only for a stored `gitlab` / `bitbucket` row. The package offers two
-   * providers, so those edit like a GitHub one (both address `owner/repo`) — but
-   * saving must write back what was stored, not silently rewrite the spec.
-   */
-  storedProvider?: Repository["provider"]
-}
 
 /**
  * The form value as Lite carries it: the package's `ProjectFormValue` plus the
@@ -125,10 +107,19 @@ export function fromExport({ project: p }: ProjectExport): LiteFormValue {
   }
 }
 
-function toFormRepo(r: Repository): LiteRepo {
+/**
+  * A stored repository, as a form row. Always a `git` row: that is the only kind Lite has.
+  *
+  * `cloneUrl` is passed through rather than defaulted, and an **imported** spec is where it can
+  * legitimately be missing — a spec written by Spunto Cloud names its repositories by forge and
+  * `owner/repo`, which is not an address Lite can clone. Such a row arrives with its label and an
+  * empty URL, for the user to fill in before creating: an import pre-fills a form they review, so
+  * asking for the one thing we cannot know beats guessing a host on their behalf.
+  */
+function toFormRepo(r: Pick<Repository, "id" | "project" | "workspacePath" | "branch"> & { cloneUrl?: string }): ProjectRepo {
   return {
     id: r.id,
-    provider: r.provider === "git" ? "git" : "github",
+    provider: "git",
     project: r.project,
     workspacePath: r.workspacePath,
     // Stored data is always "touched": picking another repo must never overwrite
@@ -136,7 +127,6 @@ function toFormRepo(r: Repository): LiteRepo {
     workspacePathTouched: true,
     cloneUrl: r.cloneUrl,
     branch: r.branch,
-    ...(r.provider === "gitlab" || r.provider === "bitbucket" ? { storedProvider: r.provider } : {}),
   }
 }
 
@@ -160,7 +150,7 @@ function toFormFeature(f: Pick<ProjectFeature, "id" | "options"> & { ociRef?: st
  * creating and editing a project write exactly what they wrote before.
  */
 export function toProjectPayload(value: LiteFormValue): ProjectPayload {
-  const repos = value.repositories as LiteRepo[]
+  const repos = value.repositories
   return {
     name: value.name.trim(),
     description: value.description.trim() || undefined,
@@ -176,17 +166,17 @@ export function toProjectPayload(value: LiteFormValue): ProjectPayload {
     postCreateCommand: value.postCreateCommand.trim() || undefined,
     postStartCommand: value.postStartCommand.trim() || undefined,
     repositories: repos
-      // A row with nothing identifying it isn't a repository yet — the user added
-      // it and hasn't filled it in.
-      .filter((r) => (r.provider === "git" ? r.cloneUrl?.trim() : r.project.trim()))
+      // No URL, no repository: the row is one the user added and hasn't filled in — or one an
+      // imported Cloud spec named by forge, which is a label and not an address.
+      .filter((r) => r.cloneUrl?.trim())
       .map((r) => {
-        const provider = r.storedProvider ?? r.provider
+        const cloneUrl = r.cloneUrl!.trim()
         return {
           id: r.id,
-          provider,
-          project: r.provider === "git" ? r.project || deriveLabel(r.cloneUrl || "") : r.project.trim(),
-          workspacePath: r.workspacePath.trim() || deriveLabel(r.project || r.cloneUrl || "app"),
-          cloneUrl: r.provider === "git" ? r.cloneUrl?.trim() : undefined,
+          provider: "git" as const,
+          project: r.project.trim() || deriveLabel(cloneUrl),
+          workspacePath: r.workspacePath.trim() || deriveLabel(cloneUrl),
+          cloneUrl,
           branch: r.branch?.trim() || undefined,
         }
       }),

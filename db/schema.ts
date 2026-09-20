@@ -17,8 +17,8 @@ export type { BuildStep }
  * already on disk — not only what today's generator emits. `pending` and `features` are Lite-era
  * phases older workers still report; everything else is identical, and `timings` comes along.
  *
- * `Repository` stays local: the package types `provider` as a plain string (Cloud reaches forges
- * Lite has none of), and the union here is what turns a typo into a compile error.
+ * `Repository` stays local, and narrower than the package's: Lite clones URLs with one SSH key
+ * and knows nothing of forges, so `provider` is pinned rather than open (see the type's note).
  */
 import type { ProjectFeature, SetupStatus as SharedSetupStatus } from "@spunto/build/types"
 
@@ -28,12 +28,28 @@ export type SetupStatus = Omit<SharedSetupStatus, "phase"> & {
   phase: SharedSetupStatus["phase"] | "pending" | "features"
 }
 
+/**
+ * A repository to clone into a worker's workspace: a URL, and a path to put it at.
+ *
+ * **No hosting provider, and that is the design.** Lite has no forge integration — no app to
+ * install, no token to mint, no API to ask what repositories you own. Every repository is cloned
+ * over SSH with the one key you mounted (Settings → SSH key), which behaves the same against any
+ * host. A provider field would only be somewhere to keep an assumption about a host we never talk
+ * to, and it is exactly the assumption that made `owner/repo` mean one company's domain.
+ *
+ * `provider` survives as a constant because the shared package still carries it — Spunto Cloud
+ * reaches forges through integrations, and the generated clone command branches on it. `git` is
+ * the package's name for "clone this URL with the key you were handed", which is Lite's only mode.
+ */
 export type Repository = {
   id: string
-  provider: "github" | "gitlab" | "bitbucket" | "git"
-  project: string // display label, e.g. "owner/repo"
+  /** Always `git`. See the note above. */
+  provider: "git"
+  /** Display label, derived from the clone URL — the last path segment. */
+  project: string
   workspacePath: string
-  cloneUrl?: string
+  /** SSH or HTTPS clone URL, exactly as git takes it. */
+  cloneUrl: string
   /** Default branch to check out. Empty/absent = the remote's default (HEAD). */
   branch?: string
 }
@@ -103,8 +119,6 @@ export const projects = sqliteTable("projects", {
   // /workspace) — a dependency cache, a dataset, build artifacts. They outlive
   // the workers and are only destroyed with the project (see lib/shared-volumes.ts).
   sharedVolumes: text("shared_volumes", { mode: "json" }).$type<SharedVolume[]>().notNull().default(sql`'[]'`),
-  // Per-project ed25519 deploy key (AES-256-GCM), generated on demand for generic git repos.
-  deployKeyPrivate: text("deploy_key_private"),
   currentVersion: integer("current_version").notNull().default(1),
   favorite: integer("favorite", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
@@ -138,8 +152,16 @@ export const workers = sqliteTable("workers", {
   projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   containerId: text("container_id"),
-  // pending | building | starting | ready | stopped | error
-  state: text("state").notNull().default("pending"),
+  // provisioning | building | starting | ready | stopped | error — the vocabulary of
+  // `@spunto/design-system/workers`, so a state needs no translating on its way to a pill.
+  state: text("state").notNull().default("provisioning"),
+  /**
+   * Why a running worker's container went down, when nobody asked it to — the daemon's own
+   * message, or the exit code it reported. Null for every other path, including a setup that
+   * failed: that story belongs to `setupStatus.error`, which records *where* in the setup it
+   * stopped, and overwriting it here would lose that. Same shape as `services.error`.
+   */
+  error: text("error"),
   setupStatus: text("setup_status", { mode: "json" }).$type<SetupStatus | null>(),
   // Branch checked out at clone time, overriding each repository's own default.
   // Null = the remote's default branch. Persisted so a rebuild (which keeps the
@@ -183,7 +205,7 @@ export const services = sqliteTable("services", {
   httpPort: integer("http_port"),
   restartPolicy: text("restart_policy").$type<ServiceRestartPolicy>().notNull().default("unless-stopped"),
   containerId: text("container_id"),
-  // pending | starting | ready | stopped | error — same vocabulary as workers, so
+  // provisioning | starting | ready | stopped | error — same vocabulary as workers, so
   // the UI's status pills are shared.
   state: text("state").notNull().default("stopped"),
   /** Last start failure (missing image, port already bound…), surfaced in the UI. */
