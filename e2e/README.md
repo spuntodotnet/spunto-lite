@@ -79,11 +79,13 @@ Everything else about shared services (CRUD, validation, the `svc-` proxy route,
 index) is covered without Docker in `tests/services.spec.ts` — fixtures are created with
 `start: false`, so the spec is persisted while the container start stays fire-and-forget.
 
-### 6. Feature-conflict repro (real Docker)
+### 6. Feature repros (real Docker)
 
-`tests/feature-*.spec.ts` reproduce feature-combination bugs on a real worker. Same opt-in as
-above (`E2E_DOCKER=1`) — they run in the `worker-lifecycle` project and also need the `docker`
-CLI on the runner (they inspect the worker container with `docker exec`).
+`tests/feature-*.spec.ts` reproduce feature bugs on a real worker — a single feature that doesn't
+deliver what it promises (`feature-dind.spec.ts`: `docker-in-docker` installs the CLI but no
+daemon ever runs) as well as combinations that break each other (`feature-docker-claude.spec.ts`).
+Same opt-in as above (`E2E_DOCKER=1`) — they run in the `worker-lifecycle` project and also need
+the `docker` CLI on the runner (they inspect the worker container with `docker exec`).
 
 ```bash
 cd e2e && E2E_BASE_URL=http://localhost:3900 E2E_DOCKER=1 npm run test:worker
