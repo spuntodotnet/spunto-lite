@@ -264,7 +264,9 @@ export async function stopService(id: string): Promise<Service | undefined> {
   // Written *before* the container goes down so `refreshService` reads a
   // user-requested stop as "stopped" and not as a crash (see below).
   setState(id, "stopped")
-  if (s.containerId) await stopContainer(s.containerId).catch(() => {})
+  // The container is still up if the stop failed: put the row back, since `refreshService`
+  // won't — a running container under a "stopped" row reads as a stop in progress.
+  if (s.containerId) await stopContainer(s.containerId).catch(() => setState(id, s.state, s.error))
   return getServiceRow(id)
 }
 
@@ -298,7 +300,10 @@ export async function refreshService(s: Service): Promise<Service> {
   }
 
   if (live.state === "running") {
-    if (s.state === "ready") return s
+    // "stopped" with a live container is a stop in flight: `docker stop` gives the image 10s
+    // to exit on SIGTERM before it SIGKILLs it. Flipping back to "ready" here was losing the
+    // intent, so the kill that ends the grace period (exit 137) then read as a crash.
+    if (s.state === "ready" || s.state === "stopped") return s
     db.update(services).set({ state: "ready", error: null }).where(eq(services.id, s.id)).run()
     return { ...s, state: "ready", error: null }
   }

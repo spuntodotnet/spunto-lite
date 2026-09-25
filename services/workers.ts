@@ -1,4 +1,4 @@
-import { eq, desc } from "drizzle-orm"
+import { and, eq, desc } from "drizzle-orm"
 import { db } from "../db/index"
 import { workers, projectImageBuilds, type Worker, type Project, type SetupStatus } from "../db/schema"
 import { newId, newShortId } from "../lib/id"
@@ -332,6 +332,9 @@ export async function refreshWorker(w: Worker): Promise<Worker> {
     return { ...w, state, error }
   }
   if (live.state === "error") return w
+  // "stopped" with a live container is a stop in flight (see `stopWorker`): leave it alone, or the
+  // SIGKILL that ends docker's grace period reads as a crash on the next poll.
+  if (w.state === "stopped") return w
 
   // running — read setup status
   let setup: SetupStatus | null = w.setupStatus
@@ -342,7 +345,14 @@ export async function refreshWorker(w: Worker): Promise<Worker> {
   }
   const phase = derivePhase(setup)
   const state = phase === "ready" ? "ready" : phase === "error" ? "error" : "starting"
-  db.update(workers).set({ state, setupStatus: setup ?? w.setupStatus, error: null }).where(eq(workers.id, w.id)).run()
+  // Only over the state we read: reading the status file is a `docker exec`, and a stop that
+  // lands meanwhile must not be overwritten by a poll that started before it.
+  const { changes } = db
+    .update(workers)
+    .set({ state, setupStatus: setup ?? w.setupStatus, error: null })
+    .where(and(eq(workers.id, w.id), eq(workers.state, w.state)))
+    .run()
+  if (changes === 0) return getWorkerRow(w.id) ?? w
   return { ...w, state, setupStatus: setup ?? w.setupStatus, error: null }
 }
 
@@ -377,8 +387,17 @@ export function setWorkerTags(id: string, tags: string[]): Worker | undefined {
 export async function stopWorker(id: string): Promise<Worker | undefined> {
   const w = getWorkerRow(id)
   if (!w?.containerId) return w
-  await stopContainer(w.containerId)
+  // Written *before* the container goes down, as `refreshWorker` assumes: `docker stop` can take
+  // its full 10s grace and end in a SIGKILL (exit 137), and a poll in that window has to read
+  // the exit as ours, not as a crash. The container is still up if the stop failed, so put the
+  // row back.
   db.update(workers).set({ state: "stopped", error: null }).where(eq(workers.id, id)).run()
+  try {
+    await stopContainer(w.containerId)
+  } catch (err) {
+    db.update(workers).set({ state: w.state, error: w.error }).where(eq(workers.id, id)).run()
+    throw err
+  }
   return { ...w, state: "stopped", error: null }
 }
 
