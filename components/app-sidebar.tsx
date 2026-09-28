@@ -2,11 +2,13 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Flame, FolderGit2, Server, Settings, KeyRound, Activity } from "lucide-react"
+import { Flame, FolderGit2, Server, Settings, KeyRound, Activity, MessagesSquare } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const NAV = [
   { href: "/projects", label: "Projects", icon: FolderGit2 },
+  // Delegated work across every project: what the agents are doing, and which one needs you.
+  { href: "/agents", label: "Agents", icon: MessagesSquare },
   // Shared services: long-lived dependencies (Postgres, Elasticsearch…) mutualised
   // across every project's workers — a sibling of Projects, not a sub-page of one.
   { href: "/services", label: "Services", icon: Server },

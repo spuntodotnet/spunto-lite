@@ -32,14 +32,14 @@ export default defineConfig({
     // Fast HTTP-only API suite — no browser, no Docker. Excludes the browser + worker specs.
     {
       name: "api",
-      testIgnore: [/worker-lifecycle\.spec\.ts/, /terminal-persistence\.spec\.ts/, /shared-service-reach\.spec\.ts/, /[\\/]feature-[^\\/]*\.spec\.ts$/, /landing\.spec\.ts/, /projects-ui\.spec\.ts/, /project-import-ui\.spec\.ts/, /project-form-ui\.spec\.ts/, /resources-ui\.spec\.ts/, /services-ui\.spec\.ts/, /command-palette-ui\.spec\.ts/],
+      testIgnore: [/worker-lifecycle\.spec\.ts/, /tasks-lifecycle\.spec\.ts/, /terminal-persistence\.spec\.ts/, /shared-service-reach\.spec\.ts/, /[\\/]feature-[^\\/]*\.spec\.ts$/, /landing\.spec\.ts/, /projects-ui\.spec\.ts/, /project-import-ui\.spec\.ts/, /project-form-ui\.spec\.ts/, /resources-ui\.spec\.ts/, /services-ui\.spec\.ts/, /command-palette-ui\.spec\.ts/, /project-tabs-ui\.spec\.ts/],
     },
     // Browser suite. Drives Chrome — locally a bundled Chromium, or (with CDP_ENDPOINT set)
     // browser-remote's shared Chrome over CDP. fullyParallel:false keeps each spec on one worker
     // so tests in a file don't open concurrent CDP connections to the single shared browser.
     {
       name: "browser",
-      testMatch: [/landing\.spec\.ts/, /projects-ui\.spec\.ts/, /project-import-ui\.spec\.ts/, /project-form-ui\.spec\.ts/, /resources-ui\.spec\.ts/, /services-ui\.spec\.ts/, /command-palette-ui\.spec\.ts/],
+      testMatch: [/landing\.spec\.ts/, /projects-ui\.spec\.ts/, /project-import-ui\.spec\.ts/, /project-form-ui\.spec\.ts/, /resources-ui\.spec\.ts/, /services-ui\.spec\.ts/, /command-palette-ui\.spec\.ts/, /project-tabs-ui\.spec\.ts/],
       fullyParallel: false,
       // Desktop UI — test at a realistic laptop resolution rather than the 1280×720 default.
       use: {
@@ -54,7 +54,7 @@ export default defineConfig({
     // images on first run). Self-skips otherwise. Not run in CI.
     {
       name: "worker-lifecycle",
-      testMatch: [/worker-lifecycle\.spec\.ts/, /terminal-persistence\.spec\.ts/, /shared-service-reach\.spec\.ts/, /[\\/]feature-[^\\/]*\.spec\.ts$/],
+      testMatch: [/worker-lifecycle\.spec\.ts/, /tasks-lifecycle\.spec\.ts/, /terminal-persistence\.spec\.ts/, /shared-service-reach\.spec\.ts/, /[\\/]feature-[^\\/]*\.spec\.ts$/],
       // First worker of a fresh project builds the image + installs features over the network (minutes).
       timeout: 600_000,
     },

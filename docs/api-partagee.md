@@ -19,6 +19,10 @@
 | Fichier projet portable (`kind: "spunto/project"`) | **oui, le format** | `@spunto/build/spec` |
 | Formulaire de composition d'un projet | **oui, le composant** | `@spunto/design-system/projects` |
 | Pastilles et barre de progression d'un worker | **oui**, et sans adaptateur depuis le renommage | `@spunto/design-system/workers` |
+| Écrans des tâches (liste, cockpit, flux, diff, composer, dialogue de délégation) | **oui, les composants** | `@spunto/design-system/tasks` |
+| Lecture d'une session d'agent (adaptateurs, vocabulaire, usage, fenêtre de contexte) | **oui, le code** | `@spunto/build/agent-stream` |
+| Réglages de tâche d'un projet (`task*`) | **oui, les noms** — mêmes champs, même spec portable | `@spunto/build/spec` |
+| **Routes des tâches** | non — `/api/tasks/:id` à plat contre `/api/orgs/…/projects/…/tasks/:id` ; mêmes verbes, mêmes corps, mêmes formes de réponse | [`taches.md`](taches.md) |
 | **Payload de création d'un projet** | non — deux schémas zod jumeaux, maintenus séparément | — |
 | **Vocabulaire des états d'un worker** | *en partie* — 5 valeurs communes sur 9 depuis le renommage, et `building` est dans le paquet | — |
 | **Forme de l'objet `Worker` sur le fil** | non, mais compatible par accident | — |
@@ -162,8 +166,14 @@ Le reste des statuts, plus brièvement :
    gros morceau.
 4. **Les alignements gratuits** : `favorite` → `favorited`, et `ports[]` dans le worker de la liste.
 5. **Ce qu'il ne faut surtout pas partager** : le scoping `/orgs/{orgId}/`, l'auth, `nodeId` /
-   `dockerState` (un plan de contrôle mono-machine n'a pas de node ni de RPC qui échoue seul), les
-   tasks, et le couple déploiements/services. Les modèles d'exécution diffèrent par conception —
+   `dockerState` (un plan de contrôle mono-machine n'a pas de node ni de RPC qui échoue seul), et
+   le couple déploiements/services. Les *tasks* ont quitté cette liste le 2026-09-28 : Lite les a
+   (voir [`taches.md`](taches.md)), avec les écrans et le parseur partagés et les routes à plat.
+   Ce qui se dupliquerait encore, c'est la logique serveur (`services/tasks.ts` est un port de
+   `tasks.service.ts`) : les fonctions pures — script de branche, titre provisoire, nom de
+   branche, `sessionCommand`, `deriveState`, les scripts et parseurs de diff, la détection des
+   pièces jointes dans une ligne — passent la règle d'admission de `@spunto/build` et devraient y
+   descendre avant que les deux copies ne dérivent. Les modèles d'exécution diffèrent par conception —
    c'est déjà la conclusion de `docs/shared-packages.md` côté Cloud sur le client Docker.
 
 ## Dérives repérées en chemin (côté Cloud)
@@ -181,5 +191,11 @@ Le reste des statuts, plus brièvement :
   le mobile.
 - **`features[].ociRef` perdu à la création** (détaillé plus haut). Le champ traverse le
   navigateur et meurt à la frontière de l'API.
+- **Le throttle d'ingestion en direct des tâches lit `lastRefreshedAt`**, que chaque lecture
+  réécrit : un client qui sonde la tâche plus vite que 10 s affame l'ingestion, et une session
+  interactive reste `running` pour toujours. Masqué dans le dashboard par le poll du flux du
+  cockpit, visible depuis l'API ou le MCP. À vérifier aussi : si une session sur un worker garé
+  (`taskReviewMode: stop`) y passe pour vivante, comme c'était le cas dans le premier jet du port
+  Lite. Détail dans [`taches.md`](taches.md) § « Deux pièges ».
 - **`docs/worker-states.md` annonce 6 états**, le schéma en a 8 : `pulling` et `deleting` manquent
   au tableau.

@@ -27,9 +27,14 @@ import {
   RotateCw,
   Trash2,
   Code2,
+  ChevronRight,
 } from "lucide-react"
+import { WorkerTaskChip, type WorkerTask } from "@spunto/design-system/tasks"
 import { api } from "@/lib/api"
+import { nextLink } from "@/lib/link-render"
 import { ConfirmDialog } from "@/components/confirm-dialog"
+import { buttonVariants } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import { Tooltip } from "@/components/ui/tooltip"
 import { workerBaseUrl } from "@/lib/worker-url"
 import type { Worker } from "@/lib/types"
@@ -286,10 +291,13 @@ export function WorkerCard({
   worker,
   projectId,
   projectVersion,
+  task,
 }: {
   worker: Worker
   projectId: string
   projectVersion: number
+  /** The task holding this machine, or the last one that ran on it — see `indexTasksByWorker`. */
+  task?: WorkerTask
 }) {
   const running = worker.state === "ready"
   // One set of mutations for the whole card: the outdated banner and the `⋯`
@@ -323,9 +331,23 @@ export function WorkerCard({
         onRebuild={() => setConfirming("rebuild")}
         rebuilding={rebuild.isPending}
         menu={workerMenu(worker, projectVersion, mutations, () => setConfirming("delete"))}
-        // No `footer` slot: the package's default is exactly this card's — a
-        // full-width "View" to the cockpit. Opening VS Code lives in the `⋯` menu,
-        // and each repo chip above already links to code-server on that folder.
+        // What this machine is busy with — the same pair as the table's Task column, seen from
+        // the card. `footer` replaces the whole foot, so the "View" button is redrawn here the
+        // way the package draws it; without a task the card keeps its own.
+        footer={
+          task ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">Task</span>
+                <WorkerTaskChip entry={task} href={`/projects/${projectId}/tasks/${task.task.id}`} render={{ link: nextLink }} />
+              </div>
+              <Link href={cockpitHref} className={cn(buttonVariants({ variant: "default", size: "sm" }), "h-7 w-full gap-1.5 text-xs")}>
+                View
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Link>
+            </div>
+          ) : undefined
+        }
       />
       <DeleteWorkerDialog
         open={confirming === "delete"}

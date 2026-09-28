@@ -10,6 +10,8 @@ import { buttonVariants } from "@/components/ui/button"
 import { Tooltip } from "@/components/ui/tooltip"
 import { workerBaseUrl } from "@/lib/worker-url"
 import type { Worker } from "@/lib/types"
+import { WorkerTaskChip, type WorkerTask } from "@spunto/design-system/tasks"
+import { nextLink } from "@/lib/link-render"
 import { cfgFor, DeleteWorkerDialog, isSettingUp, phaseLabel, setupProgress, formatRelativeTime, GitStatusSummary, useWorkerMutations, WorkerUpdateButton, type GitStatus } from "@/components/worker-card"
 
 function StatusCell({ worker }: { worker: Worker }) {
@@ -26,6 +28,11 @@ function StatusCell({ worker }: { worker: Worker }) {
       {settingUp && <span className="text-[11px] font-mono text-muted-foreground tabular-nums">{setupProgress(worker.setupStatus)}%</span>}
     </div>
   )
+}
+
+function TaskCell({ task, projectId }: { task?: WorkerTask; projectId: string }) {
+  if (!task) return <span className="text-xs text-muted-foreground/40">—</span>
+  return <WorkerTaskChip entry={task} href={`/projects/${projectId}/tasks/${task.task.id}`} render={{ link: nextLink }} className="max-w-[200px]" />
 }
 
 function RowActions({ worker, projectId }: { worker: Worker; projectId: string }) {
@@ -64,14 +71,25 @@ function RowActions({ worker, projectId }: { worker: Worker; projectId: string }
   )
 }
 
-export function WorkerTable({ workers, projectId, projectVersion }: { workers: Worker[]; projectId: string; projectVersion: number }) {
+export function WorkerTable({
+  workers,
+  projectId,
+  projectVersion,
+  taskFor,
+}: {
+  workers: Worker[]
+  projectId: string
+  projectVersion: number
+  /** The task a machine is busy with (or last ran), so the two tabs name each other. */
+  taskFor?: (worker: Worker) => WorkerTask | undefined
+}) {
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border/60">
-            {["Workspace", "Status", "Created", ""].map((h, i) => (
-              <th key={i} className={cn("h-9 px-4 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70", i === 3 && "text-right")}>
+            {["Workspace", "Status", "Task", "Created", ""].map((h, i) => (
+              <th key={i} className={cn("h-9 px-4 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70", i === 2 && "min-w-[140px]", i === 3 && "hidden sm:table-cell", i === 4 && "text-right")}>
                 {h}
               </th>
             ))}
@@ -99,7 +117,11 @@ export function WorkerTable({ workers, projectId, projectVersion }: { workers: W
               <td className="px-4 py-2.5">
                 <StatusCell worker={w} />
               </td>
+              {/* Task — what this machine is busy with. Empty on one nobody delegated to. */}
               <td className="px-4 py-2.5">
+                <TaskCell task={taskFor?.(w)} projectId={projectId} />
+              </td>
+              <td className="px-4 py-2.5 hidden sm:table-cell">
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Clock className="h-3 w-3" /> {formatRelativeTime(w.createdAt)}
                 </span>

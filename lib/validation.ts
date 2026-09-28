@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { AGENT_PROTOCOLS } from "@spunto/build/agent-stream"
 import { EXTENSION_ID_HINT, isExtensionId } from "./extensions"
 import {
   SHARED_VOLUME_NAME_HINT,
@@ -77,6 +78,29 @@ export const FeatureInputSchema = z.object({
   ociRef: z.string().optional(),
 })
 
+/**
+ * How delegated work runs in a project (docs/tasks.md § "Ce que le projet décide"). Every field
+ * accepts `null` or an empty string to mean "back to the default", which is the harness Spunto
+ * reads best: Claude Code, interactive. Same names as Spunto Cloud's project fields and as the
+ * portable spec (`@spunto/build/spec`), so an exported project carries them across.
+ */
+export const TaskSettingsSchema = z.object({
+  taskAgentCommand: z.string().max(2_000).nullable().optional(),
+  taskAgentProtocol: z.enum(AGENT_PROTOCOLS).optional(),
+  taskFollowUpCommand: z.string().max(2_000).nullable().optional(),
+  taskResetCommand: z.string().max(10_000).nullable().optional(),
+  taskValidateCommand: z.string().max(10_000).nullable().optional(),
+  taskCancelCommand: z.string().max(10_000).nullable().optional(),
+  taskReviewMode: z.enum(["keep", "stop"]).optional(),
+  taskAgentModel: z.string().max(200).nullable().optional(),
+  taskAgentInstructions: z.string().max(10_000).nullable().optional(),
+})
+
+export type TaskSettingsInput = z.infer<typeof TaskSettingsSchema>
+
+/** The keys above, for whoever has to tell a task setting from a build-relevant field. */
+export const TASK_SETTING_KEYS = Object.keys(TaskSettingsSchema.shape) as (keyof TaskSettingsInput)[]
+
 export const CreateProjectSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
@@ -91,7 +115,7 @@ export const CreateProjectSchema = z.object({
   forwardPorts: z.array(z.number().int().min(1).max(65535)).default([]),
   sharedVolumes: SharedVolumesSchema.default([]),
   secrets: z.array(SecretInputSchema).optional(),
-})
+}).extend(TaskSettingsSchema.shape)
 
 /**
  * PATCH shape — every field plain-optional, "absent" meaning "leave unchanged"
@@ -116,7 +140,7 @@ export const UpdateProjectSchema = z.object({
   forwardPorts: z.array(z.number().int().min(1).max(65535)).optional(),
   sharedVolumes: SharedVolumesSchema.optional(),
   secrets: z.array(SecretInputSchema).optional(),
-})
+}).extend(TaskSettingsSchema.shape)
 
 // ─── Shared services ──────────────────────────────────────────────────────────
 
@@ -216,3 +240,42 @@ export const SettingsSchema = z.object({
 export type CreateProjectInput = z.infer<typeof CreateProjectSchema>
 export type UpdateProjectInput = z.infer<typeof UpdateProjectSchema>
 export type RepositoryInput = z.infer<typeof RepositorySchema>
+
+// ─── Delegated work (docs/tasks.md) ───────────────────────────────────────────
+
+/**
+ * A git ref a user typed. Checked here rather than left to `git checkout` minutes later in a
+ * worker: the branch setup quotes it either way, but an error at the POST is one the person
+ * delegating can still act on. The rules are `git check-ref-format`'s, minus the obscure ones.
+ */
+export function isValidGitRef(ref: string): boolean {
+  if (!ref || ref.length > 255) return false
+  if (ref.startsWith("-") || ref.startsWith("/") || ref.endsWith("/") || ref.endsWith(".") || ref.endsWith(".lock")) return false
+  if (ref.includes("..") || ref.includes("//") || ref.includes("@{") || ref === "@") return false
+  return !/[\x00-\x20\x7f~^:?*[\\]/.test(ref)
+}
+
+/** A file dropped into a prompt or a reply (RFC 0022) — base64 in a JSON body. */
+export const TaskFileInputSchema = z.object({
+  filename: z.string().max(480).nullish(),
+  mediaType: z.string().min(1).max(255),
+  data: z.string().min(1),
+})
+
+export const CreateTaskSchema = z.object({
+  /** Optional: without one the task starts under the prompt's first line, then takes the session's own name. */
+  title: z.string().trim().min(1).max(200).optional(),
+  prompt: z.string().trim().min(1).max(50_000),
+  files: z.array(TaskFileInputSchema).max(10).optional(),
+  baseBranch: z.string().trim().max(255).refine((v) => v === "" || isValidGitRef(v), "Invalid git branch name").optional(),
+  model: z.string().trim().max(200).optional(),
+})
+
+export const TaskMessageSchema = z.object({
+  prompt: z.string().trim().min(1).max(50_000),
+  files: z.array(TaskFileInputSchema).max(10).optional(),
+})
+
+export const RenameTaskSchema = z.object({ title: z.string().trim().min(1).max(200) })
+
+export type CreateTaskInput = z.infer<typeof CreateTaskSchema>

@@ -120,6 +120,21 @@ HTTPS with a local mkcert certificate. See
   round-trip, so it's instant) and filters in the browser, accent- and
   case-insensitively.
 
+## Agents
+
+Delegate work to a coding agent the way Spunto Cloud does: **New task** on a project (or
+**Agents** in the sidebar), write what you want, and a worker from the project's pool gets its own
+branch and a Claude Code session. You watch it work live, answer it or interrupt it, read the diff
+from the machine itself, then **Accept** or **Drop**. Every conversation of every project is on
+the **Agents** page, grouped by what needs you.
+
+Out of the box it runs Claude Code, so the project needs the `claude-code` feature and an
+`ANTHROPIC_API_KEY` (or `CLAUDE_CODE_OAUTH_TOKEN`) secret. The harness, the model, what Accept
+and Drop run and whether the worker stays up during review are the project's *Delegated work*
+settings. The screens come from `@spunto/design-system/tasks` and the session parsing from
+`@spunto/build/agent-stream`, shared with Spunto Cloud. Details, and what differs from the Cloud
+version: [`docs/taches.md`](docs/taches.md).
+
 ## Shared volumes
 
 Each worker gets its own `mp-worker-<id>-workspace` volume on `/workspace`. Two

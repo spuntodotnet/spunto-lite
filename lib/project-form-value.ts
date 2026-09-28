@@ -37,7 +37,27 @@ export const DEFAULT_IMAGE = "mcr.microsoft.com/devcontainers/javascript-node:20
  */
 export interface LiteFormValue extends ProjectFormValue {
   sharedVolumes: SharedVolume[]
+  /**
+   * How delegated work runs, when an imported spec said so. Not drawn by the form — the edit
+   * page has its own card for it (`TaskSettingsCard`) — only carried from the file to the POST.
+   */
+  taskSettings?: TaskSettings
 }
+
+/** The spec's task fields (`@spunto/build/spec`), as they ride from a file to a new project. */
+export type TaskSettings = Partial<
+  Pick<
+    ProjectExport["project"],
+    | "taskAgentCommand"
+    | "taskAgentProtocol"
+    | "taskFollowUpCommand"
+    | "taskResetCommand"
+    | "taskValidateCommand"
+    | "taskCancelCommand"
+    | "taskReviewMode"
+    | "taskAgentModel"
+  >
+>
 
 /** The body POSTed to /api/projects and PATCHed to /api/projects/:id. */
 export type ProjectPayload = {
@@ -54,7 +74,7 @@ export type ProjectPayload = {
   forwardPorts: number[]
   sharedVolumes: SharedVolume[]
   secrets: { name: string; value: string }[]
-}
+} & TaskSettings
 
 /** A fresh creation form: everything empty but the default base image. */
 export function newProjectFormValue(): LiteFormValue {
@@ -104,6 +124,16 @@ export function fromExport({ project: p }: ProjectExport): LiteFormValue {
     }),
     // A spec exported before shared volumes existed simply doesn't have the key.
     sharedVolumes: p.sharedVolumes ?? [],
+    taskSettings: {
+      taskAgentCommand: p.taskAgentCommand,
+      taskAgentProtocol: p.taskAgentProtocol,
+      taskFollowUpCommand: p.taskFollowUpCommand,
+      taskResetCommand: p.taskResetCommand,
+      taskValidateCommand: p.taskValidateCommand,
+      taskCancelCommand: p.taskCancelCommand,
+      taskReviewMode: p.taskReviewMode,
+      taskAgentModel: p.taskAgentModel,
+    },
   }
 }
 
@@ -187,6 +217,7 @@ export function toProjectPayload(value: LiteFormValue): ProjectPayload {
       .filter(isDeclaredVolume)
       .map((v) => ({ name: v.name.trim(), mountPath: v.mountPath.trim() })),
     secrets: value.secrets.filter((s) => s.name && s.value).map(({ name, value: v }) => ({ name, value: v })),
+    ...value.taskSettings,
   }
 }
 
