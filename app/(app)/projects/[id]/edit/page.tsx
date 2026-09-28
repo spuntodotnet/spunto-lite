@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ProjectForm } from "@/components/project-form"
 import { SecretsCard } from "@/components/secrets-card"
+import { TaskSettingsCard } from "@/components/task-settings-card"
 import { DeleteProjectDialog } from "@/components/delete-project-dialog"
 
 export default function EditProjectPage({ params }: { params: Promise<{ id: string }> }) {
@@ -37,6 +38,8 @@ export default function EditProjectPage({ params }: { params: Promise<{ id: stri
       {/* Same width as the form above it, which the design system lays out as
           two columns (sections + build manifest) as soon as it has the room. */}
       <div className="mx-auto -mt-2 max-w-6xl space-y-4 px-6 pb-10">
+        <TaskSettingsCard project={project} />
+
         <SecretsCard
           title="Project secrets"
           description="Injected as env vars into every worker of this project."

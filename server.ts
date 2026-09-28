@@ -9,6 +9,7 @@ import { PORT, BASE_DOMAIN, BASE_DOMAINS, TLS_CERT_FILE, TLS_KEY_FILE, TLS_PORT 
 import { runMigrations } from "./db/index"
 import { handleProxyRequest, handleProxyUpgrade, parseProxyHost } from "./server/worker-proxy"
 import { handleTerminalUpgrade } from "./server/terminal-ws"
+import { startTaskScheduler } from "./services/tasks"
 
 const dev = process.env.NODE_ENV !== "production"
 const app = next({ dev })
@@ -49,6 +50,9 @@ function readTlsMaterial(): { cert: Buffer; key: Buffer } | null {
 
 async function main() {
   runMigrations()
+  // Delegated work (docs/tasks.md): says what a restart interrupted, then keeps running tasks
+  // derived when nobody has the dashboard open — what parks a `stop` worker and frees the pool.
+  startTaskScheduler()
   await app.prepare()
 
   const onRequest = (req: IncomingMessage, res: ServerResponse) => {

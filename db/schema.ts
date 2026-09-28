@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm"
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, blob, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core"
 import type { SharedVolume } from "../lib/shared-volumes"
 import type { BuildStep } from "@spunto/build/steps"
 
@@ -121,6 +121,27 @@ export const projects = sqliteTable("projects", {
   sharedVolumes: text("shared_volumes", { mode: "json" }).$type<SharedVolume[]>().notNull().default(sql`'[]'`),
   currentVersion: integer("current_version").notNull().default(1),
   favorite: integer("favorite", { mode: "boolean" }).notNull().default(false),
+  // ── Delegated work (docs/tasks.md) ──
+  // How a task runs in this project. Not part of a version snapshot: none of it goes into the
+  // image, and changing the harness must not force a rebuild. All empty = Claude Code, read live.
+  /** The harness. Reads the prompt on stdin — the only contract. Null = `claude -p`. */
+  taskAgentCommand: text("task_agent_command"),
+  /** How its stdout is read (`@spunto/build/agent-stream`). `claude-stream` = live and interactive. */
+  taskAgentProtocol: text("task_agent_protocol").notNull().default("claude-stream"),
+  /** How a one-shot session is resumed for a follow-up turn. Null = `claude --resume`. */
+  taskFollowUpCommand: text("task_follow_up_command"),
+  /** Run on a recycled worker after the checkout — reseed, reinstall. Null = nothing. */
+  taskResetCommand: text("task_reset_command"),
+  /** What Accept runs. Exit 0 ⇒ done. Null = Accept just closes the task. */
+  taskValidateCommand: text("task_validate_command"),
+  /** Cleanup run by Drop, after the session is killed. */
+  taskCancelCommand: text("task_cancel_command"),
+  /** `keep` leaves the worker running during review, `stop` parks it. */
+  taskReviewMode: text("task_review_mode").notNull().default("keep"),
+  /** Default model of a task. Free text: the valid ids belong to the harness. */
+  taskAgentModel: text("task_agent_model"),
+  /** Appended to the standing instruction every task of this project is given. */
+  taskAgentInstructions: text("task_agent_instructions"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 })
 
@@ -228,6 +249,128 @@ export const projectImageBuilds = sqliteTable("project_image_builds", {
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 })
 
+// ─── Delegated work (docs/tasks.md) ──────────────────────────────────────────
+
+/**
+ * A task: a prompt handed to an agent, a worker it runs in, a branch it works on, and something
+ * to review at the end. Its `state` is *derived* from the agent session (a background command in
+ * the worker) on every read — the row only remembers the last thing observed.
+ *
+ * Timestamps are milliseconds rather than the seconds the older tables use: a conversation list
+ * is sorted on `lastActivityAt`, and two turns in the same second are the common case.
+ */
+export const tasks = sqliteTable(
+  "tasks",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    /** True while the platform is the one naming it — the session's own name replaces it once. */
+    autoTitle: integer("auto_title", { mode: "boolean" }).notNull().default(false),
+    prompt: text("prompt").notNull(),
+    baseBranch: text("base_branch"),
+    /** Cut from the first title at creation, and never renamed after. */
+    branch: text("branch").notNull(),
+    /** Resolved once at creation: the task's own choice, else the project's default. */
+    model: text("model"),
+    workerId: text("worker_id").references(() => workers.id, { onDelete: "set null" }),
+    /** The agent session — the `task_commands` row of the current turn. */
+    commandId: text("command_id"),
+    // queued | running | in-review | done | failed
+    state: text("state").notNull().default("queued"),
+    error: text("error"),
+    /**
+     * What the platform is doing to the task on a human's behalf (accepting | dropping |
+     * replying). Cloud derives it from its durable job rows; Lite has no job table, so the
+     * in-process job writes it and clears it in a `finally` — and a boot clears whatever a crash
+     * left behind (`recoverInterruptedTasks`).
+     */
+    pendingAction: text("pending_action"),
+    pendingSince: integer("pending_since", { mode: "timestamp_ms" }),
+    /** When the state was last derived — the background floor's clock. Not a fact about the work. */
+    lastRefreshedAt: integer("last_refreshed_at", { mode: "timestamp_ms" }),
+    /** When the task last *moved*. What every list is sorted on. */
+    lastActivityAt: integer("last_activity_at", { mode: "timestamp_ms" }).notNull(),
+    // The ingestion cursor: which command's stdout, how far into it, and the last seq written.
+    eventsCommandId: text("events_command_id"),
+    eventsOffset: integer("events_offset").notNull().default(0),
+    eventsSeq: integer("events_seq").notNull().default(0),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    startedAt: integer("started_at", { mode: "timestamp_ms" }),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+  },
+  (t) => [index("tasks_project_activity_idx").on(t.projectId, t.lastActivityAt), index("tasks_state_idx").on(t.state)],
+)
+
+/**
+ * What the platform ran in a worker for a task — branch setup, the session, accept, drop — with
+ * the tail of its output. Cloud keeps these as generic `worker_commands`; Lite only ever runs
+ * commands *for* a task, so they hang off the task.
+ *
+ * A `background` row is the source of truth for nothing: its process lives in the worker, under
+ * `~/.spunto/commands/<id>/` (lib/worker-commands.ts), and the row is reconciled from there.
+ */
+export const taskCommands = sqliteTable(
+  "task_commands",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    workerId: text("worker_id"),
+    label: text("label"),
+    command: text("command").notNull(),
+    cwd: text("cwd"),
+    // sync | background
+    mode: text("mode").notNull(),
+    // running | succeeded | failed | timeout | canceled | lost
+    status: text("status").notNull(),
+    exitCode: integer("exit_code"),
+    stdout: text("stdout"),
+    stderr: text("stderr"),
+    truncated: integer("truncated", { mode: "boolean" }).notNull().default(false),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
+  },
+  (t) => [index("task_commands_task_idx").on(t.taskId, t.createdAt)],
+)
+
+/**
+ * The agent session, event by event, in the shared vocabulary (`@spunto/build/agent-stream`).
+ * `source` is the harness line it was read from — null for what the platform wrote itself (what
+ * the human said).
+ */
+export const taskEvents = sqliteTable(
+  "task_events",
+  {
+    taskId: text("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    commandId: text("command_id"),
+    ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
+    type: text("type").notNull(),
+    payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+    source: text("source"),
+  },
+  (t) => [primaryKey({ columns: [t.taskId, t.seq] }), index("task_events_type_idx").on(t.taskId, t.type)],
+)
+
+/** Files of a conversation, both ways (RFC 0022). Deduplicated per task on the content hash. */
+export const taskAttachments = sqliteTable(
+  "task_attachments",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    commandId: text("command_id"),
+    // user | agent
+    origin: text("origin").notNull(),
+    filename: text("filename"),
+    mediaType: text("media_type").notNull(),
+    bytes: integer("bytes").notNull(),
+    sha256: text("sha256").notNull(),
+    data: blob("data", { mode: "buffer" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [uniqueIndex("task_attachments_task_sha_idx").on(t.taskId, t.sha256)],
+)
+
 /** Single-row settings table (id is always "singleton"). */
 export const settings = sqliteTable("settings", {
   id: text("id").primaryKey().default("singleton"),
@@ -249,3 +392,7 @@ export type Worker = typeof workers.$inferSelect
 export type Service = typeof services.$inferSelect
 export type ProjectImageBuild = typeof projectImageBuilds.$inferSelect
 export type Settings = typeof settings.$inferSelect
+export type Task = typeof tasks.$inferSelect
+export type TaskCommand = typeof taskCommands.$inferSelect
+export type TaskEvent = typeof taskEvents.$inferSelect
+export type TaskAttachment = typeof taskAttachments.$inferSelect

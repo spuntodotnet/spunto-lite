@@ -71,6 +71,16 @@ export type Project = {
   sharedVolumes: SharedVolume[]
   currentVersion: number
   favorite: boolean
+  // How delegated work runs here — see `TaskSettingsSchema` and docs/tasks.md.
+  taskAgentCommand: string | null
+  taskAgentProtocol: string
+  taskFollowUpCommand: string | null
+  taskResetCommand: string | null
+  taskValidateCommand: string | null
+  taskCancelCommand: string | null
+  taskReviewMode: string
+  taskAgentModel: string | null
+  taskAgentInstructions: string | null
   createdAt: string
 }
 

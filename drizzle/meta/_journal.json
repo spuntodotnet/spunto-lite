@@ -71,6 +71,13 @@
       "when": 1789850946333,
       "tag": "0009_smooth_phantom_reporter",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1790569522978,
+      "tag": "0010_first_cerebro",
+      "breakpoints": true
     }
   ]
 }

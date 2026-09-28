@@ -11,7 +11,7 @@ import {
 import { newId } from "../lib/id"
 import { removeWorker as removeWorkerContainer, removeProjectImages, removeProjectVolumes } from "../lib/docker"
 import { AVAILABLE_FEATURES } from "../lib/catalogs"
-import type { CreateProjectInput, UpdateProjectInput } from "../lib/validation"
+import { TASK_SETTING_KEYS, type CreateProjectInput, type TaskSettingsInput, type UpdateProjectInput } from "../lib/validation"
 import { buildProjectSpec, type ProjectExport } from "../lib/project-export"
 import { setProjectSecret, listProjectSecrets } from "./secrets"
 
@@ -100,6 +100,16 @@ export function createProject(input: CreateProjectInput): SerializedProject {
     sharedVolumes: input.sharedVolumes,
     currentVersion: 1,
     favorite: false,
+    taskAgentCommand: null,
+    taskAgentProtocol: "claude-stream",
+    taskFollowUpCommand: null,
+    taskResetCommand: null,
+    taskValidateCommand: null,
+    taskCancelCommand: null,
+    taskReviewMode: "keep",
+    taskAgentModel: null,
+    taskAgentInstructions: null,
+    ...taskSettingsColumns(input),
     createdAt: new Date(),
   }
   db.insert(projects).values(row).run()
@@ -111,9 +121,33 @@ export function createProject(input: CreateProjectInput): SerializedProject {
   return serializeProject(getProjectRow(id)!)
 }
 
+/**
+ * The task settings of a create or a patch, as columns. `null`/blank = back to the default, and
+ * absent = leave alone (only meaningful on a patch — a create starts from the column defaults).
+ */
+function taskSettingsColumns(input: TaskSettingsInput): Partial<Project> {
+  const out: Record<string, unknown> = {}
+  for (const key of TASK_SETTING_KEYS) {
+    const value = input[key]
+    if (value === undefined) continue
+    if (key === "taskAgentProtocol" || key === "taskReviewMode") out[key] = value
+    else out[key] = typeof value === "string" && value.trim() ? value.trim() : null
+  }
+  return out as Partial<Project>
+}
+
 export function updateProject(id: string, input: UpdateProjectInput): SerializedProject | undefined {
   const existing = getProjectRow(id)
   if (!existing) return undefined
+
+  // Task settings live beside the version history, not in it: none of them goes into the image,
+  // so changing the harness must not mint a version (and mark every worker out of date).
+  const taskSettings = taskSettingsColumns(input)
+  if (Object.keys(taskSettings).length > 0) db.update(projects).set(taskSettings).where(eq(projects.id, id)).run()
+  const buildKeys = Object.keys(input).filter(
+    (k) => !TASK_SETTING_KEYS.includes(k as keyof TaskSettingsInput) && (input as Record<string, unknown>)[k] !== undefined,
+  )
+  if (buildKeys.length === 0) return serializeProject(getProjectRow(id)!)
 
   const merged: Project = {
     ...existing,
@@ -224,6 +258,17 @@ export function exportProject(id: string): ProjectExport | undefined {
     // The *declaration* travels — a name and a mount path, no data and nothing
     // sensitive. The volume itself is per-instance and created on first spawn.
     sharedVolumes: p.sharedVolumes,
+    // How delegated work runs here — the spec's own fields, shared with Spunto Cloud, so the
+    // harness travels with the environment it runs in. Defaults are left out like every other
+    // unset field. (`taskAgentInstructions` has no field in the spec yet, so it stays behind.)
+    taskAgentCommand: p.taskAgentCommand ?? undefined,
+    taskAgentProtocol: p.taskAgentProtocol as ProjectExport["project"]["taskAgentProtocol"],
+    taskFollowUpCommand: p.taskFollowUpCommand ?? undefined,
+    taskResetCommand: p.taskResetCommand ?? undefined,
+    taskValidateCommand: p.taskValidateCommand ?? undefined,
+    taskCancelCommand: p.taskCancelCommand ?? undefined,
+    taskReviewMode: p.taskReviewMode as ProjectExport["project"]["taskReviewMode"],
+    taskAgentModel: p.taskAgentModel ?? undefined,
     secretNames: listProjectSecrets(id).map((s) => s.name),
   })
 }

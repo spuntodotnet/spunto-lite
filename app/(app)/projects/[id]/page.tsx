@@ -23,6 +23,9 @@ import { Badge } from "@/components/ui/badge"
 import { WorkersPanel } from "@/components/workers-panel"
 import { BuildLogsSheet } from "@/components/build-logs-sheet"
 import { SpawnWorkerButton } from "@/components/spawn-worker-button"
+import { TaskPanel } from "@/components/task-panel"
+import { NewTaskButton } from "@/components/new-task-button"
+import { PROJECT_TASKS_KEY, taskPollInterval, type Task } from "@/lib/task-cache"
 
 /** The single build target of a Lite install — named once, shown on the row and in its log panel. */
 const BUILD_TARGET_LABEL = "local · Docker"
@@ -34,6 +37,13 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
   const { data: project, isError } = useQuery({ queryKey: ["project", id], queryFn: () => api.get<Project>(`/api/projects/${id}`) })
   const { data: workers = [] } = useQuery({ queryKey: ["workers", id], queryFn: () => api.get<Worker[]>(`/api/projects/${id}/workers`), refetchInterval: 2500 })
+  // Delegated work: read here rather than in the panel, because the worker list below needs the
+  // same rows to say which machine a task holds.
+  const { data: tasks = [] } = useQuery({
+    queryKey: [...PROJECT_TASKS_KEY, id],
+    queryFn: () => api.get<Task[]>(`/api/projects/${id}/tasks`),
+    refetchInterval: (q) => taskPollInterval(q.state.data ?? [], 5_000),
+  })
   const { data: versions = [] } = useQuery({ queryKey: ["versions", id], queryFn: () => api.get<ProjectVersion[]>(`/api/projects/${id}/versions`) })
   const { data: secrets = [] } = useQuery({ queryKey: ["secrets", id], queryFn: () => api.get<SecretMeta[]>(`/api/projects/${id}/secrets`) })
   const { data: builds = [] } = useQuery({
@@ -111,6 +121,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             <Download className="h-3.5 w-3.5" /> Export
           </a>
           <SpawnWorkerButton projectId={id} />
+          <NewTaskButton projectId={id} onCreated={(task) => router.push(`/projects/${id}/tasks/${task.id}`)} />
         </div>
       </div>
 
@@ -182,8 +193,12 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           </ProjectPanel>
         </aside>
 
-        {/* Right: workers */}
-        <div className="flex-1 min-w-0 space-y-3">
+        {/* Right: delegated work, then the machines */}
+        <div className="flex-1 min-w-0 space-y-6">
+          <section className="space-y-3">
+            <h2 className="text-sm font-medium text-muted-foreground">Tasks</h2>
+            <TaskPanel projectId={id} tasks={tasks} workers={workers} />
+          </section>
           <WorkersPanel projectId={id} projectVersion={project.currentVersion} />
         </div>
       </div>
