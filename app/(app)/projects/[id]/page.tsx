@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "@spunto/design-system"
 import { ProjectPanel, PanelSection, type ProjectVersionEntry } from "@spunto/design-system/projects"
-import { ArrowLeft, Cpu, Download, TriangleAlert } from "lucide-react"
+import { ArrowLeft, Cpu, Download, Layers, Sparkles, TriangleAlert } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import { parseFailedExtensions } from "@/lib/extensions"
@@ -20,7 +20,9 @@ import type {
 } from "@/lib/types"
 import { buttonVariants } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { WorkersPanel } from "@/components/workers-panel"
+import { WorkersPanel, WorkerViewToggle, useWorkerView } from "@/components/workers-panel"
+import { indexTasksByWorker } from "@spunto/design-system/tasks"
+import { useTabParam } from "@/hooks/use-tab-param"
 import { BuildLogsSheet } from "@/components/build-logs-sheet"
 import { SpawnWorkerButton } from "@/components/spawn-worker-button"
 import { TaskPanel } from "@/components/task-panel"
@@ -86,6 +88,16 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   })
   const [logsOpen, setLogsOpen] = useState(false)
 
+  // Two lists, two tabs — not one above the other (same page as Spunto Cloud's). Stacked, the
+  // page made you scroll past the tasks to reach the machines and gave neither room. Workspaces
+  // open first because that is what a project *is* before anything was delegated, and
+  // `?tab=tasks` makes the other half a link you can share, out of the history stack.
+  const [tab, setTab] = useTabParam(["workspaces", "tasks"] as const, "workspaces")
+  const [workerView, setWorkerView] = useWorkerView()
+  // Both directions of the task ↔ workspace pairing, resolved once from the lists already loaded.
+  const tasksByWorker = indexTasksByWorker(tasks)
+  const tasksInReview = tasks.filter((t) => t.state === "in-review").length
+
   if (isError) {
     router.push("/projects")
     return null
@@ -120,15 +132,18 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           >
             <Download className="h-3.5 w-3.5" /> Export
           </a>
-          <SpawnWorkerButton projectId={id} />
-          <NewTaskButton projectId={id} onCreated={(task) => router.push(`/projects/${id}/tasks/${task.id}`)} />
+          {/* The primary action follows the tab: the button at the top right creates the kind of
+              thing the list under it holds. */}
+          {tab === "workspaces" ? <SpawnWorkerButton projectId={id} /> : <NewTaskButton projectId={id} />}
         </div>
       </div>
 
       {/* Body */}
       <div className="flex flex-col gap-4 lg:flex-row lg:gap-5 lg:items-start min-h-0">
         {/* The card is the design system's; where it sits in the page grid is ours. */}
-        <aside className="w-full lg:w-72 lg:shrink-0 lg:sticky lg:top-0">
+        {/* After the tabs on a phone: the page used to open on the image, the lifecycle commands
+            and the secrets before a single workspace or task. */}
+        <aside className="order-2 w-full lg:order-1 lg:w-72 lg:shrink-0 lg:sticky lg:top-0">
           <ProjectPanel
             project={project}
             stats={{ running: runningCount, total: workers.length }}
@@ -193,13 +208,37 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           </ProjectPanel>
         </aside>
 
-        {/* Right: delegated work, then the machines */}
-        <div className="flex-1 min-w-0 space-y-6">
-          <section className="space-y-3">
-            <h2 className="text-sm font-medium text-muted-foreground">Tasks</h2>
+        {/* Right: the two halves of a project, one tab each */}
+        <div className="order-1 flex-1 min-w-0 space-y-4 lg:order-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border">
+            <div role="tablist" aria-label="Project" className="-mb-px flex items-center gap-1">
+              <TabButton active={tab === "workspaces"} onClick={() => setTab("workspaces")} icon={Layers} label="Workspaces" count={workers.length} />
+              <TabButton
+                active={tab === "tasks"}
+                onClick={() => setTab("tasks")}
+                icon={Sparkles}
+                label="Tasks"
+                count={tasks.length}
+                // The one thing worth pulling someone out of the other tab: a task cannot leave
+                // review without a human.
+                highlight={tasksInReview > 0 ? `${tasksInReview} in review` : undefined}
+              />
+            </div>
+            {tab === "workspaces" && workers.length > 0 && <WorkerViewToggle view={workerView} onChange={setWorkerView} className="mb-1.5" />}
+          </div>
+
+          {/* Unmounted with its tab rather than hidden: every workspace row polls its git status. */}
+          {tab === "tasks" ? (
             <TaskPanel projectId={id} tasks={tasks} workers={workers} />
-          </section>
-          <WorkersPanel projectId={id} projectVersion={project.currentVersion} />
+          ) : (
+            <WorkersPanel
+              projectId={id}
+              projectVersion={project.currentVersion}
+              workers={workers}
+              view={workerView}
+              taskFor={(w) => tasksByWorker.get(w.id)}
+            />
+          )}
         </div>
       </div>
 
@@ -216,5 +255,52 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         />
       )}
     </div>
+  )
+}
+
+/**
+ * One tab of the project page: a name, how many rows are behind it, and — when the tab is asking
+ * for something — what. The count is why it lives here: a closed tab still has to say how much is
+ * in it, otherwise switching is a guess.
+ */
+function TabButton({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+  count,
+  highlight,
+}: {
+  active: boolean
+  onClick: () => void
+  icon: typeof Layers
+  label: string
+  count: number
+  highlight?: string
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        "flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors",
+        active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+      )}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+      {count > 0 && (
+        <Badge variant="secondary" className="h-5 px-1.5 text-[11px] tabular-nums">
+          {count}
+        </Badge>
+      )}
+      {highlight && (
+        <Badge variant="outline" className="h-5 px-1.5 text-[11px] bg-primary/10 text-primary border-primary/30">
+          {highlight}
+        </Badge>
+      )}
+    </button>
   )
 }
