@@ -125,7 +125,7 @@ HTTPS with a local mkcert certificate. See
 Delegate work to a coding agent the way Spunto Cloud does: **New task** on a project (or
 **Agents** in the sidebar), write what you want, and a worker from the project's pool gets its own
 branch and a Claude Code session. You watch it work live, answer it or interrupt it, read the diff
-from the machine itself, then **Accept** or **Drop**. Every conversation of every project is on
+from the machine itself, open a shell on it from the **Terminal** tab, then **Accept** or **Drop**. Every conversation of every project is on
 the **Agents** page, grouped by what needs you.
 
 Out of the box it runs Claude Code, so the project needs the `claude-code` feature and an

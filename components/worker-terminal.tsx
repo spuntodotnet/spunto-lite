@@ -36,7 +36,7 @@ export function WorkerXterm({ workerId, session = "main" }: { workerId: string; 
     let term: any = null
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let fit: any = null
-    let onResize: (() => void) | null = null
+    let observer: ResizeObserver | null = null
 
     async function boot() {
       const [{ Terminal }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")])
@@ -71,19 +71,23 @@ export function WorkerXterm({ workerId, session = "main" }: { workerId: string; 
         if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data: utf8ToB64(data) }))
       })
 
-      onResize = () => {
+      // The box, not the window: in a task cockpit the terminal also resizes when a panel next to
+      // it opens or closes. Only a real change of grid reaches the pty.
+      observer = new ResizeObserver(() => {
         try {
+          const before = `${term.cols}x${term.rows}`
           fit.fit()
+          if (`${term.cols}x${term.rows}` === before) return
           if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }))
         } catch {}
-      }
-      window.addEventListener("resize", onResize)
+      })
+      observer.observe(containerRef.current)
     }
 
     boot()
     return () => {
       disposed = true
-      if (onResize) window.removeEventListener("resize", onResize)
+      observer?.disconnect()
       try {
         ws?.close()
         term?.dispose()

@@ -16,9 +16,13 @@ du dépôt Cloud ; cette page dit **ce qui est pareil, ce qui diffère dans Lite
   demandant dans quel projet.
 - **Page projet** → section *Tasks* au-dessus des workspaces, bouton **New task** dans l'en-tête,
   Accept / Drop sur la ligne.
-- **Une conversation à son URL** : `/projects/:id/tasks/:taskId` — onglets *Session* et *Diff*, la
-  boîte de réponse dessous, la colonne de faits à droite (branche, usage de la session, machine,
+- **Une conversation à son URL** : `/projects/:id/tasks/:taskId` — onglets *Session*, *Diff* et
+  *Terminal*, la boîte de réponse sous les deux premiers, la colonne de faits à droite (branche, usage de la session, machine,
   prompt, ce qui a tourné).
+- **Terminal** : un shell dans la machine de la tâche, sur sa branche. Ce sont les mêmes sessions
+  dtach persistantes que la page worker (onglets, reprise après fermeture) — un shell ouvert ici s'y
+  retrouve, et la session de l'agent n'en fait jamais partie. L'onglet n'existe que si la tâche a une
+  machine ; machine arrêtée (garée pour la revue), il dit pourquoi il n'y a rien où taper.
 - **Réglages** : page d'édition du projet → carte *Delegated work*.
 
 ## Démarrer avec Claude Code
