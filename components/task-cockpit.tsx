@@ -1,7 +1,9 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import Link from "next/link"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { SquareArrowOutUpRight } from "lucide-react"
 import {
   TaskBoot,
   TaskCockpit as TaskCockpitDesktop,
@@ -11,6 +13,7 @@ import {
   TaskDiffPanel,
   TaskEventStream,
   TaskMachine,
+  TaskTerminalPanel,
   type PendingMessage,
   type TaskCockpitView,
   type TaskCommand,
@@ -28,6 +31,7 @@ import { workerBaseUrl } from "@/lib/worker-url"
 import type { Worker } from "@/lib/types"
 import { useTaskActions } from "@/hooks/use-task-actions"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { TerminalSessions } from "@/components/terminal-sessions"
 
 /**
  * One conversation with an agent, filling whatever box it is given.
@@ -307,6 +311,28 @@ export function TaskCockpit({
           loadPatch={diff.loadPatch}
         />
       )}
+      // The same persistent dtach sessions as the worker page: a shell opened here is still there
+      // there, and the agent's own session is never one of them. No machine, no tab.
+      terminal={
+        worker
+          ? (tabs) => (
+              <TaskTerminalPanel
+                tabs={tabs}
+                actions={
+                  <Link
+                    href={`/projects/${worker.projectId}/workers/${worker.id}`}
+                    className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                  >
+                    Worker <SquareArrowOutUpRight className="h-3 w-3" />
+                  </Link>
+                }
+              >
+                {/* Nothing rather than `false`: the panel's placeholder says why there is no shell. */}
+                {machine.running ? <TerminalSessions workerId={worker.id} enabled /> : undefined}
+              </TaskTerminalPanel>
+            )
+          : undefined
+      }
       composer={
         task && (
           <TaskComposer
