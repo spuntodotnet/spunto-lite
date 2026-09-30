@@ -39,7 +39,6 @@ import * as attachments from "./task-attachments"
 const MAX_CHUNKS_PER_PASS = 6
 /** Longest line assembled across reads — sized for an inline screenshot. Past it, skipped. */
 const MAX_LINE_BYTES = 12 * 1024 * 1024
-const MAX_EVENTS_PER_TASK = 5_000
 const MAX_SOURCE_CHARS = 64 * 1024
 
 export function taskProtocol(projectId: string): AgentProtocol {
@@ -100,7 +99,7 @@ export async function ingestTaskEvents(task: Task, protocol?: AgentProtocol): Pr
     }
     chunk++
 
-    const events = seq >= MAX_EVENTS_PER_TASK ? [] : parseWithFiles(task.id, commandId, dialect, lines, MAX_EVENTS_PER_TASK - seq)
+    const events = parseWithFiles(task.id, commandId, dialect, lines)
     // Claimed *before* inserting: losing the race means another reader owns these rows.
     if (!advanceCursor(task.id, fromCommandId, commandId, rowOffset, offset + consumed, seq, seq + events.length)) break
 
@@ -186,17 +185,16 @@ function renameFromSession(taskId: string, title: string): boolean {
 }
 
 /** Parse a chunk line by line, taking inline files out of each line first (RFC 0022). */
-function parseWithFiles(taskId: string, commandId: string, dialect: AgentProtocol, lines: string[], budget: number): SourcedEvent[] {
+function parseWithFiles(taskId: string, commandId: string, dialect: AgentProtocol, lines: string[]): SourcedEvent[] {
   const out: SourcedEvent[] = []
   for (const line of lines) {
-    if (out.length >= budget) break
     let captured: Captured = { line, files: [] }
     try {
       captured = captureFiles(taskId, commandId, line)
     } catch (err) {
       console.warn(`[task:${taskId}] could not store a file from the stream: ${err}`)
     }
-    const events = parseLines(dialect, [captured.line], budget - out.length)
+    const events = parseLines(dialect, [captured.line], Infinity)
     if (captured.files.length > 0) attachFiles(events, captured.files)
     out.push(...events)
   }
