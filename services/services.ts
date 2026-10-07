@@ -8,6 +8,7 @@ import {
   removeService as removeServiceDocker,
   stopContainer,
   inspectContainer,
+  wentDownWithTheHost,
 } from "../lib/docker"
 import { getUserSecretValue } from "./secrets"
 import type { CreateServiceInput, UpdateServiceInput } from "../lib/validation"
@@ -309,7 +310,13 @@ export async function refreshService(s: Service): Promise<Service> {
   }
 
   // stopped
-  if (s.state === "stopped" || s.state === "error") return s
+  if (s.state === "stopped") return s
+  // Down with the machine (a reboot, Docker restarting): stopped, not crashed — see the helper.
+  if (wentDownWithTheHost(live)) {
+    db.update(services).set({ state: "stopped", error: null }).where(eq(services.id, s.id)).run()
+    return { ...s, state: "stopped", error: null }
+  }
+  if (s.state === "error") return s
   const crashed = live.exitCode !== 0
   const error = crashed ? (live.error ?? `Container exited with code ${live.exitCode} — see the logs`) : null
   const state = crashed ? "error" : "stopped"

@@ -354,19 +354,57 @@ export function latestSessionId(taskId: string): string | null {
 }
 
 /**
- * The type of the latest event that is a moment in the session — how an interactive session's
- * turn is known to be over (`session.ended`), since its process does not exit between turns.
- * `raw` and `session.title` are facts *about* the session, and are skipped.
+ * Has an **interactive** session handed back — is the agent actually done with its turn?
+ *
+ * The process does not exit between turns, so `session.ended` in the stream is the harness saying
+ * its turn is over. Necessary, not sufficient: a turn can end with work still running behind it
+ * (a `run_in_background` shell, a backgrounded subagent), and when that work finishes the harness
+ * wakes itself up for another turn and another `session.ended`, nobody having said anything.
+ * Taking the first one at its word put the task in review — and parked its worker — while the
+ * agent was still at it. So, as in Cloud:
+ *
+ *  - the last *moment* is a `session.ended` (`raw`, `session.title` and `session.background` are
+ *    facts *about* the session, and can all land right after the end);
+ *  - nothing was left running in the background **at that end**: the latest `session.background`
+ *    *before* it is absent or empty. Before, not after — a set that empties after the end is the
+ *    prelude to the turn it wakes up.
+ *
+ * A harness that never reports background work is judged on its `session.ended` alone.
  */
-export function lastEventType(taskId: string): string | null {
-  const row = db
-    .select({ type: taskEvents.type })
+export function hasHandedBack(taskId: string): boolean {
+  const last = lastTurnEnd(taskId)
+  if (!last) return false
+  const background = db
+    .select({ payload: taskEvents.payload })
     .from(taskEvents)
-    .where(and(eq(taskEvents.taskId, taskId), sql`${taskEvents.type} NOT IN ('raw', 'session.title')`))
+    .where(and(eq(taskEvents.taskId, taskId), eq(taskEvents.type, "session.background"), lt(taskEvents.seq, last.seq)))
     .orderBy(desc(taskEvents.seq))
     .limit(1)
     .get()
-  return row?.type ?? null
+  const running = background?.payload?.tasks
+  return !Array.isArray(running) || running.length === 0
+}
+
+/**
+ * Did the session's last turn end — whatever was left running behind it? The first half of
+ * `hasHandedBack`, for the one moment the second half stops mattering: the **process is gone**
+ * (the 6 h timeout on a session nobody answered, a crash, a machine that went down). There is no
+ * next turn coming then, and the last thing the agent did was hand back.
+ */
+export function hasEndedTurn(taskId: string): boolean {
+  return lastTurnEnd(taskId) !== null
+}
+
+/** The last *moment* of the stream, if it is a `session.ended`. */
+function lastTurnEnd(taskId: string): { seq: number } | null {
+  const row = db
+    .select({ type: taskEvents.type, seq: taskEvents.seq })
+    .from(taskEvents)
+    .where(and(eq(taskEvents.taskId, taskId), sql`${taskEvents.type} NOT IN ('raw', 'session.title', 'session.background')`))
+    .orderBy(desc(taskEvents.seq))
+    .limit(1)
+    .get()
+  return row?.type === "session.ended" ? { seq: row.seq } : null
 }
 
 /**

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test"
 import type { APIRequestContext } from "@playwright/test"
+import { execFileSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -33,7 +34,20 @@ if [ ! -d .git ]; then
   git push -q -u origin main
 fi`
 
-type Task = { id: string; state: string; title: string; workerId: string | null; pendingAction: string | null; error: string | null; canResume?: boolean }
+type Task = {
+  id: string
+  state: string
+  title: string
+  workerId: string | null
+  pendingAction: string | null
+  error: string | null
+  machine?: string | null
+  canResume?: boolean
+}
+
+async function workerState(request: APIRequestContext, id: string): Promise<string> {
+  return (await (await request.get(`/api/workers/${id}`)).json()).state
+}
 
 async function task(request: APIRequestContext, id: string): Promise<Task> {
   const res = await request.get(`/api/tasks/${id}`)
@@ -134,6 +148,8 @@ test.describe("task lifecycle on a real worker", () => {
     const commands = await (await request.get(`/api/tasks/${created.id}/commands`)).json()
     expect(commands.map((c: { label: string }) => c.label)).toEqual(["Branch setup", "Agent session", "Accept command"])
     expect(commands[2].stdout).toContain("accepted")
+    // Accepted, the machine goes back to the pool parked — not left running until the next task.
+    await expect.poll(() => workerState(request, t.workerId!), { timeout: 60_000 }).toBe("stopped")
   })
 
   test("the next task recycles the pool worker, parks it for review, wakes it for a reply, and drops", async ({ request }) => {
@@ -162,5 +178,59 @@ test.describe("task lifecycle on a real worker", () => {
     expect((await request.post(`/api/tasks/${created.id}/cancel`)).status()).toBe(202)
     t = await until(request, created.id, (x) => x.state === "failed", 60_000)
     expect(t.error).toBe("Cancelled")
+    // Dropped, the machine is parked again (the reply had woken it).
+    await expect.poll(() => workerState(request, t.workerId!), { timeout: 60_000 }).toBe("stopped")
+  })
+
+  test("the computer restarts under a running session: stopped, not failed — a reply wakes it and goes on", async ({ request }) => {
+    test.setTimeout(8 * 60_000)
+    await request.patch(`/api/projects/${projectId}`, { data: { taskReviewMode: "keep" } })
+    const created = await (await request.post(`/api/projects/${projectId}/tasks`, { data: { title: "Third", prompt: "A third note" } })).json()
+    let t = await until(request, created.id, (x) => x.state === "in-review" || x.state === "failed", 5 * 60_000)
+    expect(t.state, t.error ?? "").toBe("in-review")
+    expect(t.machine).toBe("awake")
+    const workerId = t.workerId!
+
+    // A turn in flight…
+    await request.post(`/api/tasks/${created.id}/messages`, { data: { prompt: "do something slow" } })
+    await expect
+      .poll(async () => (await events(request, created.id)).events.some((e) => e.payload.text === "Starting something long…"), { timeout: 30_000 })
+      .toBe(true)
+
+    // …and the machine goes down under it, from outside Lite — what a shutdown does to every
+    // container (SIGTERM, then SIGKILL: exit 143 or 137).
+    const { containerId } = await (await request.get(`/api/workers/${workerId}`)).json()
+    execFileSync("docker", ["stop", "-t", "1", containerId])
+
+    // A stop, not a crash; and the task waits in review, saying how to go on.
+    await expect.poll(() => workerState(request, workerId), { timeout: 30_000 }).toBe("stopped")
+    t = await until(request, created.id, (x) => x.state !== "running", 60_000)
+    expect(t.state).toBe("in-review")
+    expect(t.machine).toBe("parked")
+    expect(t.error).toContain("reply to wake it")
+
+    // A reply wakes the machine, checks the branch, and resumes the session.
+    const reply = await request.post(`/api/tasks/${created.id}/messages`, { data: { prompt: "Pick it up" } })
+    expect(reply.status(), await reply.text()).toBe(202)
+    t = await until(request, created.id, (x) => x.pendingAction === null, 3 * 60_000)
+    expect(t.error).toBeNull()
+    t = await until(request, created.id, (x) => x.state === "in-review", 60_000)
+    expect(t.state).toBe("in-review")
+    const labels = (await (await request.get(`/api/tasks/${created.id}/commands`)).json()).map((c: { label: string }) => c.label)
+    expect(labels).toEqual(expect.arrayContaining(["Branch check", "Follow-up"]))
+
+    // Park and Wake by hand.
+    expect((await request.post(`/api/tasks/${created.id}/park`)).status()).toBe(200)
+    await expect.poll(() => workerState(request, workerId), { timeout: 60_000 }).toBe("stopped")
+    expect((await task(request, created.id)).machine).toBe("parked")
+    expect((await request.post(`/api/tasks/${created.id}/park`)).status()).toBe(409)
+    expect((await request.post(`/api/tasks/${created.id}/wake`)).status()).toBe(200)
+    await expect.poll(() => workerState(request, workerId), { timeout: 2 * 60_000 }).toBe("ready")
+
+    // Accepted: done, and the machine parked for the next task.
+    expect((await request.post(`/api/tasks/${created.id}/validate`)).status()).toBe(202)
+    t = await until(request, created.id, (x) => x.state === "done", 60_000)
+    expect(t.state, t.error ?? "").toBe("done")
+    await expect.poll(() => workerState(request, workerId), { timeout: 60_000 }).toBe("stopped")
   })
 })

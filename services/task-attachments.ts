@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { and, eq, inArray } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull } from "drizzle-orm"
 import { customAlphabet } from "nanoid"
 import { db } from "../db/index"
 import { taskAttachments, workers, type TaskAttachment } from "../db/schema"
@@ -103,6 +103,20 @@ export function attachmentsByIds(taskId: string, ids: string[]): TaskAttachment[
     .all()
   const byId = new Map(rows.map((r) => [r.id, r]))
   return ids.map((id) => byId.get(id)).filter((r): r is TaskAttachment => !!r)
+}
+
+/**
+ * What the human attached when delegating: their files, stored before any session existed. What
+ * a run restarted after a Lite restart hands the agent, as the first run would have.
+ */
+export function openingFileIds(taskId: string): string[] {
+  return db
+    .select({ id: taskAttachments.id })
+    .from(taskAttachments)
+    .where(and(eq(taskAttachments.taskId, taskId), eq(taskAttachments.origin, "user"), isNull(taskAttachments.commandId)))
+    .orderBy(asc(taskAttachments.createdAt))
+    .all()
+    .map((r) => r.id)
 }
 
 /**

@@ -7,14 +7,14 @@ import {
   type AgentProtocol,
 } from "@spunto/build/agent-stream"
 import { db } from "../db/index"
-import { projects, tasks, workers, type Project, type Task, type TaskCommand } from "../db/schema"
+import { projects, tasks, workers, type Project, type Task, type TaskCommand, type Worker } from "../db/schema"
 import { newId } from "../lib/id"
 import { shellQuote } from "../lib/shell"
 import { DEFAULT_AGENT_COMMAND, DEFAULT_FOLLOW_UP_COMMAND } from "../lib/harness-packs"
 import type { CreateTaskInput } from "../lib/validation"
 import { getProjectRow } from "./projects"
 import { resolveSecretsForSpawn } from "./secrets"
-import { getWorkerLive, spawnWorker, startWorker, stopWorker, setWorkerTags } from "./workers"
+import { getWorkerLive, getWorkerRow, rebuildWorker, spawnWorker, startWorker, stopWorker, setWorkerTags } from "./workers"
 import * as commands from "./task-commands"
 import * as events from "./task-events"
 import * as attachments from "./task-attachments"
@@ -146,6 +146,40 @@ export function branchSetupError(branch: string, cwd: string, gitOutput: string)
   return `Could not create branch "${branch}" in ${cwd}: ${tail}`
 }
 
+/**
+ * Run in each repository before a follow-up resumes the session: make sure the checkout is still
+ * on the task's branch (Cloud #423). It normally is — a task holds its machine until it is
+ * terminal — but a worker someone used by hand meanwhile may sit elsewhere, and resuming there
+ * would have the agent's commits land on the wrong branch. A clean tree is put back on the
+ * branch (the local one, else the one the task pushed); a tree with uncommitted changes on
+ * another branch is **not** touched — those belong to someone — and the follow-up is refused.
+ *
+ * No `exit` anywhere (Cloud #424): commands run in a login shell (`bash -lc`), where `exit`
+ * sources `~/.bash_logout` still under `set -e` — Debian's runs `clear_console`, which fails
+ * without a console, so an `exit 0` came back as 1 and every follow-up was refused.
+ */
+export function followUpCheckoutScript(branch: string): string {
+  const b = shellQuote(branch)
+  return `set -euo pipefail
+current=$(git rev-parse --abbrev-ref HEAD)
+if [ "$current" = ${b} ]; then
+  echo "$current"
+elif [ -n "$(git status --porcelain)" ]; then
+  echo "The checkout is on $current, not ${branch}, with uncommitted changes — not switching" >&2
+  git status --short >&2
+  false
+else
+  echo "The checkout is on $current — switching back to ${branch}"
+  if git show-ref --verify --quiet refs/heads/${branch}; then
+    git checkout --quiet ${b}
+  else
+    git fetch origin ${b} --quiet
+    git checkout --quiet -B ${b} FETCH_HEAD
+  fi
+  git rev-parse --abbrev-ref HEAD
+fi`
+}
+
 /** `--model <id>`, unless the command already names one. */
 export function applyModel(command: string, model?: string | null): string {
   if (!model?.trim() || /--model\b/.test(command)) return command
@@ -215,14 +249,52 @@ export function isLive(state: string): boolean {
 
 // ─── Serialization ────────────────────────────────────────────────────────────
 
-/** The row minus its bookkeeping (cursors, clocks) — what the API returns. */
+/**
+ * The task's machine, a second axis next to its state (Cloud #391) — derived from the worker at
+ * each read, never written: a parked task still has something to judge, so it stays `in-review`.
+ *
+ * | `machine`  | worker |
+ * |---|---|
+ * | `starting` | provisioning / building / starting |
+ * | `awake`    | ready |
+ * | `parked`   | stopped, or down on its own (a crash, the computer restarting): disk kept, woken by a reply, Accept, Drop or Wake |
+ * | `lost`     | deleted, or its setup failed |
+ * | `null`     | no worker yet, or the task is over |
+ */
+export type TaskMachine = "starting" | "awake" | "parked" | "lost"
+
+export function deriveTaskMachine(task: Pick<Task, "state" | "workerId">, worker: Pick<Worker, "state" | "setupStatus"> | null | undefined): TaskMachine | null {
+  if (!isLive(task.state)) return null
+  if (!task.workerId) return task.state === "queued" ? null : "lost"
+  if (!worker) return "lost"
+  switch (worker.state) {
+    case "ready":
+      return "awake"
+    case "provisioning":
+    case "building":
+    case "starting":
+      return "starting"
+    case "stopped":
+      return "parked"
+    case "error":
+      return worker.setupStatus?.phase === "error" ? "lost" : "parked"
+    default:
+      return "lost"
+  }
+}
+
+/** The row minus its bookkeeping (cursors, clocks) — what the API returns — plus its machine. */
 export function serializeTask(row: Task) {
   const out: Partial<Task> = { ...row }
   delete out.lastRefreshedAt
   delete out.eventsOffset
   delete out.eventsSeq
   delete out.eventsCommandId
-  return out as Omit<Task, "lastRefreshedAt" | "eventsOffset" | "eventsSeq" | "eventsCommandId">
+  const worker = row.workerId ? getWorkerRow(row.workerId) : null
+  return {
+    ...(out as Omit<Task, "lastRefreshedAt" | "eventsOffset" | "eventsSeq" | "eventsCommandId">),
+    machine: deriveTaskMachine(row, worker),
+  }
 }
 
 /** The detail view adds whether a follow-up can resume the session (a session id was captured). */
@@ -310,6 +382,7 @@ function failTask(taskId: string, error: string): void {
     .set({ state: "failed", error: error.slice(0, 2000), completedAt: now, lastActivityAt: now })
     .where(eq(tasks.id, taskId))
     .run()
+  releaseWorker(taskId)
 }
 
 function projectOf(task: Task): Project {
@@ -334,10 +407,33 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
   if (!task || task.state !== "queued") return
   const project = projectOf(task)
 
-  const { workerId, recycled } = await allocateWorker(task)
-  db.update(tasks).set({ workerId }).where(eq(tasks.id, task.id)).run()
-  console.log(`[task:${task.id}] worker ${workerId} allocated (${recycled ? "recycled" : "fresh"}) — waiting for ready`)
-  await waitForWorkerReady(workerId)
+  let workerId: string
+  let recycled: boolean
+  if (task.workerId) {
+    // Restarted after Lite went down mid-run (`resumeInterruptedRuns`): the machine was already
+    // chosen, and may have gone down with the computer. Recycled = it existed before the task.
+    workerId = task.workerId
+    const worker = getWorkerRow(workerId)
+    if (!worker) throw new Error(`The worker this task was being prepared on (${workerId}) no longer exists — delegate it again.`)
+    recycled = worker.createdAt.getTime() < task.createdAt.getTime()
+    // The restart may have landed between the launch and the line that records it: the session
+    // then runs already, and starting a second one on the same branch is the one thing not to do.
+    const launched = commands.findTaskCommand(task.id, "Agent session")
+    if (launched) {
+      db.update(tasks)
+        .set({ commandId: launched.id, state: "running", startedAt: launched.createdAt, lastActivityAt: new Date() })
+        .where(and(eq(tasks.id, task.id), eq(tasks.state, "queued")))
+        .run()
+      console.log(`[task:${task.id}] its session ${launched.id} was already launched — adopted`)
+      return
+    }
+    console.log(`[task:${task.id}] resuming its run on worker ${workerId}`)
+    await wakeWorker(workerId, "run resumed")
+  } else {
+    ;({ workerId, recycled } = await allocateWorker(task))
+    console.log(`[task:${task.id}] worker ${workerId} allocated (${recycled ? "recycled" : "fresh"}) — waiting for ready`)
+    await waitForWorkerReady(workerId)
+  }
   // Dropped while its machine was being built: nothing more to do, and nothing to start.
   if (getRawTask(taskId)?.state !== "queued") return
 
@@ -441,22 +537,47 @@ function recordUserTurn(taskId: string, commandId: string, protocol: AgentProtoc
 
 /**
  * A worker for the task: a free one from the project's pool if there is one (started if it was
- * stopped — seconds, against an image build and a clone), else a fresh one, tagged into the pool.
+ * parked — seconds, against an image build and a clone), else a fresh one, tagged into the pool.
+ * Either way `tasks.workerId` is written here, under the pool lock (see `withPoolLock`).
  */
 async function allocateWorker(task: Task): Promise<{ workerId: string; recycled: boolean }> {
-  const free = await findFreePoolWorker(task.projectId)
+  const free = await findFreePoolWorker(task.projectId, task.id)
   if (free) return { workerId: free, recycled: true }
   const worker = spawnWorker(task.projectId, taskWorkerName(task.id), task.baseBranch ?? undefined)
   setWorkerTags(worker.id, [TASK_POOL_TAG])
+  db.update(tasks).set({ workerId: worker.id }).where(eq(tasks.id, task.id)).run()
   return { workerId: worker.id, recycled: false }
+}
+
+/** Live tasks holding a worker — the one thing that makes a pool machine busy. */
+function heldByLiveTask(workerId: string, except?: string): boolean {
+  return db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(and(eq(tasks.workerId, workerId), inArray(tasks.state, ["queued", "running", "in-review"])))
+    .all()
+    .some((t) => t.id !== except)
+}
+
+/** Built from an older project config than the current one (what the worker card's Rebuild says). */
+function isOutdated(worker: Pick<Worker, "projectVersion">, project: Pick<Project, "currentVersion"> | undefined): boolean {
+  return !!project && worker.projectVersion < project.currentVersion
 }
 
 /**
  * "Free" = tagged `task`, and held by no task that is queued, running **or in review**: a task
  * owns its machine until it is terminal, or the next `checkout -B` would wipe what is being
  * reviewed. The holders are refreshed first — allocation needs the truth, not the last read.
+ *
+ * Up to date first, then awake before parked: each step down costs more before the session can
+ * start (nothing, a restart, a rebuild). A machine built from an older config is rebuilt before
+ * anything runs on it — the task was delegated against the project *as it is now* — which still
+ * beats a spawn: the workspace volume, and the dependencies in it, survive a rebuild.
+ *
+ * The pick is claimed for `taskId` under the pool lock, so the release of the previous task
+ * cannot park it under the new one's feet.
  */
-export async function findFreePoolWorker(projectId: string): Promise<string | null> {
+export async function findFreePoolWorker(projectId: string, taskId: string): Promise<string | null> {
   const pool = db
     .select()
     .from(workers)
@@ -470,17 +591,31 @@ export async function findFreePoolWorker(projectId: string): Promise<string | nu
     .from(tasks)
     .where(and(inArray(tasks.state, ["queued", "running", "in-review"]), isNotNull(tasks.workerId)))
     .all()
+    .filter((t) => t.id !== taskId)
   const refreshed = await Promise.all(holders.map((t) => (poolIds.has(t.workerId!) ? refreshTask(t).catch(() => t) : Promise.resolve(t))))
   const busy = new Set(refreshed.filter((t) => isLive(t.state)).map((t) => t.workerId))
-  const free = pool.filter((w) => !busy.has(w.id))
+  const project = getProjectRow(projectId)
+  const rank = (w: Worker) => (isOutdated(w, project) ? 2 : 0) + (w.state === "stopped" ? 1 : 0)
+  const candidates = pool.filter((w) => !busy.has(w.id)).sort((a, b) => rank(a) - rank(b))
 
-  const ready = free.find((w) => w.state === "ready")
-  if (ready) return ready.id
-  const stopped = free.find((w) => w.state === "stopped" && w.containerId)
-  if (!stopped) return null
-  console.log(`[tasks] starting stopped pool worker ${stopped.id} instead of spawning a new one`)
-  await startWorker(stopped.id)
-  return stopped.id
+  for (const candidate of candidates) {
+    const claimed = await withPoolLock(candidate.id, async () => {
+      const worker = getWorkerRow(candidate.id)
+      if (!worker || (worker.state !== "ready" && worker.state !== "stopped") || heldByLiveTask(worker.id, taskId)) return null
+      db.update(tasks).set({ workerId: worker.id }).where(eq(tasks.id, taskId)).run()
+      return worker
+    })
+    if (!claimed) continue
+    if (isOutdated(claimed, project)) {
+      console.log(`[tasks] pool worker ${claimed.id} was on an older project config — rebuilding before reuse`)
+      await rebuildWorker(claimed.id)
+    } else if (claimed.state === "stopped") {
+      console.log(`[tasks] waking parked pool worker ${claimed.id} instead of spawning a new one`)
+      await wakeWorker(claimed.id, "allocated")
+    }
+    return claimed.id
+  }
+  return null
 }
 
 /** Lite derives a worker's state on read, so waiting means reading. */
@@ -498,14 +633,55 @@ async function waitForWorkerReady(workerId: string): Promise<void> {
   throw new Error(`Worker ${workerId} did not become ready in time`)
 }
 
-/** Restart a machine that review mode `stop` parked, and wait for it. */
-async function wakeWorker(workerId: string): Promise<void> {
-  const worker = await getWorkerLive(workerId)
-  if (!worker) throw new Error(`Worker ${workerId} no longer exists`)
-  if (worker.state === "stopped") {
-    await startWorker(workerId)
+/**
+ * Serialise what moves a pool machine: a task taking it, the pool parking it once its task is
+ * over, a Park or a wake. The decisions read different rows (`tasks.workerId` vs `workers.state`)
+ * — Cloud takes an advisory lock in Postgres; Lite is one process, so a promise chain per worker
+ * does it. It is also what keeps a wake from starting a container still on its way down.
+ */
+const poolLocks = new Map<string, Promise<unknown>>()
+
+async function withPoolLock<T>(workerId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = poolLocks.get(workerId) ?? Promise.resolve()
+  const run = previous.then(fn, fn)
+  const tail = run.catch(() => {})
+  poolLocks.set(workerId, tail)
+  try {
+    return await run
+  } finally {
+    if (poolLocks.get(workerId) === tail) poolLocks.delete(workerId)
   }
+}
+
+/**
+ * Make sure a task's machine is up before running something in it — whoever, or whatever, put it
+ * down: review mode `stop`, Park, a click on Stop, the computer restarting under it. The disk is
+ * kept in every one of those cases, so it is started again; a container that is gone altogether
+ * (pruned by hand) is rebuilt on the same volume. Only a worker whose *setup* failed is refused:
+ * starting it again would fail the same way.
+ */
+async function wakeWorker(workerId: string, why: string): Promise<void> {
+  await startParkedWorker(workerId, why)
   await waitForWorkerReady(workerId)
+}
+
+/** The first half of `wakeWorker`: start it if it is down, without waiting for it. */
+async function startParkedWorker(workerId: string, why: string): Promise<void> {
+  await withPoolLock(workerId, async () => {
+    const worker = await getWorkerLive(workerId)
+    if (!worker) throw new Error(`Worker ${workerId} no longer exists`)
+    if (worker.state === "error" && worker.setupStatus?.phase === "error") {
+      throw new Error(`Worker ${workerId} failed to set up${worker.setupStatus.error ? `: ${worker.setupStatus.error}` : ""} — rebuild it from its page, then try again`)
+    }
+    if (worker.state !== "stopped" && worker.state !== "error") return
+    if (!worker.containerId) {
+      console.log(`[worker ${workerId}] ${why}: its container is gone — rebuilding it on the same workspace`)
+      await rebuildWorker(workerId)
+      return
+    }
+    console.log(`[worker ${workerId}] ${why}: waking it`)
+    await startWorker(workerId)
+  })
 }
 
 /** `SPUNTO_TASK_*` + the project's secrets as they are *now* — the container's own env dates from its spawn. */
@@ -605,40 +781,68 @@ async function refreshTask(row: Task): Promise<Task> {
   if (row.state !== "running") return row
   if (!row.workerId || !row.commandId) return row
 
-  const cmd = commands.getTaskCommandRow(row.commandId)
-  const session = cmd ? await commands.refreshTaskCommand(cmd).catch(() => cmd) : null
   const project = getProjectRow(row.projectId)
   const protocol = protocolOf(project)
+
+  // The machine before the session. A session is a process in that container, and its command is
+  // only reconciled against a `ready` worker — so a container that went down under a running agent
+  // left the task `running` for ever (Cloud #391). Cloud fails the task there; Lite runs on
+  // computers that restart, and a reboot mid-turn is not a failure of the work: see `machineDown`.
+  const worker = await getWorkerLive(row.workerId)
+  const down = machineDown(row, worker ?? null, project)
+  if (down) {
+    const now = new Date()
+    const patch: Partial<Task> =
+      down.state === "in-review"
+        ? { state: "in-review", error: down.note, lastRefreshedAt: now, lastActivityAt: now }
+        : { state: "failed", error: down.note, completedAt: now, lastRefreshedAt: now, lastActivityAt: now }
+    const { changes } = db
+      .update(tasks)
+      .set(patch)
+      .where(and(eq(tasks.id, row.id), eq(tasks.state, "running")))
+      .run()
+    if (changes === 0) return getRawTask(row.id) ?? row
+    lastLiveIngest.delete(row.id)
+    console.warn(`[task:${row.id}] ${down.note ?? "machine down after the turn ended"} (worker ${row.workerId}: ${worker?.state ?? "gone"}) → ${down.state}`)
+    if (down.state === "failed") releaseWorker(row.id)
+    return { ...row, ...patch }
+  }
+
+  const cmd = commands.getTaskCommandRow(row.commandId)
+  const session = cmd ? await commands.refreshTaskCommand(cmd).catch(() => cmd) : null
   const patch: Partial<Task> = {}
 
   // An interactive session does not exit between turns, so only its stream says it handed back —
   // and only if someone reads it. Throttled: a read path, and each pass is a `docker exec`.
-  if (isInteractive(protocol) && row.state === "running" && session?.status === "running") {
+  if (isInteractive(protocol) && session?.status === "running") {
     const since = Date.now() - (lastLiveIngest.get(row.id) ?? 0)
     if (since >= LIVE_INGEST_MIN_INTERVAL_MS) {
       lastLiveIngest.set(row.id, Date.now())
       await events.ingestTaskEvents(row, protocol).catch((err) => console.warn(`[task:${row.id}] live ingestion failed: ${err}`))
     }
   }
+
+  // The session just stopped: pull whatever it wrote since the last read — the one ingestion
+  // nobody has to be watching for, and the last chance before the worker is parked. *Before* the
+  // state is derived: an interactive session is judged on how its stream ends (`sessionState`).
+  if (session && session.status !== "running") {
+    await events.ingestTaskEvents(row, protocol).catch((err) => console.warn(`[task:${row.id}] final event ingestion failed: ${err}`))
+  }
   patch.lastRefreshedAt = new Date()
 
-  const state: TaskState = session ? sessionState(row, protocol, session) : (row.state as TaskState)
+  const verdict = session ? sessionState(row, protocol, session, project) : { state: row.state as TaskState }
+  const state = verdict.state
   if (state !== row.state) {
     lastLiveIngest.delete(row.id)
     patch.state = state
     patch.lastActivityAt = patch.lastRefreshedAt
   }
+  if (verdict.note) patch.error = verdict.note
   if (state === "failed" && !row.error && session) {
     const output = (session.stderr || session.stdout || "").trim().slice(-500)
     patch.error = `Agent session ${session.status}${session.exitCode != null ? ` (exit ${session.exitCode})` : ""}${output ? `: ${output}` : ""}`
   }
   if (state === "failed" && !row.completedAt) patch.completedAt = new Date()
-
-  // The session just stopped: pull whatever it wrote since the last read — the one ingestion
-  // nobody has to be watching for, and the last chance before review mode `stop` parks the worker.
-  if (row.state === "running" && session && session.status !== "running") {
-    await events.ingestTaskEvents(row, protocol).catch((err) => console.warn(`[task:${row.id}] final event ingestion failed: ${err}`))
-  }
 
   // Guarded on the state we read: an Accept or a Drop that landed meanwhile must not be undone.
   const { changes } = db
@@ -650,20 +854,84 @@ async function refreshTask(row: Task): Promise<Task> {
 
   // Entering review settles the machine — stopped, or left running. Never awaited by the read.
   if (patch.state === "in-review") void settleTask(row.id)
+  // A session that died lands straight in `failed`: its machine goes back to the pool, parked.
+  if (patch.state === "failed") releaseWorker(row.id)
   const fresh = { ...row, ...patch }
   // The ingestion above may have renamed the task (the session named itself).
   const now = getRawTask(row.id)
   return now ? { ...fresh, title: now.title, autoTitle: now.autoTitle, eventsSeq: now.eventsSeq } : fresh
 }
 
+/** Can a reply pick this conversation up again — is there a session id, or a follow-up of the project's own? */
+function canResumeSession(taskId: string, project: Project | undefined): boolean {
+  return events.latestSessionId(taskId) !== null || !!project?.taskFollowUpCommand?.trim()
+}
+
 /**
- * One-shot harness: the process exiting *is* the end of the turn. Interactive: a live process
- * means nothing on its own — `session.ended` in the stream is the hand-back signal.
+ * A `running` task whose machine went down under it. `null` while the machine is up or on its
+ * way up (`starting`, a rebuild): nothing is concluded then.
+ *
+ * Gone for good (deleted) or broken (its setup failed): `failed`, as in Cloud. Merely *stopped* —
+ * the computer restarted, Docker did, someone clicked Stop — the disk is all there, and so is the
+ * work. If a reply can resume the session, the task goes to review with a note saying so: replying
+ * wakes the machine and continues the conversation (`followUpTask`). Only a conversation nobody
+ * can resume is a failure.
  */
-function sessionState(row: Task, protocol: AgentProtocol, session: { status: string }): TaskState {
-  if (session.status !== "running") return deriveState(session)
-  if (!isInteractive(protocol)) return "running"
-  return events.lastEventType(row.id) === "session.ended" ? "in-review" : "running"
+function machineDown(row: Task, worker: Worker | null, project: Project | undefined): { state: "in-review" | "failed"; note: string | null } | null {
+  if (!worker) return { state: "failed", note: "The task's machine was deleted while the agent was working." }
+  const brokenSetup = worker.state === "error" && worker.setupStatus?.phase === "error"
+  if (worker.state !== "stopped" && worker.state !== "error") return null
+  if (brokenSetup) return { state: "failed", note: `The task's machine failed while the agent was working${worker.setupStatus?.error ? ` (${worker.setupStatus.error})` : ""}.` }
+  const why = worker.state === "error" ? `stopped on its own${worker.error ? ` (${worker.error})` : ""}` : "was stopped (the computer or Docker restarted, or it was stopped by hand)"
+  // The turn had already ended: there was nothing left to interrupt — it is plainly in review.
+  if (isInteractive(protocolOf(project)) && events.hasEndedTurn(row.id)) return { state: "in-review", note: null }
+  if (!canResumeSession(row.id, project)) {
+    return { state: "failed", note: `The task's machine ${why} while the agent was working, and this session cannot be resumed.` }
+  }
+  return {
+    state: "in-review",
+    note: `The task's machine ${why} while the agent was working. Its disk is kept — reply to wake it and pick the session up where it stopped.`,
+  }
+}
+
+/**
+ * What the agent session says about the task's state.
+ *
+ * One-shot harness: the process exiting *is* the end of the turn. Interactive: a live process
+ * means nothing on its own — the stream is the hand-back signal (`session.ended` with no
+ * background work left behind it, `hasHandedBack`).
+ *
+ * And an interactive process that **exits** is judged on its stream, not its exit code (Cloud
+ * #423): nothing ends one but the 6 h timeout, a kill or a crash, and a session that finished its
+ * turn and sat waiting for a human has done its work, whatever code `timeout` exits with. It goes
+ * (or stays) in review, and a reply resumes it with `--resume`.
+ *
+ * `lost` — the process vanished without an exit code — is Lite's other common case: the container
+ * restarted under it (the computer did). The transcript is still in the container, so a
+ * resumable conversation goes to review with a note rather than to `failed`. Dying mid-turn of
+ * its own (a real exit code) is still a failure.
+ */
+function sessionState(
+  row: Task,
+  protocol: AgentProtocol,
+  session: { status: string },
+  project: Project | undefined,
+): { state: TaskState; note?: string } {
+  if (session.status !== "running") {
+    if (isInteractive(protocol) && events.hasEndedTurn(row.id)) {
+      if (session.status !== "succeeded") console.log(`[task:${row.id}] session ${session.status} between turns — the last one ended, in review`)
+      return { state: "in-review" }
+    }
+    if (session.status === "lost" && canResumeSession(row.id, project)) {
+      return {
+        state: "in-review",
+        note: "The agent session was interrupted (its machine restarted) before it handed back. Reply to pick it up where it stopped.",
+      }
+    }
+    return { state: deriveState(session) }
+  }
+  if (!isInteractive(protocol)) return { state: "running" }
+  return { state: events.hasHandedBack(row.id) ? "in-review" : "running" }
 }
 
 /** Review mode `stop` parks the machine as the task enters review; `keep` leaves it up. Idempotent. */
@@ -673,13 +941,63 @@ async function settleTask(taskId: string): Promise<void> {
     if (!task?.workerId || task.state !== "in-review") return
     const project = getProjectRow(task.projectId)
     if (project?.taskReviewMode !== "stop") return
-    const worker = await getWorkerLive(task.workerId)
-    if (!worker || worker.state !== "ready") return
-    console.log(`[task:${taskId}] entering review — stopping worker ${task.workerId} (state kept on disk)`)
-    await stopWorker(task.workerId)
+    await withPoolLock(task.workerId, async () => {
+      const worker = await getWorkerLive(task.workerId!)
+      if (!worker || worker.state !== "ready" || getRawTask(taskId)?.state !== "in-review") return
+      console.log(`[task:${taskId}] entering review — stopping worker ${task.workerId} (state kept on disk)`)
+      await stopWorker(task.workerId!)
+    })
   } catch (err) {
     console.warn(`[task:${taskId}] could not settle its worker: ${err}`)
   }
+}
+
+// ─── Handing the machine back ─────────────────────────────────────────────────
+
+/**
+ * The task is over (accepted, dropped, failed): its machine goes back to the pool, **parked**
+ * (Cloud #413). A machine nobody holds has nothing to do, and it used to stay up until the next
+ * task came along — which may be never. The next task restarts it in seconds, disk and
+ * dependencies included (`findFreePoolWorker`).
+ *
+ * And the one moment to tidy it without anyone waiting (Cloud #398): if the project's config
+ * moved while the task ran, it is rebuilt now, so the next task finds it current.
+ *
+ * Only a pool machine (a worker a human tagged out of the pool meanwhile is theirs again), only
+ * one no live task holds — decided under the pool lock, because a task delegated right after an
+ * Accept may be taking this very machine. Best-effort, in the background: never touches the task.
+ */
+function releaseWorker(taskId: string): void {
+  void releaseTaskWorker(taskId).catch((err) => console.warn(`[task:${taskId}] could not hand its worker back: ${err}`))
+}
+
+async function releaseTaskWorker(taskId: string): Promise<void> {
+  const task = getRawTask(taskId)
+  if (!task?.workerId || isLive(task.state)) return
+  const workerId = task.workerId
+  const inPool = () => {
+    const w = getWorkerRow(workerId)
+    return w && (w.tags ?? []).includes(TASK_POOL_TAG) ? w : null
+  }
+  if (!inPool() || heldByLiveTask(workerId)) return
+
+  const rebuilt = await withPoolLock(workerId, async () => {
+    const w = inPool()
+    if (!w || heldByLiveTask(workerId) || !isOutdated(w, getProjectRow(w.projectId))) return false
+    if (w.state !== "ready" && w.state !== "stopped") return false
+    console.log(`[task:${taskId}] handed back worker ${workerId} on an older config — rebuilding it for the next task`)
+    await rebuildWorker(workerId)
+    return true
+  })
+  if (rebuilt) await waitForWorkerReady(workerId)
+
+  await withPoolLock(workerId, async () => {
+    if (!inPool() || heldByLiveTask(workerId)) return
+    const w = await getWorkerLive(workerId)
+    if (w?.state !== "ready") return
+    console.log(`[task:${taskId}] over — parking worker ${workerId} until the next task`)
+    await stopWorker(workerId)
+  })
 }
 
 // ─── The background floor ─────────────────────────────────────────────────────
@@ -708,41 +1026,51 @@ export async function refreshDueTasks(now = Date.now()): Promise<number> {
 
 /**
  * What a restart interrupted. Lite's jobs live in this process, so one that was mid-flight when
- * it stopped will never finish — and its task would say "Accepting…" or "queued" for ever. Said
- * on the task instead:
+ * it stopped will never finish — and its task would say "Accepting…" or "queued" for ever. Since
+ * Lite runs on computers that restart all the time, what can simply go on does:
  *
- *  - a task still `queued` lost its run (allocation, branch, launch) → failed, with the reason;
- *  - an in-flight Accept, reply or Drop is cleared — Drop is finished (the reader asked for it to
- *    be over), the other two leave the task where it was, with a note.
+ *  - a task still `queued` lost its run (allocation, branch, launch) → **run again**
+ *    (`resumeInterruptedRuns`): every step is safe to replay, and the machine it already had is
+ *    woken rather than another one taken;
+ *  - a Drop in flight is finished (the reader asked for it to be over);
+ *  - an Accept or a reply in flight is cleared, with a note — the task stays where it was, and
+ *    the click is one to make again.
  *
- * The agent session itself is **not** affected: it is a process in the worker, not in here.
+ * The agent session itself is **not** affected by a Lite restart: it is a process in the worker.
+ * A restart of the whole computer does stop it — that is `machineDown` / `sessionState`.
  */
-export function recoverInterruptedTasks(): void {
+export function recoverInterruptedTasks(): string[] {
   const now = new Date()
   const cleared = { pendingAction: null, pendingSince: null }
-  const queued = db
-    .update(tasks)
-    .set({ state: "failed", error: "Spunto Lite restarted while this task was starting — delegate it again.", completedAt: now, lastActivityAt: now, ...cleared })
-    .where(eq(tasks.state, "queued"))
-    .run()
   const dropping = db
     .update(tasks)
     .set({ state: "failed", error: "Cancelled", completedAt: now, lastActivityAt: now, ...cleared })
-    .where(and(eq(tasks.pendingAction, "dropping"), inArray(tasks.state, ["running", "in-review"])))
-    .run()
+    .where(and(eq(tasks.pendingAction, "dropping"), inArray(tasks.state, ["queued", "running", "in-review"])))
+    .returning({ id: tasks.id })
+    .all()
+  for (const t of dropping) releaseWorker(t.id)
   const other = db
     .update(tasks)
     .set({ error: "Spunto Lite restarted while this action was in flight — try again.", ...cleared })
     .where(isNotNull(tasks.pendingAction))
     .run()
-  const n = queued.changes + dropping.changes + other.changes
-  if (n > 0) console.log(`[tasks] recovered ${n} task(s) interrupted by the restart`)
+  const queued = db.select({ id: tasks.id }).from(tasks).where(eq(tasks.state, "queued")).all().map((t) => t.id)
+  const n = dropping.length + other.changes + queued.length
+  if (n > 0) console.log(`[tasks] recovered ${n} task(s) interrupted by the restart (${queued.length} run(s) to resume)`)
+  return queued
+}
+
+/** Start again the runs a restart cut short — see `recoverInterruptedTasks`. */
+function resumeInterruptedRuns(taskIds: string[]): void {
+  for (const id of taskIds) {
+    void runJob(id, "run (resumed)", () => runTask(id, attachments.openingFileIds(id)), (error) => failTask(id, error))
+  }
 }
 
 /** Called once at boot (server.ts). */
 export function startTaskScheduler(intervalMs = SCHEDULER_TICK_MS): void {
   if (schedulerTimer) return
-  recoverInterruptedTasks()
+  resumeInterruptedRuns(recoverInterruptedTasks())
   const tick = () => void refreshDueTasks().catch((err) => console.error("[tasks] background refresh tick failed:", err))
   schedulerTimer = setInterval(tick, intervalMs)
   schedulerTimer.unref?.()
@@ -785,7 +1113,7 @@ function clearPending(taskId: string, action: TaskPendingAction): void {
 /** Run one of the project's commands in the task's own worker, woken first if it was parked. */
 async function runTaskAction(task: Task, command: string, kind: "validate" | "cancel"): Promise<{ exitCode: number | null; output: string }> {
   if (!task.workerId) throw new Error(`Task ${task.id} has no worker to run its ${kind} command in`)
-  await wakeWorker(task.workerId)
+  await wakeWorker(task.workerId, kind === "validate" ? "accept" : "drop")
   const project = projectOf(task)
   const result = await commands.runTaskCommand(task.id, task.workerId, {
     command,
@@ -816,6 +1144,7 @@ export async function validateTask(taskId: string): Promise<Task> {
         const now = new Date()
         if (result.exitCode === 0) {
           db.update(tasks).set({ state: "done", completedAt: now, lastActivityAt: now, error: null }).where(and(eq(tasks.id, taskId), eq(tasks.state, "in-review"))).run()
+          releaseWorker(taskId)
         } else {
           db.update(tasks).set({ error: `Accept failed (exit ${result.exitCode}): ${result.output.slice(-500)}`, lastActivityAt: now }).where(eq(tasks.id, taskId)).run()
         }
@@ -865,6 +1194,42 @@ export async function cancelTask(taskId: string): Promise<Task> {
     (error) => failTask(taskId, `Cancelled — the drop failed: ${error}`),
   )
   return claimed
+}
+
+/**
+ * Park a task's machine: stop the container, keep its disk, keep holding it — what review mode
+ * `stop` does on its own, offered by hand (a review that will take till tomorrow). Only in review:
+ * a running session lives in that container. Refused while an Accept, Drop or reply is in flight,
+ * each of which is about to wake the very machine this would stop.
+ */
+export async function parkTask(taskId: string): Promise<Task> {
+  const task = await requireTask(taskId, ["in-review"])
+  if (task.pendingAction) throw new TaskActionError(`Cannot park while ${task.pendingAction} this task`, 409)
+  const worker = task.workerId ? await getWorkerLive(task.workerId) : null
+  const machine = deriveTaskMachine(task, worker)
+  if (machine !== "awake") throw new TaskActionError(`The task's machine is ${machine ?? "gone"}, not awake`, 409)
+  await withPoolLock(task.workerId!, async () => {
+    console.log(`[task:${taskId}] parked by hand — stopping worker ${task.workerId}`)
+    await stopWorker(task.workerId!)
+  })
+  return getRawTask(taskId) ?? task
+}
+
+/**
+ * Wake a parked machine without doing anything else in it — to open its editor, a terminal, the
+ * app it serves, before deciding. Replying, accepting and dropping wake it on their own.
+ */
+export async function wakeTask(taskId: string): Promise<Task> {
+  const task = await requireTask(taskId, ["in-review"])
+  const worker = task.workerId ? await getWorkerLive(task.workerId) : null
+  const machine = deriveTaskMachine(task, worker)
+  if (machine !== "parked") throw new TaskActionError(`The task's machine is ${machine ?? "gone"}, not parked`, 409)
+  try {
+    await startParkedWorker(task.workerId!, "woken by hand")
+  } catch (err) {
+    throw new TaskActionError((err as Error)?.message ?? String(err), 409)
+  }
+  return getRawTask(taskId) ?? task
 }
 
 /** Name a task by hand, in any state. Final: the session no longer renames it. The branch stays. */
@@ -929,10 +1294,23 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
         const row = getRawTask(taskId)
         if (!row?.workerId || row.state !== "in-review") return
         const proj = projectOf(row)
-        await wakeWorker(row.workerId)
+        await wakeWorker(row.workerId, "follow-up")
         // Drain the finished turn before the cursor moves to the next command's file.
         await events.ingestTaskEvents(row, protocol).catch(() => 0)
         const paths = await attachments.materialize(row.workerId, taskId, attachments.attachmentsByIds(taskId, stored.map((f) => f.id)))
+        // Back on the task's branch before anything is said to the agent (see the script).
+        // The same repositories the branch was set up in (`/workspace` for a project without any).
+        for (const cwd of repoPaths(proj)) {
+          const check = await commands.runTaskCommand(taskId, row.workerId, {
+            command: followUpCheckoutScript(row.branch),
+            cwd,
+            timeoutMs: 120_000,
+            label: "Branch check",
+          })
+          if (check.status !== "succeeded") {
+            throw new Error(`Could not resume on ${row.branch} in ${cwd}: ${(check.stderr || check.stdout || "").trim().slice(-500)}`)
+          }
+        }
         const sessionId = events.latestSessionId(taskId) ?? ""
         const turn = `${prompt}${attachments.attachmentPreamble(paths)}`
         const session = await startAgentSession(
