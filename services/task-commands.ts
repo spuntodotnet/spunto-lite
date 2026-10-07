@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, desc, eq } from "drizzle-orm"
 import { db } from "../db/index"
 import { taskCommands, workers, type TaskCommand } from "../db/schema"
 import { newId } from "../lib/id"
@@ -163,6 +163,16 @@ export async function refreshTaskCommand(row: TaskCommand): Promise<TaskCommand>
     .where(and(eq(taskCommands.id, row.id), eq(taskCommands.status, "running")))
     .run()
   return { ...row, ...patch }
+}
+
+/** The latest command of a task under a label ("Agent session", "Follow-up"…), if there is one. */
+export function findTaskCommand(taskId: string, label: string): TaskCommand | undefined {
+  return db
+    .select()
+    .from(taskCommands)
+    .where(and(eq(taskCommands.taskId, taskId), eq(taskCommands.label, label)))
+    .orderBy(desc(taskCommands.createdAt))
+    .get()
 }
 
 /** Every command of a task, oldest first — the order it happened in. */

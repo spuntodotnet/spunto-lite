@@ -1,6 +1,6 @@
 import Docker from "dockerode"
 import { existsSync } from "node:fs"
-import { hostname } from "node:os"
+import { hostname, uptime } from "node:os"
 import { getGcpRegistryKey, normalizeGcpKey } from "../services/settings"
 import { gcpAccessTokenFromCredential } from "./gcp-token"
 import { sharedVolumeBinds, type SharedVolume } from "./shared-volumes"
@@ -403,7 +403,12 @@ export async function stopContainer(containerId: string): Promise<void> {
 }
 
 export async function startContainer(containerId: string): Promise<void> {
-  await docker.getContainer(containerId).start()
+  try {
+    await docker.getContainer(containerId).start()
+  } catch (err: unknown) {
+    // 304: already started — what a second click, or two callers waking the same worker, asked for.
+    if ((err as { statusCode?: number }).statusCode !== 304) throw err
+  }
 }
 
 /**
@@ -508,22 +513,59 @@ export async function inspectContainer(
   containerId: string,
 ): Promise<
   | { state: "running" }
-  | { state: "stopped"; exitCode: number; error: string | null }
+  | { state: "stopped"; exitCode: number; error: string | null; oomKilled: boolean; finishedAt: Date | null }
   | { state: "not_found" }
   | { state: "error" }
 > {
   try {
     const info = await docker.getContainer(containerId).inspect()
     if (info.State.Running) return { state: "running" }
+    // Docker's zero time (`0001-01-01T00:00:00Z`) for a container that never ran.
+    const finished = info.State.FinishedAt ? new Date(info.State.FinishedAt) : null
     return {
       state: "stopped",
       exitCode: info.State.ExitCode ?? 0,
       error: info.State.Error?.trim() || null,
+      oomKilled: info.State.OOMKilled === true,
+      finishedAt: finished && finished.getUTCFullYear() > 1 ? finished : null,
     }
   } catch (err: unknown) {
     if ((err as { statusCode?: number }).statusCode === 404) return { state: "not_found" }
     return { state: "error" }
   }
+}
+
+/** When the machine running the Docker daemon last booted (the host, or Docker Desktop's VM). */
+export function hostBootedAt(): Date {
+  return new Date(Date.now() - uptime() * 1000)
+}
+
+/** A daemon coming back finds the containers that were running when it died, and stops them with this. */
+const DAEMON_RESTORE_EXIT_CODE = 255
+const DAEMON_RESTORE_WINDOW_MS = 10 * 60 * 1000
+
+/**
+ * Did this container go down with its machine — a reboot, a sleep that turned into a shutdown,
+ * Docker restarting — rather than die of something of its own?
+ *
+ * Spunto Lite runs on laptops and desktops that restart all the time, and every restart used to
+ * leave each worker that was up in `error`, as if it had crashed. It did not: on its way down the
+ * daemon stops containers like `docker stop` does (SIGTERM, then SIGKILL — exit 143 or 137), and
+ * after a power cut the daemon, finding them dead when it comes back, records exit 255 for each.
+ * A container that ended before the machine last booted went down with it, whatever its code.
+ *
+ * Not a stop: an OOM kill (Docker says so), or any other exit code — a process that failed.
+ */
+export function wentDownWithTheHost(
+  live: { exitCode: number; oomKilled: boolean; finishedAt: Date | null },
+  bootedAt: Date = hostBootedAt(),
+): boolean {
+  if (live.oomKilled) return false
+  if (live.exitCode === 143 || live.exitCode === 137) return true
+  if (!live.finishedAt) return false
+  const sinceBoot = live.finishedAt.getTime() - bootedAt.getTime()
+  if (sinceBoot < 0) return true
+  return live.exitCode === DAEMON_RESTORE_EXIT_CODE && sinceBoot < DAEMON_RESTORE_WINDOW_MS
 }
 
 export async function getContainerState(containerId: string): Promise<"running" | "stopped" | "not_found" | "error"> {

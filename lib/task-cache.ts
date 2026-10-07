@@ -21,6 +21,8 @@ export interface Task extends TaskItem {
   completedAt: string | null
   pendingAction: TaskPendingAction | null
   pendingSince: string | null
+  /** The machine as the task sees it (docs/taches.md § « La machine d'une tâche »); null once the task is over. */
+  machine?: "starting" | "awake" | "parked" | "lost" | null
   /** Only on `GET /api/tasks/:id`. */
   canResume?: boolean
 }

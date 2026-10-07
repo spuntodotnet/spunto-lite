@@ -48,9 +48,10 @@ POST /api/projects/:id/tasks
         3. dans chaque dépôt : [machine recyclée : reset --hard + clean -fd] fetch + checkout -B <branche> origin/<base>
         4. machine recyclée : `taskResetCommand` du projet
         5. la session d'agent, en commande background dans le worker → running
-   … la session rend la main (`session.ended` dans le flux, ou fin du process) → in-review
+   … la session rend la main (`session.ended` sans travail de fond derrière, ou fin du process) → in-review
    Accept → `taskValidateCommand` (optionnelle) ; exit 0 → done
    Drop   → tue la session, `taskCancelCommand`, → failed ("Cancelled")
+   done / failed → le worker rendu au pool est **garé** (arrêté, disque gardé), rebuildé d'abord s'il est en retard de config
 ```
 
 | État | Veut dire |
@@ -63,11 +64,82 @@ POST /api/projects/:id/tasks
 
 L'état est **dérivé à la lecture** depuis la session, jamais sondé en boucle ; un plancher de
 fond (toutes les 10 s, les tâches `running` non lues depuis 30 s) garde les choses vraies quand
-personne ne regarde — c'est lui qui gare un worker en mode `stop` et libère le pool.
+personne ne regarde — c'est lui qui gare un worker en mode `stop`, voit une machine tombée sous
+une session, et rend au pool celle d'une session morte.
 
 **Le worker appartient à la tâche** jusqu'à `done`/`failed` : le libérer à l'entrée en revue
 laisserait la tâche suivante faire `checkout -B` par-dessus ce qu'on relit. Un worker qu'un
 humain utilise n'est jamais réquisitionné : seuls les workers tagués `task` forment le pool.
+
+**Une fin de tour n'est pas une main rendue** (Cloud #385) : un tour de Claude Code peut finir
+avec une tâche de fond vivante (`run_in_background`, un subagent), et le harnais se relance tout
+seul quand elle finit. `session.background` (`@spunto/build` ≥ 0.9) dit ce qui tourne encore ; la
+tâche ne passe en revue que si le dernier `session.ended` n'avait rien derrière lui
+(`hasHandedBack`).
+
+**Quand le process sort** (Cloud #423) : une session interactive ne sort pas entre deux tours.
+Si son process meurt quand même (le timeout de 6 h, un crash, la machine qui redémarre) alors
+que son dernier tour était fini, la tâche passe ou reste `in-review` — une réponse la reprend par
+`--resume`. Elle n'est `failed` que si le process meurt en plein tour *et* qu'on ne peut pas
+reprendre la conversation, ou pour une session one-shot.
+
+## Rendre la machine au pool
+
+Une tâche finie (Accept, Drop, échec) rend son worker au pool **garé** (Cloud #413, #398) : il
+était laissé allumé jusqu'à la tâche suivante — parfois jamais. Avant de l'arrêter, s'il a été
+construit sur une version plus ancienne du projet, il est rebuildé (le volume `/workspace` est
+gardé, `postCreateCommand` est rejoué comme avec le bouton Rebuild) pour que la tâche suivante le
+trouve à jour. La tâche suivante le redémarre en quelques secondes ; à l'allocation, le pool
+préfère une machine à jour, puis allumée, et rebuilde celle qu'il prend si elle est en retard.
+
+Rendre et reprendre une machine passent par le même verrou par worker (`withPoolLock`) — dans
+Cloud un verrou advisory Postgres, dans Lite une chaîne de promesses, puisqu'il n'y a qu'un
+process : sinon une tâche déléguée juste après un Accept prend la machine encore allumée, et le
+rendu de la précédente l'arrête sous ses pieds.
+
+## La machine d'une tâche
+
+`machine` est un second axe de la tâche, dérivé du worker à chaque lecture, jamais écrit (Cloud
+#391) — une tâche garée a toujours quelque chose à juger, elle reste `in-review` :
+
+| `machine` | worker |
+|---|---|
+| `starting` | provisioning / building / starting |
+| `awake` | ready |
+| `parked` | stopped, ou tombé tout seul (crash, ordinateur redémarré) : disque intact, rallumé par une réponse, Accept, Drop ou Wake |
+| `lost` | supprimé, ou son setup a échoué |
+| `null` | pas encore de worker, ou tâche terminée |
+
+Sous la section Machine du cockpit : **Park the machine** / **Wake the machine** (tâche en revue
+seulement ; Park est refusé pendant un Accept, un Drop ou une réponse en vol, qui vont chacun la
+rallumer). Le mode de relecture `stop`, c'est le Park automatique.
+
+**Un seul chemin de réveil** pour une réponse, Accept, Drop et Wake : un worker arrêté — ou tombé
+tout seul — est redémarré, un conteneur disparu est rebuildé sur le même volume ; seul un worker
+dont le *setup* a échoué est refusé (le relancer échouerait pareil). Avant de reprendre la
+session, une réponse lance dans chaque dépôt un **Branch check** (`followUpCheckoutScript`) : un
+arbre propre sur une autre branche est remis sur celle de la tâche, un arbre modifié n'est pas
+touché et la réponse est refusée avec la raison. Le script n'a aucun `exit` (Cloud #424 : dans le
+shell de login des commandes, `exit` passe par `~/.bash_logout`, qui échoue sans console).
+
+## Un ordinateur qui redémarre
+
+Lite tourne sur des portables et des postes qu'on redémarre souvent ; ce n'est pas une panne :
+
+- **Un worker arrêté par l'extinction est `stopped`, pas `error`.** En s'arrêtant, Docker stoppe
+  les conteneurs comme `docker stop` (SIGTERM puis SIGKILL : exit 143 ou 137) ; après une coupure
+  de courant, il retrouve les conteneurs morts et leur donne l'exit 255. Un conteneur sorti avant
+  le dernier démarrage de la machine, ou par l'un de ces signaux, est tombé avec elle
+  (`wentDownWithTheHost`, `lib/docker.ts`) ; un kill OOM ou un autre code reste un crash. Pareil
+  pour les services partagés. Un worker déjà passé en `error` pour cette raison par une version
+  précédente est corrigé à la lecture suivante.
+- **Une tâche dont la machine s'arrête en plein tour passe `in-review`**, avec une note : une
+  réponse réveille la machine et reprend la session. Dans Cloud la même situation est un échec
+  (le nœud est un serveur, un arrêt y est anormal) ; Lite ne conclut `failed` que si la machine
+  est supprimée, si son setup a échoué, ou si la conversation ne peut pas être reprise.
+- **Une tâche encore `queued` reprend son lancement** au redémarrage de Lite, sur la machine
+  qu'elle avait déjà (réveillée), au lieu de passer `failed`. Si sa session était déjà lancée,
+  elle est adoptée plutôt que relancée.
 
 ## Ce qui est pareil que dans Cloud
 
@@ -96,7 +168,9 @@ humain utilise n'est jamais réquisitionné : seuls les workers tagués `task` f
 | Routes | `/api/orgs/{orgId}/projects/{projectId}/tasks/{taskId}/…` | `/api/tasks/{taskId}/…` à plat, comme `/api/workers/{id}` ; création et liste d'un projet sous `/api/projects/{id}/tasks` |
 | Jobs | table `platform_jobs` durable | en mémoire, dans le process, comme le spawn d'un worker |
 | `pendingAction` | dérivé des jobs vivants | écrit sur la ligne, effacé en `finally` |
-| Redémarrage pendant un job | le job reprend | dit sur la tâche au boot (`recoverInterruptedTasks`) : une tâche encore `queued` passe `failed` avec la raison, un Drop en vol est terminé, un Accept ou une réponse en vol est effacé avec une note |
+| Redémarrage pendant un job | le job reprend | au boot (`recoverInterruptedTasks`) : le lancement d'une tâche encore `queued` reprend, un Drop en vol est terminé, un Accept ou une réponse en vol est effacé avec une note |
+| Machine arrêtée sous une session | `failed` | `in-review` si la conversation peut être reprise (voir « Un ordinateur qui redémarre ») |
+| Verrou du pool | advisory Postgres | chaîne de promesses par worker (un seul process) |
 | Pool | par membre | par projet (un seul utilisateur) |
 | Consigne d'agent | celle de l'org + celle du projet | la phrase par défaut + celle du projet |
 | Diff indisponible | `no-machine`, `machine-stopped`, `node-unreachable`, `unsupported` | les deux premiers seulement : un seul démon Docker |
@@ -133,7 +207,7 @@ reste à vérifier là-bas, selon ce que sa lecture de commande répond pour un 
 | `taskResetCommand` | rien | ce qu'une machine recyclée doit reposer, après le checkout |
 | `taskValidateCommand` | Accept clôt la tâche | lancée par Accept dans le worker ; exit 0 ⇒ `done` |
 | `taskCancelCommand` | rien de plus que tuer la session | nettoyage lancé par Drop |
-| `taskReviewMode` | `keep` | `stop` : le conteneur est arrêté en revue, réveillé par Accept/Drop/une réponse |
+| `taskReviewMode` | `keep` | `stop` : le conteneur est garé en revue (Park automatique), réveillé par Accept/Drop/une réponse/Wake |
 | `taskAgentModel` | le harnais choisit | modèle par défaut, ajouté en `--model` ; une tâche peut le surclasser |
 | `taskAgentInstructions` | rien | ajouté à la consigne de chaque tâche du projet |
 
@@ -158,6 +232,8 @@ POST   /api/tasks/:taskId/messages              — répond { prompt, files? } �
 POST   /api/tasks/:taskId/interrupt             — arrête le tour en cours sans tuer la session → 202
 POST   /api/tasks/:taskId/validate              — Accept → 202
 POST   /api/tasks/:taskId/cancel                — Drop → 202
+POST   /api/tasks/:taskId/park                  — gare la machine d'une tâche en revue (409 sinon, ou pendant une action en vol)
+POST   /api/tasks/:taskId/wake                  — rallume la machine garée d'une tâche en revue
 GET    /api/tasks/:taskId/attachments/:id       — les octets d'une pièce jointe (PNG/JPEG/WebP/GIF inline, le reste en téléchargement)
 GET    /api/harness-packs                       — le catalogue des harnais (Claude Code)
 ```
@@ -176,6 +252,7 @@ GET    /api/harness-packs                       — le catalogue des harnais (Cl
 | `lib/harness-packs.ts` | le catalogue des harnais et `packMatches` |
 | `app/(app)/agents/page.tsx` | le poste de pilotage |
 | `components/task-cockpit.tsx` | une conversation — les données ; tout ce qui dessine vient du design system |
+| `components/task-machine-controls.tsx` | Park / Wake sous la section Machine du cockpit |
 | `components/task-panel.tsx`, `components/new-task-button.tsx`, `components/task-settings-card.tsx` | la section du projet, la délégation, les réglages |
 | `lib/task-cache.ts`, `hooks/use-task-actions.ts` | les trois caches d'une tâche gardés d'accord, et les actions |
 | `e2e/tests/tasks.spec.ts` | l'API sans Docker (validation, refus, formes) — tourne en CI |

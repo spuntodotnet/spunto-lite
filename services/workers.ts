@@ -22,6 +22,7 @@ import {
   removeContainerOnly,
   connectToSharedNetwork,
   inspectContainer,
+  wentDownWithTheHost,
   getSetupStatus,
   buildProjectImage,
 } from "../lib/docker"
@@ -301,6 +302,16 @@ export async function refreshWorker(w: Worker): Promise<Worker> {
   }
   if (live.state === "stopped") {
     // A failed setup is terminal: don't let the next poll relabel it "stopped".
+    if (w.state === "error" && w.setupStatus?.phase === "error") return w
+    if (w.state === "stopped") return w
+    // The machine restarted (or Docker did) under a worker that was up, or still setting up: it
+    // was stopped, not broken — its disk is all there, and Start (or the task that needs it)
+    // brings it back. Also heals a worker an older Lite already marked `error` for that reason.
+    if (wentDownWithTheHost(live)) {
+      db.update(workers).set({ state: "stopped", error: null }).where(eq(workers.id, w.id)).run()
+      return { ...w, state: "stopped", error: null }
+    }
+    // A crash, already said.
     if (w.state === "error") return w
     // A container that dies *during* setup didn't stop, it failed — a branch that
     // doesn't exist on the remote, a clone that can't authenticate. Its status file
@@ -319,14 +330,14 @@ export async function refreshWorker(w: Worker): Promise<Worker> {
       db.update(workers).set({ state: "error", setupStatus: setup }).where(eq(workers.id, w.id)).run()
       return { ...w, state: "error", setupStatus: setup }
     }
-    // We wrote "stopped" before the container went down, so reaching here with that state
-    // means the stop was ours. Anything else: the workspace was up and its container went
-    // away on its own — the case that used to be flattened into "stopped", leaving no way
-    // to tell an OOM kill from a click on Stop. Same rule as a service (`refreshService`):
-    // a clean exit is a stop, a non-zero one is a failure worth a message.
-    if (w.state === "stopped") return w
+    // The workspace was up and its container went away on its own — the case that used to be
+    // flattened into "stopped", leaving no way to tell an OOM kill from a click on Stop. Same
+    // rule as a service (`refreshService`): a clean exit is a stop, a non-zero one is a failure
+    // worth a message. (A stop of ours, or the host's, was settled above.)
     const crashed = live.exitCode !== 0
-    const error = crashed ? (live.error ?? `Container exited with code ${live.exitCode} — see the logs`) : null
+    const error = crashed
+      ? (live.error ?? (live.oomKilled ? "Killed: out of memory" : `Container exited with code ${live.exitCode} — see the logs`))
+      : null
     const state = crashed ? "error" : "stopped"
     db.update(workers).set({ state, error }).where(eq(workers.id, w.id)).run()
     return { ...w, state, error }

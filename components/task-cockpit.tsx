@@ -32,6 +32,7 @@ import type { Worker } from "@/lib/types"
 import { useTaskActions } from "@/hooks/use-task-actions"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { TerminalSessions } from "@/components/terminal-sessions"
+import { TaskMachineControls } from "@/components/task-machine-controls"
 
 /**
  * One conversation with an agent, filling whatever box it is given.
@@ -369,17 +370,20 @@ export function TaskCockpit({
             onDrop={isMobile ? actions.drop : undefined}
             pendingAction={actions.pendingAction}
             machine={
-              <TaskMachine
-                task={task}
-                worker={worker}
-                node={{ name: "local · Docker", online: true }}
-                stats={machine.stats}
-                ports={machine.ports}
-                workerHref={worker ? `/projects/${task.projectId}/workers/${worker.id}` : undefined}
-                editorHref={editorHref}
-                portHref={worker ? (port) => workerBaseUrl(worker.id, port) : undefined}
-                render={{ link: nextLink }}
-              />
+              <div className="space-y-3">
+                <TaskMachine
+                  task={task}
+                  worker={worker}
+                  node={{ name: "local · Docker", online: true }}
+                  stats={machine.stats}
+                  ports={machine.ports}
+                  workerHref={worker ? `/projects/${task.projectId}/workers/${worker.id}` : undefined}
+                  editorHref={editorHref}
+                  portHref={worker ? (port) => workerBaseUrl(worker.id, port) : undefined}
+                  render={{ link: nextLink }}
+                />
+                <TaskMachineControls task={task} />
+              </div>
             }
           />
         )
