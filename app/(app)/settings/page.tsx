@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "@spunto/design-system"
-import { KeyRound, User, FileCode2, Trash2, CheckCircle2 } from "lucide-react"
+import { KeyRound, User, FileCode2, Trash2, CheckCircle2, Lock } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Settings, HostKey } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
+import { SshKeyUnlock, SSH_AGENT_QUERY_KEY } from "@/components/ssh-key-unlock"
 
 // Google "G" mark (inline so we don't pull in an icon dependency).
 function GoogleLogo({ className }: { className?: string }) {
@@ -58,6 +59,8 @@ export default function SettingsPage() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] })
+      // The selected key may have changed, and with it whether it needs unlocking.
+      qc.invalidateQueries({ queryKey: SSH_AGENT_QUERY_KEY })
       setGcpKey("")
       toast.success("Settings saved")
     },
@@ -134,9 +137,21 @@ export default function SettingsPage() {
                   />
                   <span className="font-mono text-sm">{k.name}</span>
                   {!k.hasPublic && <span className="text-xs text-muted-foreground">(no .pub)</span>}
+                  {k.encrypted && (
+                    <Badge variant="muted" className="ml-auto gap-1">
+                      <Lock className="size-3" /> passphrase
+                    </Badge>
+                  )}
                 </label>
               ))}
             </div>
+          )}
+          {keyPath !== (settings?.sshKeyPath ?? "") ? (
+            keys.find((k) => k.name === keyPath)?.encrypted && (
+              <p className="text-xs text-muted-foreground">Save settings, then unlock this key with its passphrase.</p>
+            )
+          ) : (
+            <SshKeyUnlock />
           )}
         </CardContent>
       </Card>

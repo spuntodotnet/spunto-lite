@@ -31,6 +31,20 @@ export const BASE_DOMAIN = BASE_DOMAINS[0] || "localhost"
 /** Host directory (inside the control-plane container) where the user's SSH keys are mounted. */
 export const HOST_SSH_DIR = process.env.HOST_SSH_DIR || "/host-ssh"
 
+/**
+ * Directory holding the agent socket every worker mounts (`agent.sock`, see lib/ssh-agent.ts).
+ * It is shared with the workers through a named Docker volume mounted here — a bind-mounted host
+ * directory can't carry a Unix socket on Docker Desktop, a named volume can, on every platform.
+ */
+export const SSH_AGENT_DIR = process.env.SSH_AGENT_DIR || "/run/spunto-ssh-agent"
+
+/**
+ * Where the *host's* ssh-agent is mounted, when the user forwards it. The default is the path
+ * Docker Desktop (macOS) exposes its own forwarded agent at, so the macOS mount is the same path
+ * on both sides; on Linux, mount `$SSH_AUTH_SOCK` there. Absent = no host agent.
+ */
+export const HOST_SSH_AUTH_SOCK = process.env.HOST_SSH_AUTH_SOCK || "/run/host-services/ssh-auth.sock"
+
 /** Port the custom server listens on (serves app + reverse-proxies workers). */
 export const PORT = Number(process.env.PORT || 80)
 

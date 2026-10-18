@@ -30,7 +30,9 @@ import { getProjectRow } from "./projects"
 import { resolveSecretsForSpawn } from "./secrets"
 import { serviceEnvForWorkers } from "./services"
 import { getSettings } from "./settings"
-import { readHostPrivateKey } from "../lib/ssh-keys"
+import { isEncryptedPrivateKey, readHostPrivateKey } from "../lib/ssh-keys"
+import { WORKER_AGENT_SOCK, workerAgentBind, workerPublicKeyLine } from "../lib/ssh-agent"
+import { shellQuote } from "../lib/shell"
 
 /**
  * The tag carries two versions: the project's, and the *recipe's* — what `buildImageScript` bakes
@@ -189,7 +191,7 @@ function buildFullScript(project: Project, workerId: string, branch?: string | n
   })
 
   return buildWorkerScript({
-    setupScript: setup,
+    setupScript: encryptedKeyPublicHalf(settings.sshKeyPath, userSshPrivateKey) + setup,
     startScript: start,
     project: {
       postCreateCommand: project.postCreateCommand,
@@ -197,6 +199,26 @@ function buildFullScript(project: Project, workerId: string, branch?: string | n
       repositories: project.repositories,
     },
   })
+}
+
+/**
+ * A passphrase-protected key is copied into the worker as-is — still encrypted — and signs through
+ * the agent (lib/ssh-agent.ts). The package's ssh config says `IdentitiesOnly yes` +
+ * `IdentityFile mp_user_key`, so ssh only uses the agent key matching that file, and it reads which
+ * one that is from `<file>.pub` first: without it, an encrypted legacy PEM key has no readable
+ * public half, and ssh would ask for the passphrase it can't get. Written *before* the package's
+ * credentials block, whose closing `chown -R` hands it to the worker's user with the rest.
+ * Empty for a key without passphrase: that path stays byte-for-byte what it was.
+ */
+function encryptedKeyPublicHalf(keyName: string | null, privateKey: string | undefined): string {
+  if (!privateKey || !isEncryptedPrivateKey(privateKey)) return ""
+  const pub = workerPublicKeyLine(keyName)
+  if (!pub) return ""
+  return [
+    "mkdir -p /home/vscode/.ssh",
+    ...["mp_user_key", "mp_deploy_key"].map((f) => `printf '%s\\n' ${shellQuote(pub)} > /home/vscode/.ssh/${f}.pub`),
+    "",
+  ].join("\n")
 }
 
 function spawnEnv(project: Project, workerId: string): string[] {
@@ -227,7 +249,10 @@ async function runSpawnPipeline(workerId: string, project: Project, version: num
 
     setWorkerState(workerId, "starting")
     const script = buildFullScript(project, workerId, branch)
-    const env = spawnEnv(project, workerId)
+    // The SSH agent (lib/ssh-agent.ts): what a passphrase-protected key signs through. Mounted in
+    // every worker, key or not — unlocking one later in Settings then reaches running workers too.
+    const agentBind = await workerAgentBind()
+    const env = [...(agentBind ? [`SSH_AUTH_SOCK=${WORKER_AGENT_SOCK}`] : []), ...spawnEnv(project, workerId)]
 
     const { containerId } = await spawnContainer({
       workerId,
@@ -240,6 +265,7 @@ async function runSpawnPipeline(workerId: string, project: Project, version: num
       // shared volume and rebuilding a worker is enough to get it mounted, no
       // version bump needed on the image.
       sharedVolumes: project.sharedVolumes,
+      extraBinds: agentBind ? [agentBind] : [],
       labels: { "spunto.worker": "true", "spunto.workerId": workerId, "spunto.projectId": project.id },
     })
     db.update(workers).set({ containerId, state: "starting" }).where(eq(workers.id, workerId)).run()

@@ -7,9 +7,11 @@
 FROM node:24.20.0-bookworm-slim
 
 # A native dep may still need a toolchain when no prebuild matches its platform
-# (better-sqlite3 ships its own since v13); ca-certificates for HTTPS.
+# (better-sqlite3 ships its own since v13); ca-certificates for HTTPS;
+# openssh-client for ssh-agent/ssh-add, which hold a passphrase-protected key
+# once it is unlocked in Settings (lib/ssh-agent.ts).
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates openssh-client \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

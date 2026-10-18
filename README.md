@@ -23,6 +23,7 @@ Or run the pre-built image straight from GHCR:
 docker run -d --name spunto-lite -p 80:80 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$HOME/.ssh:/host-ssh:ro" \
+  -v spunto-lite-ssh-agent:/run/spunto-ssh-agent \
   -v spunto-lite-data:/app/data \
   ghcr.io/spuntodotnet/spunto-lite:latest
 ```
@@ -52,7 +53,9 @@ HTTPS with a local mkcert certificate. See
   URL**, never as a host plus an `owner/repo`: there is no forge integration here,
   no app to install and no token to mint, so any host your key reaches works the
   same way — a hosted forge, a self-hosted GitLab, a bare repo on a NAS. Authorize
-  the key once, wherever, and every project clones and pushes.
+  the key once, wherever, and every project clones and pushes. A key protected by a
+  passphrase works too, through an SSH agent — see
+  [SSH keys with a passphrase](#ssh-keys-with-a-passphrase).
 - **[`@spunto/build`](https://www.npmjs.com/package/@spunto/build)** for everything
   the two Spuntos have to agree on: the image recipe and the shell it generates, the
   build-log protocol, the extension-registry clients, the Docker naming scheme and the
@@ -165,6 +168,53 @@ to stop that: a name and a mount path, e.g. `pnpm-store` →
 > caches, datasets, fixtures, build artifacts, read-mostly data. It is *not* a
 > place for a shared SQLite database, a lockfile two processes rewrite, or
 > anything needing a single writer.
+
+## SSH keys with a passphrase
+
+A key without passphrase is copied into each worker and used as is. A key **with** a
+passphrase is copied too — still encrypted — but ssh can't ask for its passphrase in
+a worker (no terminal behind `git clone`, nor behind a `git push` run by an agent), so
+it signs through an **SSH agent** instead. Settings marks such a key with a
+*passphrase* badge, and a banner says so on every page as long as nothing can use it.
+Two ways to give it an agent:
+
+1. **Unlock it in Settings** (works everywhere, nothing to configure). Type the
+   passphrase once: Spunto Lite loads the key into its own `ssh-agent` and drops the
+   passphrase — it is never written to disk, never stored in the database, never
+   logged. The decrypted key lives only in that agent's memory, so after a restart of
+   Spunto Lite the key is locked again and the banner asks for the passphrase. *Lock*
+   forgets it at once.
+2. **Forward your host's agent**, if you already `ssh-add` the key on your machine
+   (keychain, 1Password, `gpg-agent`…). Mount it into the Spunto Lite container at
+   `/run/host-services/ssh-auth.sock` — uncomment the matching line of
+   `docker-compose.yml`, or add to `docker run`:
+
+   ```bash
+   # macOS — Docker Desktop's own forwarded agent (the launchd socket in $SSH_AUTH_SOCK
+   # can't be bind-mounted from macOS):
+   -v /run/host-services/ssh-auth.sock:/run/host-services/ssh-auth.sock
+   # Linux:
+   -v "$SSH_AUTH_SOCK:/run/host-services/ssh-auth.sock"
+   ```
+
+   On Linux the path of `$SSH_AUTH_SOCK` changes with each login session: recreate the
+   container after logging in again. Settings shows whether the host agent holds the
+   selected key. A key unlocked in Settings takes precedence over the host agent.
+
+How it reaches the workers: every worker mounts the `spunto-lite-ssh-agent` volume and
+gets `SSH_AUTH_SOCK=/run/spunto-ssh-agent/agent.sock`, a socket served by Spunto Lite
+that forwards to whichever agent holds the key (a named volume because Docker Desktop
+can't carry a Unix socket through a bind-mounted host directory). The socket is always
+there, so unlocking a key reaches the workers that are already running — except those
+created before this volume existed, which need a **Rebuild**. Without the volume
+mounted on the Spunto Lite container, Settings says so: keys without a passphrase keep
+working, keys with one don't.
+
+> Like any agent forwarding, whatever runs in a worker can ask the agent to sign
+> while the key is unlocked — it can't read the key itself.
+
+Override the paths with `SSH_AGENT_DIR` (default `/run/spunto-ssh-agent`) and
+`HOST_SSH_AUTH_SOCK` (default `/run/host-services/ssh-auth.sock`).
 
 ## Requirements
 

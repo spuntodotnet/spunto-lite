@@ -10,6 +10,7 @@ import { runMigrations } from "./db/index"
 import { handleProxyRequest, handleProxyUpgrade, parseProxyHost } from "./server/worker-proxy"
 import { handleTerminalUpgrade } from "./server/terminal-ws"
 import { startTaskScheduler } from "./services/tasks"
+import { startSshAgentProxy } from "./lib/ssh-agent"
 
 const dev = process.env.NODE_ENV !== "production"
 const app = next({ dev })
@@ -53,6 +54,8 @@ async function main() {
   // Delegated work (docs/tasks.md): says what a restart interrupted, then keeps running tasks
   // derived when nobody has the dashboard open — what parks a `stop` worker and frees the pool.
   startTaskScheduler()
+  // The agent socket every worker mounts — what a passphrase-protected key signs through.
+  startSshAgentProxy()
   await app.prepare()
 
   const onRequest = (req: IncomingMessage, res: ServerResponse) => {
