@@ -170,6 +170,8 @@ export type SpawnParams = {
   hasDinD: boolean
   /** Project-level volumes mounted in every worker, alongside its own /workspace. */
   sharedVolumes: SharedVolume[]
+  /** Extra `HostConfig.Binds` entries, mounted as-is (the SSH agent socket dir, lib/ssh-agent.ts). */
+  extraBinds?: string[]
   labels: Record<string, string>
 }
 
@@ -251,6 +253,7 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
         // Last, but they can't shadow anything above: a mount path inside
         // /workspace (or on a DinD path) is rejected at validation time.
         ...sharedBinds,
+        ...(params.extraBinds ?? []),
       ],
     },
   })

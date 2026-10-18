@@ -1,6 +1,7 @@
 import { AppSidebar } from "@/components/app-sidebar"
 import { CommandMenu } from "@/components/command-menu"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { SshKeyLockedBanner } from "@/components/ssh-key-unlock"
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -16,6 +17,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="flex-1" />
           <ThemeToggle />
         </header>
+        <SshKeyLockedBanner />
         <main className="flex-1 min-w-0">{children}</main>
       </div>
     </div>

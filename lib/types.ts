@@ -257,7 +257,21 @@ export type SearchIndex = { hits: SearchHit[]; generatedAt: string }
 
 export type SecretMeta = { id: string; name: string }
 export type Settings = { id: string; gitUserName: string | null; gitUserEmail: string | null; sshKeyPath: string | null; dotfilesRepo: string | null; gcpRegistryConfigured: boolean }
-export type HostKey = { name: string; hasPublic: boolean }
+export type HostKey = { name: string; hasPublic: boolean; encrypted: boolean }
+
+/** GET /api/settings/ssh-agent — how workers authenticate with the selected key (lib/ssh-agent.ts). */
+export type SshAgentStatus = {
+  /** The key selected in Settings, or null when none (or the file is gone). */
+  key: { name: string; encrypted: boolean } | null
+  /** Workers get an agent socket (the proxy runs and its dir is mounted into them). */
+  workerSocket: boolean
+  /** Host agent mounted at HOST_SSH_AUTH_SOCK: reachable, and whether it holds the selected key. */
+  hostAgent: { path: string; reachable: boolean; identities: number; hasKey: boolean }
+  /** Our own agent holds the selected key (its passphrase was typed since the last restart). */
+  unlocked: boolean
+  /** Workers can use the selected key without being asked for anything. */
+  usable: boolean
+}
 
 export type DevImage = { id: string; label: string; image: string; description: string }
 export type DevFeature = {
