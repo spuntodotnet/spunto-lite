@@ -20,7 +20,8 @@ COPY package.json package-lock.json* ./
 RUN npm install
 
 COPY . .
-RUN npm run build
+# Next 16.3+ keeps a Turbopack build cache in .next/cache (~100 MB) that the runtime never reads.
+RUN npm run build && rm -rf .next/cache
 
 ENV NODE_ENV=production
 ENV PORT=80

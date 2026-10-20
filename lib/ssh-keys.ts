@@ -41,9 +41,10 @@ export function hostKeyPath(name: string | null | undefined): string | null {
 /** Reads a host private key by relative filename. Returns null if missing/unreadable. */
 export function readHostPrivateKey(name: string | null | undefined): string | null {
   const path = hostKeyPath(name)
-  if (!path || !existsSync(path)) return null
+  // A runtime path on the host mount: without the hint, Turbopack traces the whole project.
+  if (!path || !existsSync(/*turbopackIgnore: true*/ path)) return null
   try {
-    return readFileSync(path, "utf8")
+    return readFileSync(/*turbopackIgnore: true*/ path, "utf8")
   } catch {
     return null
   }
