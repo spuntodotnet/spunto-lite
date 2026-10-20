@@ -138,17 +138,17 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
       )}
 
       {outdated && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-3">
+        <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-3">
           <div className="flex items-start gap-2.5">
-            <ArrowUpCircle className="h-4 w-4 shrink-0 text-amber-500" />
+            <ArrowUpCircle className="h-4 w-4 shrink-0 text-warning" />
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">Update available</p>
-              <p className="mt-0.5 text-[11px] leading-relaxed text-amber-700/80 dark:text-amber-400/80">
+              <p className="text-xs font-semibold text-warning">Update available</p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-warning/80">
                 This workspace runs <span className="font-mono">v{worker.projectVersion}</span>, but the latest project config is <span className="font-mono">v{project!.currentVersion}</span>. Rebuild to update — your workspace is kept.
               </p>
               <button
                 onClick={() => act("rebuild", "Rebuilding…")}
-                className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-amber-500 px-2.5 py-1.5 text-[11px] font-medium text-white transition-colors hover:bg-amber-600"
+                className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-warning px-2.5 py-1.5 text-[11px] font-medium text-warning-foreground transition-colors hover:bg-warning/90"
               >
                 <RotateCw className="h-3 w-3" /> Update &amp; rebuild
               </button>
@@ -201,9 +201,9 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
                 </div>
                 <div className="mt-1.5 flex items-center gap-2 pl-[18px] text-[11px] text-muted-foreground">
                   <span className="font-mono">{repo.branch || "—"}</span>
-                  {repo.modified > 0 && <span className="rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 text-[10px] font-semibold">{repo.modified} modified</span>}
+                  {repo.modified > 0 && <span className="rounded-full bg-warning/10 text-warning px-1.5 py-0.5 text-[10px] font-semibold">{repo.modified} modified</span>}
                   {repo.ahead > 0 && <span className="text-primary">↑{repo.ahead}</span>}
-                  {repo.behind > 0 && <span className="text-orange-400">↓{repo.behind}</span>}
+                  {repo.behind > 0 && <span className="text-warning">↓{repo.behind}</span>}
                 </div>
               </div>
             ))}

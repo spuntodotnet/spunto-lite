@@ -63,7 +63,7 @@ export default function ServicesPage() {
     <div className="max-w-4xl mx-auto p-6 space-y-6">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight">Services</h1>
+          <h1 className="font-display text-2xl tracking-tight">Services</h1>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
             Long-lived dependencies — Postgres, Elasticsearch, MinIO — running once on your Docker and shared by{" "}
             <strong className="font-medium text-foreground">every worker of every project</strong>. Each one is reachable
