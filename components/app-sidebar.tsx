@@ -2,7 +2,8 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Flame, FolderGit2, Server, Settings, KeyRound, Activity, MessagesSquare } from "lucide-react"
+import { FolderGit2, Server, Settings, KeyRound, Activity, MessagesSquare } from "lucide-react"
+import { SpuntoLogo } from "@spunto/design-system/brand"
 import { cn } from "@/lib/utils"
 
 const NAV = [
@@ -22,10 +23,9 @@ export function AppSidebar() {
   return (
     <aside className="w-56 shrink-0 border-r border-border bg-sidebar flex flex-col">
       <Link href="/" className="flex items-center gap-2 px-4 h-14 border-b border-border">
-        <div className="inline-flex items-center justify-center size-7 rounded-md bg-primary text-primary-foreground">
-          <Flame className="size-4" />
-        </div>
-        <span className="font-display font-bold tracking-tight">Spunto Lite</span>
+        {/* The Spunto logo in Lite's declension (sky tile, ink blue) — the one the site shows for Lite. */}
+        <SpuntoLogo tone="build" size={28} className="rounded-[4px]" />
+        <span className="font-display tracking-tight">Spunto Lite</span>
       </Link>
       <nav className="flex-1 p-2 space-y-1">
         {NAV.map(({ href, label, icon: Icon }) => {

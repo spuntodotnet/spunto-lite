@@ -1,5 +1,5 @@
 import type { Metadata } from "next"
-// The design-system now carries its own typefaces (Geist / JetBrains Mono / Syne):
+// The design-system now carries its own typefaces (Geist / JetBrains Mono / Young Serif):
 // `@font-face` rules ship in styles.css and `<FontPreloads/>` warms the latin
 // subset early. No app-side Google Fonts <link> or font-family vars anymore.
 import { FontPreloads } from "@spunto/design-system/fonts"
@@ -13,7 +13,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    // `data-product="lite"`: the design system's couple for Spunto Lite — ink blue and sky — from
+    // which `--primary`, `--ring`, `--accent` and the sidebar's colours all derive. One universe
+    // with Spunto Cloud (background, type, radius, statuses), one colour per product.
+    <html lang="en" data-product="lite" suppressHydrationWarning>
       <body className="antialiased">
         <FontPreloads />
         <Providers>{children}</Providers>

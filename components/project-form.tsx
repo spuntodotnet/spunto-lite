@@ -245,7 +245,7 @@ export function ProjectForm({ initial }: { initial?: Project }) {
     <div className="mx-auto max-w-6xl space-y-6 p-6">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight">
+          <h1 className="font-display text-2xl tracking-tight">
             {editing ? `Edit ${initial!.name}` : "New project"}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
