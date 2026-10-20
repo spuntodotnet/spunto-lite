@@ -1,5 +1,6 @@
 import Docker from "dockerode"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
+import { AGENT_MOUNT, AGENT_VOLUME, agentExec, agentFor, agentWorkerOf } from "./agent"
 import { hostname, uptime } from "node:os"
 import { getGcpRegistryKey, normalizeGcpKey } from "../services/settings"
 import { gcpAccessTokenFromCredential } from "./gcp-token"
@@ -165,7 +166,8 @@ export type SpawnParams = {
   workerId: string
   projectId: string
   image: string
-  script: string
+  /** The container's main process: the worker script itself (`exec` data plane), or the agent's bootstrap. */
+  cmd: string[]
   env: string[]
   hasDinD: boolean
   /** Project-level volumes mounted in every worker, alongside its own /workspace. */
@@ -173,6 +175,8 @@ export type SpawnParams = {
   /** Extra `HostConfig.Binds` entries, mounted as-is (the SSH agent socket dir, lib/ssh-agent.ts). */
   extraBinds?: string[]
   labels: Record<string, string>
+  /** The agent volume, mounted read-only (`agent` data plane). */
+  agentVolume?: boolean
 }
 
 /** Pulls `image` unless the daemon already has it (with private-registry auth if needed). */
@@ -235,7 +239,7 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
   const container = await docker.createContainer({
     name,
     Image: params.image,
-    Cmd: ["bash", "-c", params.script],
+    Cmd: params.cmd,
     Env: params.env.length > 0 ? params.env : undefined,
     Labels: params.labels,
     HostConfig: {
@@ -254,7 +258,10 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
         // /workspace (or on a DinD path) is rejected at validation time.
         ...sharedBinds,
         ...(params.extraBinds ?? []),
+        ...(params.agentVolume ? [`${AGENT_VOLUME}:${AGENT_MOUNT}:ro`] : []),
       ],
+      // An agent dials this process back; on a host (not in a container), as `host.docker.internal`.
+      ...(params.agentVolume && !existsSync("/.dockerenv") ? { ExtraHosts: ["host.docker.internal:host-gateway"] } : {}),
     },
   })
 
@@ -267,6 +274,70 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
   const info = await container.inspect()
   await connectSelfToNetwork(network)
   return { containerId: info.Id, isRestart: false }
+}
+
+// ─── The agent volume (lib/agent.ts) ───────────────────────────────────────────
+
+/** A ustar archive of files with their modes, directories made explicit. */
+function tarOf(files: { name: string; content: Buffer; mode: number }[]): Buffer {
+  const blocks: Buffer[] = []
+  const header = (name: string, size: number, mode: number, type: "0" | "5") => {
+    const h = Buffer.alloc(512, 0)
+    h.write(name.slice(0, 99), 0, "utf8")
+    h.write(`${mode.toString(8).padStart(7, "0")}\0`, 100, "utf8")
+    h.write("0000000\0", 108, "utf8")
+    h.write("0000000\0", 116, "utf8")
+    h.write(`${size.toString(8).padStart(11, "0")}\0`, 124, "utf8")
+    h.write(`${Math.floor(Date.now() / 1000).toString(8).padStart(11, "0")}\0`, 136, "utf8")
+    h.write("        ", 148, "utf8")
+    h.write(type, 156, "utf8")
+    h.write("ustar\0", 257, "utf8")
+    h.write("00", 263, "utf8")
+    let sum = 0
+    for (const b of h) sum += b
+    h.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, "utf8")
+    return h
+  }
+  const dirs = new Set<string>()
+  for (const f of files) {
+    const parts = f.name.split("/").slice(0, -1)
+    for (let i = 1; i <= parts.length; i++) dirs.add(parts.slice(0, i).join("/") + "/")
+  }
+  for (const d of dirs) blocks.push(header(d, 0, 0o755, "5"))
+  for (const f of files) {
+    blocks.push(header(f.name, f.content.length, f.mode, "0"))
+    blocks.push(f.content, Buffer.alloc((512 - (f.content.length % 512)) % 512, 0))
+  }
+  blocks.push(Buffer.alloc(1024, 0))
+  return Buffer.concat(blocks)
+}
+
+/**
+ * Puts what an agent worker runs from into the agent volume — the bootstrap, and our own Node so
+ * that nothing is downloaded — unless it is there already. Written through a container that is
+ * created and never started (any image does: the worker's own, which is there), since the
+ * volume is the daemon's, not ours. Paths are by content (`agentVolumeLayout`): never rewritten.
+ */
+export async function ensureAgentVolume(image: string, layout: { bootstrap: string; node: string | null }, files: { bootstrap: string; nodeBinary: string | null }): Promise<void> {
+  await ensureVolume(AGENT_VOLUME)
+  const helper = await docker.createContainer({ Image: image, Cmd: ["true"], Entrypoint: [], HostConfig: { Binds: [`${AGENT_VOLUME}:${AGENT_MOUNT}`] } })
+  try {
+    const has = (path: string) => helper.infoArchive({ path: `${AGENT_MOUNT}/${path}` }).then(() => true, () => false)
+    const wanted: { name: string; content: Buffer; mode: number }[] = []
+    if (!(await has(layout.bootstrap))) wanted.push({ name: layout.bootstrap, content: Buffer.from(files.bootstrap, "utf8"), mode: 0o755 })
+    if (layout.node && files.nodeBinary && !(await has(`${layout.node}/bin/node`))) {
+      wanted.push({ name: `${layout.node}/bin/node`, content: readFileSync(files.nodeBinary), mode: 0o755 })
+    }
+    if (wanted.length) await helper.putArchive(tarOf(wanted), { path: AGENT_MOUNT })
+  } finally {
+    await helper.remove({ force: true }).catch(() => {})
+  }
+}
+
+/** Joins this process to the shared network as `spunto-lite`, where agent workers dial it. No-op outside Docker. */
+export async function joinSharedNetworkAsLite(): Promise<void> {
+  if (!existsSync("/.dockerenv")) return
+  await connectToSharedNetwork(hostname(), ["spunto-lite"])
 }
 
 // ─── Shared services ──────────────────────────────────────────────────────────
@@ -597,8 +668,24 @@ function demux(buf: Buffer): string {
   return out
 }
 
+/**
+ * The shell an argv is, for a worker's agent — which already runs as `vscode` (so a `su vscode -c`
+ * around a script is dropped: as vscode, `su` would ask for a password).
+ */
+function asAgentScript(cmd: string[]): string {
+  if (cmd[0] === "su" && cmd[2] === "-c") return cmd[3]
+  if ((cmd[0] === "bash" || cmd[0] === "sh" || cmd[0] === "/bin/sh") && cmd[1] === "-c") return cmd[2]
+  return cmd.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ")
+}
+
 /** Runs a command in the container and returns its combined stdout/stderr. */
 async function execCapture(containerId: string, cmd: string[], timeoutMs = 5000): Promise<string> {
+  // A worker that carries the agent: through it (lib/agent.ts), as vscode, like everything else.
+  const viaAgent = agentWorkerOf(containerId)
+  if (viaAgent) {
+    const r = await agentExec(viaAgent, asAgentScript(cmd), { timeoutMs })
+    return r.stdout + r.stderr
+  }
   const container = docker.getContainer(containerId)
   const exec = await container.exec({ Cmd: cmd, AttachStdout: true, AttachStderr: true })
   const stream = await new Promise<NodeJS.ReadableStream>((resolve, reject) =>
@@ -765,6 +852,14 @@ export async function getSetupStatus(containerId: string): Promise<unknown | nul
 
 /** Detects listening TCP ports inside the container (for the ports panel). */
 export async function detectListeningPorts(containerId: string): Promise<number[]> {
+  // A worker that carries the agent knows from /proc, without `ss` or `netstat` in the image.
+  const viaAgent = agentWorkerOf(containerId)
+  if (viaAgent) {
+    const conn = agentFor(viaAgent)
+    if (!conn) return []
+    const ports = await conn.request<{ port: number }[]>({ type: "ports" }, 5_000)
+    return [...new Set(ports.map((p) => p.port))]
+  }
   const script = `(ss -tlnH 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -oE ':[0-9]+ ' | tr -d ': ' | sort -un`
   const out = await execCapture(containerId, ["bash", "-c", script], 4000)
   return [...new Set(out.trim().split("\n").map((n) => parseInt(n)).filter((n) => n > 0 && n < 65536))]
@@ -855,9 +950,16 @@ export async function buildProjectImage(params: {
    */
   noCache?: boolean
   onLog?: (chunk: string) => void
+  /** Image labels (`LABEL`), JSON-quoted. */
+  labels?: Record<string, string>
 }): Promise<void> {
   const dockerfile = Buffer.from(
-    [`FROM ${params.baseImage}`, "COPY script.sh /tmp/mp-build-script.sh", "RUN bash /tmp/mp-build-script.sh && rm -f /tmp/mp-build-script.sh"].join("\n"),
+    [
+      `FROM ${params.baseImage}`,
+      "COPY script.sh /tmp/mp-build-script.sh",
+      "RUN bash /tmp/mp-build-script.sh && rm -f /tmp/mp-build-script.sh",
+      ...Object.entries(params.labels ?? {}).map(([k, v]) => `LABEL ${JSON.stringify(k)}=${JSON.stringify(v)}`),
+    ].join("\n"),
     "utf8",
   )
   const context = buildTar([

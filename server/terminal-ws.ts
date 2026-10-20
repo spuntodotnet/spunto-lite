@@ -3,6 +3,7 @@ import type { Duplex } from "node:stream"
 import { WebSocketServer, type WebSocket } from "ws"
 import { buildDtachCommand, makeAttachClearStripper, sanitizeSessionName } from "@spunto/build/terminal"
 import { docker } from "../lib/docker"
+import { agentFor } from "../lib/agent"
 import { markAttached } from "../lib/terminal-attachments"
 import { getWorkerRow } from "../services/workers"
 
@@ -63,6 +64,8 @@ async function bridge(
     ws.send(JSON.stringify({ type: "error", message: "Worker not running" }))
     return ws.close()
   }
+
+  if (w.dataPlane === "agent") return bridgeAgent(ws, { workerId, cols, rows, session })
 
   const container = docker.getContainer(w.containerId)
   // Built by the package, so the replay buffer, the trimming and the "no dtach here" fallback are
@@ -147,5 +150,52 @@ async function bridge(
     try {
       stream.end()
     } catch {}
+  })
+}
+
+/**
+ * The same bridge for a worker that carries the agent: the session is opened *by the agent*, with
+ * the very script a Spunto Cloud sandbox uses (dtach + script(1) + replay, the clear-screen of the
+ * attach already dropped). Closing with 1012 when only the agent's connection went — the shell
+ * lives on, and the panel reattaches to it — and 1000 when the session's program ended.
+ */
+function bridgeAgent(ws: WebSocket, { workerId, cols, rows, session }: { workerId: string; cols: number; rows: number; session: string }) {
+  const conn = agentFor(workerId)
+  if (!conn) {
+    ws.send(JSON.stringify({ type: "error", message: "Worker agent is not connected yet" }))
+    return ws.close(1012)
+  }
+  const termId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`
+  const detach = markAttached(workerId, session)
+  try {
+    conn.openTerminal(termId, { cols, rows, session }, {
+      onData: (data) => {
+        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "output", data: Buffer.from(data).toString("base64") }))
+      },
+      onExit: (_code, agentGone) => {
+        detach()
+        if (ws.readyState === ws.OPEN) ws.close(agentGone ? 1012 : 1000)
+      },
+    })
+  } catch (err) {
+    detach()
+    ws.send(JSON.stringify({ type: "error", message: (err as Error).message }))
+    return ws.close(1012)
+  }
+  ws.send(JSON.stringify({ type: "ready" }))
+
+  ws.on("message", (raw) => {
+    let msg: { type: string; data?: string; cols?: number; rows?: number }
+    try {
+      msg = JSON.parse(raw.toString())
+    } catch {
+      return
+    }
+    if (msg.type === "input" && msg.data) conn.terminalInput(termId, Buffer.from(msg.data, "base64"))
+    else if (msg.type === "resize" && msg.cols && msg.rows) conn.terminalResize(termId, msg.cols, msg.rows)
+  })
+  ws.on("close", () => {
+    detach()
+    conn.closeTerminal(termId)
   })
 }

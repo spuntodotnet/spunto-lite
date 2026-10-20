@@ -9,6 +9,9 @@ import { PORT, BASE_DOMAIN, BASE_DOMAINS, TLS_CERT_FILE, TLS_KEY_FILE, TLS_PORT 
 import { runMigrations } from "./db/index"
 import { handleProxyRequest, handleProxyUpgrade, parseProxyHost } from "./server/worker-proxy"
 import { handleTerminalUpgrade } from "./server/terminal-ws"
+import { AGENT_CONNECT_PATH, handleAgentAsset, handleAgentUpgrade } from "./lib/agent"
+// Registers the agent's hooks (hello → worker, project plan, project state) in this module graph.
+import "./services/workers"
 import { startTaskScheduler } from "./services/tasks"
 import { startSshAgentProxy } from "./lib/ssh-agent"
 
@@ -60,6 +63,8 @@ async function main() {
 
   const onRequest = (req: IncomingMessage, res: ServerResponse) => {
     const host = req.headers.host?.split(":")[0]
+    // The in-box agent's files (lib/agent.ts), fetched by a worker's bootstrap.
+    if (!isProxyHost(host) && handleAgentAsset(req, res)) return
     if (isProxyHost(host)) {
       handleProxyRequest(req, res).catch((err) => {
         console.error("[proxy] error", err)
@@ -74,6 +79,12 @@ async function main() {
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const host = req.headers.host?.split(":")[0]
     const url = req.url || "/"
+
+    // A worker's agent dialing back (lib/agent.ts).
+    if (!isProxyHost(host) && url.split("?")[0] === AGENT_CONNECT_PATH) {
+      handleAgentUpgrade(req, socket, head)
+      return
+    }
 
     // Our own terminal WebSocket (served on the app host).
     if (!isProxyHost(host) && url.startsWith("/api/workers/") && url.includes("/terminal")) {

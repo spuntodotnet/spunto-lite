@@ -1,7 +1,15 @@
 import { ZodError, type ZodType } from "zod"
 
+/**
+ * Fields that never leave this process, whatever row a route returns: the hash of a worker's agent
+ * token (lib/agent.ts) is what a hello is checked against.
+ */
+const PRIVATE_FIELDS = new Set(["agentTokenHash"])
+
 export function json(data: unknown, init?: ResponseInit) {
-  return Response.json(data, init)
+  const headers = new Headers(init?.headers)
+  if (!headers.has("content-type")) headers.set("content-type", "application/json")
+  return new Response(JSON.stringify(data, (k, v) => (PRIVATE_FIELDS.has(k) ? undefined : v)), { ...init, headers })
 }
 
 export function badRequest(message: string, details?: unknown) {

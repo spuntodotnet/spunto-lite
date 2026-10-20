@@ -2,7 +2,7 @@ import { and, eq, desc } from "drizzle-orm"
 import { db } from "../db/index"
 import { workers, projectImageBuilds, type Worker, type Project, type SetupStatus } from "../db/schema"
 import { newId, newShortId } from "../lib/id"
-import { BASE_DOMAIN, EXTENSIONS_GALLERY_RAW } from "../lib/env"
+import { BASE_DOMAIN, EXTENSIONS_GALLERY_RAW, WORKER_DATA_PLANE } from "../lib/env"
 import { CODE_SERVER_EXTENSIONS_GALLERY } from "../lib/extension-registry"
 import {
   buildImageScript,
@@ -13,6 +13,8 @@ import {
 } from "@spunto/build/script"
 import { projectImageRef } from "@spunto/build/naming"
 import { BuildStepTracker } from "@spunto/build/steps"
+import { buildRecipeScript, recipeBakeKey } from "@spunto/build/sandbox-agent"
+import type { ProjectPlan, ProjectState } from "@spunto/build/agent-protocol"
 import {
   docker,
   spawnContainer,
@@ -25,7 +27,19 @@ import {
   wentDownWithTheHost,
   getSetupStatus,
   buildProjectImage,
+  ensureAgentVolume,
+  joinSharedNetworkAsLite,
 } from "../lib/docker"
+import {
+  agentCmd,
+  agentEnv,
+  agentVolumeLayout,
+  bootstrapScript,
+  dropAgent,
+  newAgentToken,
+  runnerScript,
+  setAgentHooks,
+} from "../lib/agent"
 import { getProjectRow } from "./projects"
 import { resolveSecretsForSpawn } from "./secrets"
 import { serviceEnvForWorkers } from "./services"
@@ -48,8 +62,19 @@ import { shellQuote } from "../lib/shell"
  * used to recognise them (see `imageRefBelongsToProject` below).
  */
 function imageRefFor(projectId: string, version: number): string {
-  return `${projectImageRef(projectId, version)}-r${IMAGE_RECIPE_VERSION}`
+  return `${projectImageRef(projectId, version)}-r${IMAGE_RECIPE_VERSION}-a${AGENT_BAKE_FORMAT}`
 }
+
+/**
+ * Images are baked through the agent's runner (`buildRecipeScript`), so the recipe leaves its
+ * `.baked-<key>` marker and the features' captured environment in the image: an agent worker
+ * started from it goes straight to the worker script. An `exec` worker runs on it just the same.
+ * Bumped when what a bake leaves behind changes; part of the tag, like the recipe version.
+ */
+const AGENT_BAKE_FORMAT = 1
+
+/** The label an image carries its bake key under — what the agent of a worker on it is told. */
+const BAKE_KEY_LABEL = "spunto.bakeKey"
 
 function hasDinD(project: Project): boolean {
   return project.dind || project.features.some((f) => f.id === "docker-in-docker")
@@ -89,6 +114,10 @@ export async function ensureProjectImage(project: Project, version: number, forc
     extensionsGallery: EXTENSIONS_GALLERY_RAW,
   })
 
+  // Through the agent's runner, in bake-only mode: the same script a Spunto Cloud app builds with.
+  const bakeKey = await recipeBakeKey({ image: project.image, script })
+  const buildScript = buildRecipeScript({ bakeKey, bake: script, runner: runnerScript() })
+
   // The script brackets each block with a marker line; the tracker reads them back out of the log
   // stream we already forward, turns them into banners, and keeps the step list current. No second
   // channel, and no heuristics on log wording — the emitter and the parser are the same package.
@@ -112,7 +141,7 @@ export async function ensureProjectImage(project: Project, version: number, forc
   }
 
   try {
-    await buildProjectImage({ baseImage: project.image, buildScript: script, imageRef: ref, noCache: force, onLog: flush })
+    await buildProjectImage({ baseImage: project.image, buildScript, imageRef: ref, noCache: force, onLog: flush, labels: { [BAKE_KEY_LABEL]: bakeKey } })
     logs += tracker.finish("ready").text
     persist("ready")
     return ref
@@ -254,11 +283,26 @@ async function runSpawnPipeline(workerId: string, project: Project, version: num
     const agentBind = await workerAgentBind()
     const env = [...(agentBind ? [`SSH_AUTH_SOCK=${WORKER_AGENT_SOCK}`] : []), ...spawnEnv(project, workerId)]
 
+    // The agent data plane: the container runs the bootstrap, and its agent dials back.
+    const viaAgent = WORKER_DATA_PLANE === "agent"
+    let cmd = ["bash", "-c", script]
+    if (viaAgent) {
+      const layout = agentVolumeLayout()
+      await ensureAgentVolume(image, layout, { bootstrap: bootstrapScript(), nodeBinary: layout.node ? process.execPath : null })
+      await joinSharedNetworkAsLite()
+      const { token, hash } = newAgentToken()
+      db.update(workers).set({ dataPlane: "agent", agentTokenHash: hash }).where(eq(workers.id, workerId)).run()
+      env.push(...agentEnv(workerId, token, layout.node))
+      cmd = agentCmd(layout.bootstrap)
+    } else {
+      db.update(workers).set({ dataPlane: "exec", agentTokenHash: null }).where(eq(workers.id, workerId)).run()
+    }
+
     const { containerId } = await spawnContainer({
       workerId,
       projectId: project.id,
       image,
-      script,
+      cmd,
       env,
       hasDinD: hasDinD(project),
       // From the *current* project row, like the setup script above: declaring a
@@ -267,6 +311,7 @@ async function runSpawnPipeline(workerId: string, project: Project, version: num
       sharedVolumes: project.sharedVolumes,
       extraBinds: agentBind ? [agentBind] : [],
       labels: { "spunto.worker": "true", "spunto.workerId": workerId, "spunto.projectId": project.id },
+      agentVolume: viaAgent,
     })
     db.update(workers).set({ containerId, state: "starting" }).where(eq(workers.id, workerId)).run()
   } catch (err) {
@@ -298,6 +343,8 @@ export function spawnWorker(projectId: string, name?: string, branch?: string): 
     branch: branch?.trim() || null,
     projectVersion: project.currentVersion,
     tags: [],
+    dataPlane: WORKER_DATA_PLANE,
+    agentTokenHash: null,
     createdAt: new Date(),
   }
   db.insert(workers).values(row).run()
@@ -372,6 +419,9 @@ export async function refreshWorker(w: Worker): Promise<Worker> {
   // "stopped" with a live container is a stop in flight (see `stopWorker`): leave it alone, or the
   // SIGKILL that ends docker's grace period reads as a crash on the next poll.
   if (w.state === "stopped") return w
+
+  // Running, with an agent: what happens inside is pushed by it (`applyProjectState`), not read.
+  if (w.dataPlane === "agent") return w
 
   // running — read setup status
   let setup: SetupStatus | null = w.setupStatus
@@ -450,6 +500,7 @@ export async function startWorker(id: string): Promise<Worker | undefined> {
 }
 
 export async function deleteWorker(id: string): Promise<void> {
+  dropAgent(id)
   const w = getWorkerRow(id)
   if (w) await removeWorkerContainer(w.id, w.containerId).catch(() => {})
   db.delete(workers).where(eq(workers.id, id)).run()
@@ -468,6 +519,7 @@ export async function rebuildWorker(id: string): Promise<Worker | undefined> {
   if (!w) return undefined
   const project = getProjectRow(w.projectId)
   if (!project) return undefined
+  dropAgent(w.id)
   await removeContainerOnly(w.id, w.containerId).catch(() => {})
   db.update(workers)
     .set({ containerId: null, state: "provisioning", projectVersion: project.currentVersion, error: null, setupStatus: { phase: "pending", repos: [], postCreate: null, postStart: null } })
@@ -476,3 +528,71 @@ export async function rebuildWorker(id: string): Promise<Worker | undefined> {
   void runSpawnPipeline(id, project, project.currentVersion, w.branch)
   return getWorkerRow(id)
 }
+
+// ─── The agent's side (lib/agent.ts) ──────────────────────────────────────────
+
+/**
+ * The project plan a worker's agent gets at every hello: the recipe (run only if its image was
+ * not baked with this key — the label says which it was), the worker script built *now* (current
+ * secrets, SSH key and settings, like a Spunto Cloud sandbox), and the runner.
+ */
+async function planFor(workerId: string): Promise<ProjectPlan | null> {
+  const w = getWorkerRow(workerId)
+  if (!w?.containerId) return null
+  const project = getProjectRow(w.projectId)
+  if (!project) return null
+  const { script: bake } = buildImageScript({
+    features: project.features,
+    vscodeExtensions: project.vscodeExtensions,
+    dind: project.dind,
+    extensionsGallery: EXTENSIONS_GALLERY_RAW,
+  })
+  const labels = await docker.getContainer(w.containerId).inspect().then((i) => i.Config.Labels ?? {}, () => ({} as Record<string, string>))
+  return {
+    type: "project",
+    projectId: project.id,
+    version: w.projectVersion,
+    bakeKey: labels[BAKE_KEY_LABEL] || (await recipeBakeKey({ image: project.image, script: bake })),
+    bake,
+    worker: buildFullScript(project, workerId, w.branch),
+    // What `docker exec` gave a command before (lib/worker-commands.ts): a UTF-8 locale. The rest —
+    // secrets, shared services — is on the container's own environment, which the agent passes on.
+    env: { LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8" },
+    user: "vscode",
+    runner: runnerScript(),
+  }
+}
+
+/**
+ * What the agent says of the project, onto the worker row. `running` is the worker script's
+ * `ready` for *this* start (postStart included); `failed` is the runner exiting non-zero. A stop
+ * in flight is left alone: the agent may still talk for the few seconds `docker stop` takes.
+ */
+export function applyProjectState(workerId: string, st: ProjectState): void {
+  const w = getWorkerRow(workerId)
+  if (!w || w.state === "stopped") return
+  const reported = (st.worker && typeof st.worker === "object" ? st.worker : null) as SetupStatus | null
+  let setup: SetupStatus | null = reported ?? w.setupStatus
+  let state: string
+  if (st.phase === "failed") {
+    state = "error"
+    setup = {
+      ...(setup ?? { repos: [], postCreate: null, postStart: null }),
+      phase: "error",
+      error: setup?.error ?? `Setup exited with code ${st.exitCode} — ${st.logTail.trim().split("\n").slice(-3).join(" / ") || "see the logs"}`,
+    }
+  } else if (st.phase === "running" || (st.phase === "exited" && setup?.phase === "ready")) state = "ready"
+  else if (setup?.phase === "error") state = "error"
+  else state = "starting"
+  if (state === w.state && JSON.stringify(setup) === JSON.stringify(w.setupStatus)) return
+  db.update(workers)
+    .set({ state, setupStatus: setup, ...(state !== "error" ? { error: null } : {}) })
+    .where(and(eq(workers.id, workerId), eq(workers.state, w.state)))
+    .run()
+}
+
+setAgentHooks({
+  workerForToken: (hash) => db.select({ id: workers.id }).from(workers).where(eq(workers.agentTokenHash, hash)).get() ?? null,
+  planFor,
+  onProjectState: applyProjectState,
+})

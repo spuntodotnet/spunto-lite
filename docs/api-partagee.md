@@ -135,8 +135,14 @@ Le reste des statuts, plus brièvement :
 
 - **Export / import de projet** : entièrement partagé, format neutre, secrets en noms seulement.
   C'est le seul endroit où les deux produits s'échangent réellement un objet aujourd'hui.
-- **Terminaux persistants** : `@spunto/build/terminal` est dans le paquet mais n'a qu'un
-  consommateur — nous. Cloud a gardé son implémentation dans `apps/agent`.
+- **Terminaux persistants** : depuis `@spunto/build` 0.17.0, un worker de Lite porte l'agent
+  d'une sandbox de Cloud (`@spunto/build/sandbox-agent`, [`agent.md`](agent.md)). Le terminal est
+  donc ouvert *par le même code* des deux côtés, replay et contre-pression compris. Seuls les
+  workers d'avant (`data_plane = exec`) passent encore par `@spunto/build/terminal` en `docker exec`.
+- **Plan de données** : le même agent, le même fil (`./agent-protocol`), la même moitié serveur
+  (`./agent-connection`) et les mêmes scripts de commandes de fond (`./commands`, qui existaient en
+  trois copies). Ce qui reste à nous : le registre (clé par worker), l'authentification du hello,
+  et Docker pour le cycle de vie.
 - **MCP** : Cloud expose une vingtaine d'outils (`list_projects`, `list_workers`, `create_worker`,
   `run_command`…) en re-dispatchant dans son propre routeur HTTP en mémoire, ce qui lui évite de
   redupliquer ses contrôles d'accès. Lite n'a pas de serveur MCP du tout (`mcp/` chez nous, c'est

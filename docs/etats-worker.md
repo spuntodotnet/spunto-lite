@@ -74,6 +74,12 @@ plus sur le premier.
 
 ## 3. Push vs pull : qui écrit l'état
 
+> **Mis à jour le 2026-10-20** : un worker qui porte l'agent ([`agent.md`](agent.md)) est en
+> **push** pour ce qui se passe *dans* la boîte. L'agent envoie `project_state` (la phase, et le
+> contenu de `~/.mp-status.json`), et `applyProjectState` l'écrit en base. L'état du conteneur
+> (arrêté, mort, code de sortie) reste lu par `inspect` à la lecture. Le tableau ci-dessous décrit
+> les workers `data_plane = exec`.
+
 | | Lite | Cloud |
 |---|---|---|
 | Source | **pull**, à la lecture | **push**, par événements |

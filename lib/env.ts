@@ -84,3 +84,24 @@ export const OPEN_VSX_API = (process.env.OPEN_VSX_API || "https://open-vsx.org/a
  * string is also what gets handed to code-server.
  */
 export const EXTENSIONS_GALLERY_RAW = process.env.EXTENSIONS_GALLERY?.trim() || null
+
+/**
+ * How a new worker is reached once its container runs (RFC 0047 of coderhammer/spunto):
+ *
+ * - `agent` (the default) — the container's main process is `@spunto/build`'s bootstrap, which
+ *   runs the in-box agent; the agent dials back here over a WebSocket and carries the terminal,
+ *   the commands, the ports and the setup state. The same agent, byte for byte, as a Spunto Cloud
+ *   sandbox.
+ * - `exec` — the container runs the worker script itself and everything inside it is a
+ *   `docker exec`, as before. Kept for the workers created that way until they are rebuilt.
+ *
+ * Recorded per worker (`workers.data_plane`): changing this only affects workers created after.
+ */
+export const WORKER_DATA_PLANE: "agent" | "exec" = process.env.WORKER_DATA_PLANE === "exec" ? "exec" : "agent"
+
+/**
+ * Where a worker's agent reaches this process. Unset: `http://spunto-lite:<PORT>` on the shared
+ * network when Lite runs in a container (it joins it under that alias), else the host as Docker
+ * sees it (`host.docker.internal`, which every worker container maps to the host gateway).
+ */
+export const LITE_INTERNAL_URL = (process.env.LITE_INTERNAL_URL?.trim() || "").replace(/\/+$/, "")

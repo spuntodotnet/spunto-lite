@@ -46,7 +46,13 @@ HTTPS with a local mkcert certificate. See
   (`server.ts`) that also reverse-proxies worker subdomains and hosts the
   terminal WebSocket.
 - **`dockerode`** → `/var/run/docker.sock`: workers are sibling containers on the
-  host daemon.
+  host daemon — for their *lifecycle* only (create, start, stop, remove, build).
+- **Each worker carries an agent** — the very one a Spunto Cloud sandbox runs, from
+  `@spunto/build`. The container's main process is its bootstrap; the agent dials back over a
+  WebSocket and carries everything inside the box: commands, terminals, listening ports, the
+  setup's progress. No `docker exec`, no Node download (Lite lends its own through a read-only
+  volume). Workers created by an older Lite keep `docker exec` until rebuilt. See
+  [`docs/agent.md`](docs/agent.md).
 - **SQLite** (via Drizzle) for projects/workers/secrets, in a Docker volume.
 - **`~/.ssh` mounted read-only** and injected into each worker — it is both the git
   identity and the *only* clone credential. A repository is declared as a **clone
@@ -70,7 +76,7 @@ HTTPS with a local mkcert certificate. See
   today and what they still duplicate — project creation, worker listing, the status
   vocabularies — is written down in [`docs/api-partagee.md`](docs/api-partagee.md).
 - **A persistent terminal on dtach**, not a multiplexer. Closing the tab does not kill
-  the build: a throwaway `docker exec` attaches to a session that outlives it. dtach only
+  the build: the worker's agent attaches to a session that outlives it. dtach only
   does persistence and forwards every byte, so the *browser* keeps the mouse, the
   scrollback and the search — with tmux, the only way to make the wheel scroll history is
   `mouse on`, which also swallows every drag and takes text selection with it. What dtach
