@@ -78,6 +78,13 @@
       "when": 1790569522978,
       "tag": "0010_first_cerebro",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1792496147852,
+      "tag": "0011_secret_valeria_richards",
+      "breakpoints": true
     }
   ]
 }

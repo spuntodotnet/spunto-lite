@@ -190,6 +190,14 @@ export const workers = sqliteTable("workers", {
   branch: text("branch"),
   projectVersion: integer("project_version").notNull().default(1),
   tags: text("tags", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
+  /**
+   * `agent`: the container carries `@spunto/build`'s in-box agent, which dials back (lib/agent.ts)
+   * and carries everything that happens inside it. `exec`: everything is a `docker exec` — the
+   * workers created before the agent, until they are rebuilt. See `WORKER_DATA_PLANE`.
+   */
+  dataPlane: text("data_plane").$type<"agent" | "exec">().notNull().default("exec"),
+  /** SHA-256 of the token the worker's agent says hello with — never the token itself. */
+  agentTokenHash: text("agent_token_hash"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 })
 
