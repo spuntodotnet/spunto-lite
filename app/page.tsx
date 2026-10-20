@@ -1,14 +1,13 @@
 import Link from "next/link"
-import { Flame, FolderGit2, TerminalSquare } from "lucide-react"
+import { FolderGit2, TerminalSquare } from "lucide-react"
+import { SpuntoLogo } from "@spunto/design-system/brand"
 
 export default function Home() {
   return (
     <main className="min-h-screen dot-grid flex items-center justify-center px-6">
       <div className="max-w-xl w-full text-center">
-        <div className="inline-flex items-center justify-center size-14 rounded-xl bg-primary text-primary-foreground mb-6">
-          <Flame className="size-7" />
-        </div>
-        <h1 className="font-display text-4xl font-bold tracking-tight">
+        <SpuntoLogo tone="build" size={56} className="mx-auto mb-6 rounded-[11%] shadow ring-1 ring-black/5" />
+        <h1 className="font-display text-4xl tracking-tight">
           Spunto&nbsp;Lite
         </h1>
         <p className="mt-3 text-muted-foreground">

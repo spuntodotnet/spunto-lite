@@ -120,7 +120,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             <ArrowLeft className="h-4 w-4" />
           </Link>
           <h1 className="text-lg font-semibold truncate">{project.name}</h1>
-          {project.dind && <Badge variant="outline" className="text-[11px] h-5 px-2 shrink-0 bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30">DinD</Badge>}
+          {project.dind && <Badge variant="outline" className="text-[11px] h-5 px-2 shrink-0 bg-warning/15 text-warning border-warning/30">DinD</Badge>}
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {/* Plain link: the route sets Content-Disposition, the browser downloads it. */}
