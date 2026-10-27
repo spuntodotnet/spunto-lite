@@ -88,7 +88,9 @@ bootstrap télécharge le binaire officiel, ce qui demande glibc et le réseau. 
 ## L'adresse de Lite vue d'un worker
 
 - **Lite dans un conteneur** : il rejoint le réseau partagé des workers sous l'alias `spunto-lite`,
-  et l'agent appelle `http://spunto-lite:<PORT>`.
+  et l'agent appelle `http://spunto-lite:<PORT>`. Il le rejoint au boot, à chaque création de
+  worker et avant chaque Start : un conteneur Lite recréé (une mise à jour) n'y est plus, et sans
+  ça un worker redémarré, comme les agents des workers qui tournent, ne le trouvent plus.
 - **Lite sur l'hôte** : l'agent appelle `http://host.docker.internal:<PORT>`. Chaque worker reçoit
   `host-gateway` pour cette adresse.
 - **`LITE_INTERNAL_URL`** remplace les deux.

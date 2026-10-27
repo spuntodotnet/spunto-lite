@@ -492,6 +492,10 @@ export async function stopWorker(id: string): Promise<Worker | undefined> {
 export async function startWorker(id: string): Promise<Worker | undefined> {
   const w = getWorkerRow(id)
   if (!w?.containerId) return w
+  // Its agent dials `spunto-lite` on the shared network the moment the container is up. Lite joins
+  // that network when it spawns a worker, and only then: once Lite itself is recreated (an update),
+  // a stopped worker restarted before any spawn would dial a name that no longer resolves.
+  if (w.dataPlane === "agent") await joinSharedNetworkAsLite()
   await startContainer(w.containerId)
   // Containers created before the shared network existed aren't attached to it;
   // joining on every start makes them reach the shared services too (no-op otherwise).
