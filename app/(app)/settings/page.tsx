@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { SshKeyUnlock, SSH_AGENT_QUERY_KEY } from "@/components/ssh-key-unlock"
+import { McpServersCard } from "@/components/mcp-servers-card"
 
 // Google "G" mark (inline so we don't pull in an icon dependency).
 function GoogleLogo({ className }: { className?: string }) {
@@ -240,6 +241,9 @@ export default function SettingsPage() {
           {save.isPending ? "Saving…" : "Save settings"}
         </Button>
       </div>
+
+      {/* Saved on each action, outside the form above. */}
+      <McpServersCard />
     </div>
   )
 }

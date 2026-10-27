@@ -85,6 +85,13 @@
       "when": 1792496147852,
       "tag": "0011_secret_valeria_richards",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1793090472323,
+      "tag": "0012_agent_apps_and_mcp_servers",
+      "breakpoints": true
     }
   ]
 }

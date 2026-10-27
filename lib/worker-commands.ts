@@ -5,6 +5,7 @@ import {
   DEFAULT_POLL_OUTPUT_BYTES,
   MAX_READ_BYTES,
   cancelScript,
+  commandDied,
   commandExitCode,
   commandFields,
   commandRunning,
@@ -54,6 +55,12 @@ export type CommandResult = {
 export type CommandStatus = {
   running: boolean
   exitCode: number | null
+  /**
+   * The wrapper is gone without writing `exit_code` — the container restarted under it, or it was
+   * SIGKILLed (OOM). Not running and no code is *not* enough to say so: a command whose pid is not
+   * written yet reads the same way (`ALIVE:-`, @spunto/build ≥ 0.20.2), and is merely starting.
+   */
+  died: boolean
   /** false when the id is unknown to this worker (never started, or pruned/rebuilt). */
   found: boolean
   stdout: string
@@ -206,7 +213,7 @@ export async function pollCommand(params: {
   const script = pollScript(params.commandId, maxOutputBytes)
   const fields = parseFields((await execScript(params.containerId, script)).stdout)
   if (fields.get("FOUND") !== "1") {
-    return { running: false, exitCode: null, found: false, stdout: "", stderr: "", truncated: false, timedOut: false }
+    return { running: false, exitCode: null, died: false, found: false, stdout: "", stderr: "", truncated: false, timedOut: false }
   }
   const exitCode = commandExitCode(fields)
   const decode = (key: string) => Buffer.from(fields.get(key) ?? "", "base64").toString("utf8")
@@ -215,6 +222,7 @@ export async function pollCommand(params: {
   return {
     running: commandRunning(fields),
     exitCode,
+    died: commandDied(fields),
     found: true,
     stdout: decode("OUT"),
     stderr: decode("ERR"),

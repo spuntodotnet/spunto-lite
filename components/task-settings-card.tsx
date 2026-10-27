@@ -1,57 +1,35 @@
 "use client"
 
 import { useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { toast } from "@spunto/design-system"
-import { CatalogCard, CatalogChip, CatalogMark } from "@spunto/design-system/devcontainer"
-import { Bot, SlidersHorizontal } from "lucide-react"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, toast } from "@spunto/design-system"
+import { CatalogCard, CatalogChip, CatalogMark, resolveStackMark } from "@spunto/design-system/devcontainer"
+import { Bot, TerminalSquare } from "lucide-react"
 import { api } from "@/lib/api"
-import { DEFAULT_AGENT_COMMAND, DEFAULT_FOLLOW_UP_COMMAND, packMatches, type HarnessPack } from "@/lib/harness-packs"
-import type { Project } from "@/lib/types"
+import type { AgentAppInfo, Project } from "@/lib/types"
+import { useAgentApps } from "@/components/new-task-button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 
 /**
- * How this project's tasks run (docs/tasks.md § "Ce que le projet décide") — Spunto Cloud's
+ * How this project's tasks run (docs/taches.md § "Réglages du projet") — Spunto Cloud's
  * "Delegated work" settings, as a card beside the project form rather than inside it.
  *
- * Beside, because none of it goes into the image: the form's Save mints a version and marks every
- * worker out of date, and changing the harness must not. This card PATCHes the task fields alone,
- * which the API applies without a version (`updateProject`).
- *
- * The harness is picked from the catalogue's cards (`GET /api/harness-packs`). A pack is a
- * suggestion, never a remembered choice: the active one is re-derived from the fields each render
- * (`packMatches`), and "Custom" shows the three fields a card otherwise explains.
+ * The harness is a list of **agent apps** (RFC 0048): each one switched on puts its official SDK
+ * in the project's image, and each task picks which one it runs under — the first when nobody
+ * does. That list is part of the image, so changing it mints a version (and rebuilds); everything
+ * else here is saved without one.
  */
 
-type Protocol = "none" | "claude-json" | "claude-stream" | "jsonl"
-
 type Value = {
-  taskAgentCommand: string
-  taskAgentProtocol: Protocol
-  taskFollowUpCommand: string
-  taskResetCommand: string
+  agentAppIds: string[]
+  taskAgentModels: Record<string, string>
   taskValidateCommand: string
   taskCancelCommand: string
   taskReviewMode: "keep" | "stop"
-  taskAgentModel: string
   taskAgentInstructions: string
-}
-
-const PROTOCOLS: { value: Protocol; label: string; hint: string }[] = [
-  { value: "claude-stream", label: "Claude Code, interactive", hint: "The session stays alive between turns: read it live, answer it while it works, interrupt it." },
-  { value: "claude-json", label: "Claude Code", hint: "Read live, but the session runs once and hands back; a reply resumes it." },
-  { value: "jsonl", label: "Spunto events (JSONL)", hint: "Your harness prints one JSON event per line in Spunto's own vocabulary." },
-  { value: "none", label: "Don't capture", hint: "Only a tail of stdout, readable once it's over. No live timeline, no replies." },
-]
-
-const PROTOCOL_CHIP: Record<Protocol, string> = {
-  none: "stdout tail",
-  "claude-json": "live stream",
-  "claude-stream": "live · answer · interrupt",
-  jsonl: "your own JSONL",
 }
 
 const REVIEW_MODES = [
@@ -61,14 +39,11 @@ const REVIEW_MODES = [
 
 function fromProject(p: Project): Value {
   return {
-    taskAgentCommand: p.taskAgentCommand ?? "",
-    taskAgentProtocol: (p.taskAgentProtocol as Protocol) ?? "claude-stream",
-    taskFollowUpCommand: p.taskFollowUpCommand ?? "",
-    taskResetCommand: p.taskResetCommand ?? "",
+    agentAppIds: p.agentAppIds ?? [],
+    taskAgentModels: p.taskAgentModels ?? {},
     taskValidateCommand: p.taskValidateCommand ?? "",
     taskCancelCommand: p.taskCancelCommand ?? "",
     taskReviewMode: p.taskReviewMode === "stop" ? "stop" : "keep",
-    taskAgentModel: p.taskAgentModel ?? "",
     taskAgentInstructions: p.taskAgentInstructions ?? "",
   }
 }
@@ -105,24 +80,39 @@ function Choice<T extends string>({ name, options, value, onChange }: { name: st
 export function TaskSettingsCard({ project }: { project: Project }) {
   const qc = useQueryClient()
   const [value, setValue] = useState<Value>(() => fromProject(project))
-  const [explicitMode, setExplicitMode] = useState<"preset" | "custom" | null>(null)
-  const { data: packs = [] } = useQuery({
-    queryKey: ["harness-packs"],
-    queryFn: () => api.get<HarnessPack[]>("/api/harness-packs"),
-    staleTime: Infinity,
-  })
-  const activePack = packs.find((p) => packMatches(p, value))
-  const mode = explicitMode ?? (packs.length === 0 ? "custom" : activePack ? "preset" : "custom")
+  const { data: apps = [] } = useAgentApps()
   const set = (patch: Partial<Value>) => setValue((v) => ({ ...v, ...patch }))
-  const dirty = JSON.stringify(value) !== JSON.stringify(fromProject(project))
+  const initial = fromProject(project)
+  const dirty = JSON.stringify(value) !== JSON.stringify(initial)
+  const harnessChanged = JSON.stringify(value.agentAppIds) !== JSON.stringify(initial.agentAppIds)
+
+  const allowed = value.agentAppIds
+  const allowedApps = allowed.map((id) => apps.find((a) => a.id === id)).filter((a): a is AgentAppInfo => !!a)
+  const defaultApp = allowedApps[0]
+  // An app card is a switch: on, the project's tasks may run under it. Switched off, it takes its
+  // default model with it — no task can run under it any more.
+  const toggleApp = (id: string) => {
+    if (!allowed.includes(id)) return set({ agentAppIds: [...allowed, id] })
+    const models = Object.fromEntries(Object.entries(value.taskAgentModels).filter(([k]) => k !== id))
+    set({ agentAppIds: allowed.filter((a) => a !== id), taskAgentModels: models })
+  }
+  const makeDefault = (id: string) => set({ agentAppIds: [id, ...allowed.filter((a) => a !== id)] })
+  const setModel = (appId: string, model: string | null) => {
+    const rest = Object.fromEntries(Object.entries(value.taskAgentModels).filter(([k]) => k !== appId))
+    set({ taskAgentModels: model ? { ...rest, [appId]: model } : rest })
+  }
 
   const save = useMutation({
-    // Blank = back to the default, which the API stores as null.
-    mutationFn: () => api.patch<Project>(`/api/projects/${project.id}`, value),
+    // Blank = back to the default, which the API stores as null. The harness list only when it
+    // moved: it mints a version, and an untouched list must not.
+    mutationFn: () => {
+      const { agentAppIds, ...rest } = value
+      return api.patch<Project>(`/api/projects/${project.id}`, harnessChanged ? { ...rest, agentAppIds } : rest)
+    },
     onSuccess: (updated) => {
       qc.setQueryData(["project", project.id], updated)
       setValue(fromProject(updated))
-      toast.success("Delegated work settings saved")
+      toast.success(harnessChanged ? "Saved — new version, the image will be rebuilt" : "Delegated work settings saved")
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -134,94 +124,101 @@ export function TaskSettingsCard({ project }: { project: Project }) {
           <Bot className="h-4 w-4" /> Delegated work
         </CardTitle>
         <CardDescription>
-          How this project&apos;s tasks run — the agents you delegate to from the project page or from Agents. Leave it
-          as it is and you get Claude Code, read live as it works: add the <span className="font-mono">claude-code</span>{" "}
-          feature to the project and an <span className="font-mono">ANTHROPIC_API_KEY</span> (or{" "}
-          <span className="font-mono">CLAUDE_CODE_OAUTH_TOKEN</span>) secret. Saved on its own, without a new version:
-          nothing here goes into the image.
+          How this project&apos;s tasks run — the agents you delegate to from the project page or from Agents. A
+          task&apos;s state always comes from its session, and only <span className="font-medium">Accept</span> or{" "}
+          <span className="font-medium">Drop</span> takes it further.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
-        {packs.length > 0 && (
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Harness</label>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {packs.map((pack) => (
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-muted-foreground">Harness</label>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {apps.map((app) => {
+              const mark = resolveStackMark(app.id, app.name)
+              return (
                 <CatalogCard
-                  key={pack.id}
+                  key={app.id}
                   tone="build"
-                  mark={<CatalogMark mark="claude" label={pack.label} tone="build" />}
-                  watermark="claude"
-                  title={pack.label}
-                  description={pack.description}
-                  selected={mode === "preset" && activePack?.id === pack.id}
-                  onSelect={() => {
-                    set({ taskAgentCommand: pack.agentCommand, taskFollowUpCommand: pack.followUpCommand, taskAgentProtocol: pack.protocol as Protocol })
-                    setExplicitMode("preset")
-                  }}
+                  mark={
+                    mark ? (
+                      <CatalogMark mark={mark} label={app.name} tone="build" />
+                    ) : (
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                        <TerminalSquare className="h-4 w-4" />
+                      </span>
+                    )
+                  }
+                  watermark={mark}
+                  title={app.name}
+                  titleMeta={
+                    <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground/70">
+                      {allowed[0] === app.id && allowed.length > 1 ? "app · default" : "app"}
+                    </span>
+                  }
+                  description={app.description}
+                  selected={allowed.includes(app.id)}
+                  onSelect={() => toggleApp(app.id)}
+                  action={
+                    allowed.includes(app.id) && allowed[0] !== app.id ? (
+                      <button type="button" onClick={() => makeDefault(app.id)} className="text-[11px] text-primary hover:underline">
+                        Make default
+                      </button>
+                    ) : undefined
+                  }
                 >
                   <div className="flex flex-wrap items-center gap-1">
-                    <CatalogChip title={pack.agentCommand}>{pack.agentCommand}</CatalogChip>
-                    <CatalogChip>{PROTOCOL_CHIP[pack.protocol as Protocol]}</CatalogChip>
+                    <CatalogChip>official SDK</CatalogChip>
+                    <CatalogChip title={`The runner reads ${app.credentials.join(" or ")} from the project's secrets`}>{app.credentials[0]}</CatalogChip>
                   </div>
                 </CatalogCard>
-              ))}
-              <CatalogCard
-                custom
-                tone="build"
-                mark={
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                    <SlidersHorizontal className="h-4 w-4" />
-                  </span>
-                }
-                title="Custom"
-                description="Your own CLI — anything that reads its prompt on stdin."
-                selected={mode === "custom"}
-                onSelect={() => setExplicitMode("custom")}
-              />
-            </div>
+              )
+            })}
           </div>
-        )}
+          {allowed.length > 0 ? (
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Each app switched on puts its official SDK in this project&apos;s image (changing the list makes a new
+              version and rebuilds it), and <span className="font-medium">each task picks which one it runs under</span> —{" "}
+              {defaultApp ? <span className="font-medium">{defaultApp.name}</span> : "the first"} when nobody does. Each
+              runner reads its own credential from the project&apos;s or the global secrets (
+              <span className="font-mono">{allowedApps.map((a) => a.credentials[0]).join(", ")}</span>).
+            </p>
+          ) : (
+            <p className="text-[11px] text-destructive">No harness yet: switch on at least one app, or no task can be delegated in this project.</p>
+          )}
+        </div>
 
-        {mode === "custom" && (
-          <>
-            <Field label="Agent command" hint={<>Runs a task&apos;s session in the worker. The prompt arrives on <span className="font-mono">stdin</span> — the only contract.</>}>
-              <Input value={value.taskAgentCommand} onChange={(e) => set({ taskAgentCommand: e.target.value })} placeholder={DEFAULT_AGENT_COMMAND} className="font-mono" />
-            </Field>
-            <Field
-              label="Session stream"
-              hint={<>The only thing Spunto adds to your command, and only if it doesn&apos;t already set <span className="font-mono">--output-format</span>.</>}
-            >
-              <Choice name="taskAgentProtocol" options={PROTOCOLS} value={value.taskAgentProtocol} onChange={(v) => set({ taskAgentProtocol: v })} />
-            </Field>
-            <Field
-              label="Follow-up command"
-              hint={<>Runs when you answer a session that has handed back. The reply arrives on <span className="font-mono">stdin</span>, <span className="font-mono">SPUNTO_TASK_SESSION_ID</span> is in the environment.</>}
-            >
-              <Input value={value.taskFollowUpCommand} onChange={(e) => set({ taskFollowUpCommand: e.target.value })} placeholder={DEFAULT_FOLLOW_UP_COMMAND} className="font-mono" />
-            </Field>
-          </>
+        {allowedApps.length > 0 && (
+          <Field
+            label="Default model"
+            hint="One per harness, from that app's own list: a task gets the model of the app it runs under. A task can override it when it's delegated."
+          >
+            <div className="space-y-2">
+              {allowedApps.map((app) => {
+                const current = value.taskAgentModels[app.id] ?? null
+                const label = (v: string | null) => (v ? (app.catalog.models.find((m) => m.value === v)?.label ?? v) : "Harness default")
+                return (
+                  <div key={app.id} className="flex items-center gap-3">
+                    <span className="w-28 shrink-0 truncate text-sm">{app.name}</span>
+                    <Select value={current} onValueChange={(v) => setModel(app.id, (v as string | null) || null)}>
+                      <SelectTrigger className="flex-1" aria-label={`Default model for ${app.name}`}>
+                        <SelectValue>{(v: string | null) => label(v)}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={null}>Harness default</SelectItem>
+                        {app.catalog.models.map((m) => (
+                          <SelectItem key={m.value} value={m.value}>
+                            <span className="flex-1">{m.label}</span>
+                            <span className="ml-3 font-mono text-[10px] text-muted-foreground">{m.value}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )
+              })}
+            </div>
+          </Field>
         )}
-
-        <Field
-          label="Default model"
-          hint={<>Added as <span className="font-mono">--model</span> unless the command names one, and set as <span className="font-mono">SPUNTO_TASK_MODEL</span>. A task can override it. Empty = the harness&apos;s default.</>}
-        >
-          <Input
-            list="task-model-options"
-            value={value.taskAgentModel}
-            onChange={(e) => set({ taskAgentModel: e.target.value })}
-            placeholder="Harness default"
-            className="font-mono"
-          />
-          <datalist id="task-model-options">
-            {packs.flatMap((p) => p.models).map((m) => (
-              <option key={m.value} value={m.value}>
-                {m.label}
-              </option>
-            ))}
-          </datalist>
-        </Field>
 
         <Field label="Agent instructions" hint="Told to every task of this project, after the standing instruction to commit and push its work. What only this repository needs said: which tests to run, what not to touch.">
           <Textarea
@@ -231,13 +228,6 @@ export function TaskSettingsCard({ project }: { project: Project }) {
             rows={3}
             className="font-mono text-sm"
           />
-        </Field>
-
-        <Field
-          label="Reset command"
-          hint={<>Run when a task lands on a <em>reused</em> machine, after its branch is checked out: reseed, reinstall, restart. The git tree is reset and cleaned either way.</>}
-        >
-          <Input value={value.taskResetCommand} onChange={(e) => set({ taskResetCommand: e.target.value })} placeholder="npm ci && npm run db:reset" className="font-mono" />
         </Field>
 
         <Field label="Accept command" hint={<>Run by <span className="font-medium">Accept</span>, in the task&apos;s worker. Exit 0 marks it done. Empty = Accept just closes the task.</>}>
@@ -252,7 +242,8 @@ export function TaskSettingsCard({ project }: { project: Project }) {
           <Choice name="taskReviewMode" options={REVIEW_MODES} value={value.taskReviewMode} onChange={(v) => set({ taskReviewMode: v })} />
         </Field>
 
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-3">
+          {harnessChanged && <span className="text-[11px] text-muted-foreground">Saving makes a new version: workers rebuild with the new harnesses.</span>}
           <Button onClick={() => save.mutate()} disabled={!dirty || save.isPending}>
             {save.isPending ? "Saving…" : "Save"}
           </Button>

@@ -1,3 +1,4 @@
+import type { AgentCatalog } from "@spunto/build/agent-runners"
 import type { BuildStep } from "@spunto/build/steps"
 export type { BuildStep }
 
@@ -69,19 +70,28 @@ export type Project = {
   repositories: Repository[]
   forwardPorts: number[]
   sharedVolumes: SharedVolume[]
+  /** The agent apps this project's tasks may run under, the first being the default (RFC 0048). */
+  agentAppIds: string[]
   currentVersion: number
   favorite: boolean
-  // How delegated work runs here — see `TaskSettingsSchema` and docs/tasks.md.
-  taskAgentCommand: string | null
-  taskAgentProtocol: string
-  taskFollowUpCommand: string | null
-  taskResetCommand: string | null
+  // How delegated work runs here — see `TaskSettingsSchema` and docs/taches.md.
   taskValidateCommand: string | null
   taskCancelCommand: string | null
   taskReviewMode: string
-  taskAgentModel: string | null
+  /** The default model per agent app. */
+  taskAgentModels: Record<string, string>
   taskAgentInstructions: string | null
   createdAt: string
+}
+
+/** An agent app, as `GET /api/agent-apps` serves it: who it is, and what a task may pick under it. */
+export type AgentAppInfo = {
+  id: string
+  name: string
+  description: string
+  /** Secret names the runner's SDK reads — any one of them is enough. */
+  credentials: string[]
+  catalog: AgentCatalog
 }
 
 export type WorkerState = "provisioning" | "building" | "starting" | "ready" | "stopped" | "error"

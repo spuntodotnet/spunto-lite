@@ -1,6 +1,6 @@
-import { getProject, updateProject, deleteProject } from "@/services/projects"
+import { getProject, updateProject, deleteProject, ProjectAgentAppsError } from "@/services/projects"
 import { UpdateProjectSchema } from "@/lib/validation"
-import { json, parseBody, notFound } from "@/lib/http"
+import { badRequest, json, parseBody, notFound } from "@/lib/http"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -15,8 +15,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const { id } = await params
   const parsed = await parseBody(req, UpdateProjectSchema)
   if ("response" in parsed) return parsed.response
-  const updated = updateProject(id, parsed.data)
-  return updated ? json(updated) : notFound("Project not found")
+  try {
+    const updated = updateProject(id, parsed.data)
+    return updated ? json(updated) : notFound("Project not found")
+  } catch (err) {
+    if (err instanceof ProjectAgentAppsError) return badRequest(err.message)
+    throw err
+  }
 }
 
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {

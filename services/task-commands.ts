@@ -151,12 +151,17 @@ export async function refreshTaskCommand(row: TaskCommand): Promise<TaskCommand>
   if (!status.found) {
     patch.status = "lost"
     patch.finishedAt = new Date()
-  } else if (!status.running) {
-    // No exit code and no process: the wrapper died without writing one (the container restarted).
-    patch.status = status.exitCode === null ? "lost" : statusOf(status)
+  } else if (status.died) {
+    // No exit code and no process: the wrapper died without writing one (the container restarted,
+    // the OOM killer). Its directory and the harness's transcript are still there to resume from.
+    patch.status = "lost"
+    patch.finishedAt = new Date()
+  } else if (!status.running && status.exitCode !== null) {
+    patch.status = statusOf(status)
     patch.exitCode = status.exitCode
     patch.finishedAt = new Date()
   }
+  // Otherwise still running — or still starting, its pid not written yet.
   // Guarded on `running` so two concurrent readers write the same final answer at most once.
   db.update(taskCommands)
     .set(patch)

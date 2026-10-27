@@ -26,7 +26,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ taskId: 
   const tail = url.searchParams.get("tail") === "true"
   const withSource = url.searchParams.get("source") === "true"
 
-  const protocol = taskProtocol(task.projectId)
+  const protocol = taskProtocol(task)
   if (protocol !== "none") {
     await ingestTaskEvents(task, protocol).catch((err) => console.warn(`[task:${task.id}] event ingestion failed: ${err}`))
   }

@@ -25,17 +25,66 @@ du dépôt Cloud ; cette page dit **ce qui est pareil, ce qui diffère dans Lite
   machine ; machine arrêtée (garée pour la revue), il dit pourquoi il n'y a rien où taper.
 - **Réglages** : page d'édition du projet → carte *Delegated work*.
 
-## Démarrer avec Claude Code
+## Démarrer : les apps d'agent (Claude Code, Codex)
 
-Sans rien régler, une tâche lance Claude Code en mode interactif
-(`claude --dangerously-skip-permissions -p` + `--output-format stream-json --verbose
---input-format stream-json`). Il faut donc, dans le projet :
+Comme dans Cloud depuis la RFC 0048 (`docs/agent-apps.md` du dépôt Cloud), le projet ne décrit
+plus *comment* lancer son agent : il **dit quelles apps ses tâches peuvent utiliser**, et **chaque
+tâche choisit la sienne**.
 
-1. la feature **`claude-code`** (catalogue) — sans elle, la session échoue sur
-   `claude: command not found`, et la tâche le dit ;
-2. un secret **`ANTHROPIC_API_KEY`** ou **`CLAUDE_CODE_OAUTH_TOKEN`** (projet ou global) ;
+| App | SDK officiel | Secret lu par le SDK |
+|---|---|---|
+| `claude` — **Claude Code** | `@anthropic-ai/claude-agent-sdk` | `ANTHROPIC_API_KEY` |
+| `codex` — **Codex** | `@openai/codex-sdk` | `OPENAI_API_KEY` ou `CODEX_API_KEY` |
+
+Il faut donc, dans le projet :
+
+1. au moins une app allumée dans **Edit → Delegated work → Harness** (`agentAppIds`, liste
+   ordonnée : la première est le défaut, *Make default* en promeut une autre). Un nouveau projet
+   arrive avec Claude Code ; un projet sans app ne peut pas déléguer (`400`) ;
+2. le **secret** de l'app (projet ou global) — le runner n'en lit aucun lui-même, le binaire
+   lancé par le SDK hérite de l'environnement de la session ;
 3. un **dépôt git** : une tâche travaille sur une branche. Le clone utilise la clé SSH des
    réglages, qui sert aussi au `git push` de l'agent.
+
+**L'image.** Chaque app allumée ajoute sa feature (`spunto-agent-claude`, `spunto-agent-codex`,
+des `localScript` livrés par `@spunto/build`, cachés du sélecteur) **après** celles du projet
+(`effectiveFeatures`, `lib/agent-apps.ts`) : un Node privé et le SDK épinglé sous
+`/opt/spunto/agents`, plus le CLI sur le `PATH` pour les humains du terminal. La liste fait donc
+partie de la version : la changer crée une version et rebuild, comme changer une feature.
+
+**La session : le runner.** Un fichier `.mjs` sans dépendance du paquet (`claude.mjs`,
+`codex.mjs`), **pas** cuit dans l'image : Lite le lit à chaque démarrage de session et le passe en
+base64 dans l'environnement de la commande, qui l'écrit puis s'exécute dessus — une correction
+du runner arrive avec une montée de `@spunto/build`, sans rebuild :
+
+```
+<node> <runner>.mjs run [--model <id>] [--resume <session id>]
+stdin   {"type":"user","text"} · {"type":"interrupt","id"} · {"type":"title","id","description"}
+stdout  les événements du harnais, normalisés par Lite (dialectes claude-runner, codex-runner)
+```
+
+Les deux dialectes sont interactifs : une réponse pendant un tour part dans le stdin vivant (Codex
+la garde pour la fin du tour), une interruption arrête le tour sans tuer la session. Le titre de la
+conversation est **demandé** à la session juste après le premier tour (`sessionTitleRequestLine`) :
+Claude Code ne se nomme plus tout seul en `stream-json`.
+
+**Le modèle et les paramètres suivent le harnais.** Le projet a un modèle par défaut **par app**
+(`taskAgentModels`, vérifié contre le catalogue de l'app) ; le dialogue de délégation propose le
+harnais en premier, puis les modèles de cette app et **une chip par paramètre qu'elle déclare**
+(Claude : `effort` ; Codex : `reasoningEffort` restreint par modèle, `webSearch`). La tâche fige
+son choix (`tasks.agent_app_id`, `tasks.agent_options`, vérifiés contre le catalogue), conservé à
+chaque reprise, et le runner le reçoit dans `SPUNTO_AGENT_OPTIONS`.
+
+**Les serveurs MCP** allumés pour le projet arrivent dans la session par `SPUNTO_AGENT_MCP`,
+servis par la passerelle de Lite → [serveurs-mcp.md](serveurs-mcp.md).
+
+**Les tâches d'avant les apps** (`agent_app_id` nul) finissent sur le CLI où elles ont commencé
+(`LEGACY_CLI`, avec la commande et le dialecte de l'ancienne colonne du projet) : une session
+vivante se parle dans son dialecte. Les colonnes `task_agent_command`, `task_agent_protocol`,
+`task_follow_up_command` et `task_reset_command` ne sont plus ni écrites ni exposées ; elles
+partiront quand plus aucune tâche ancienne ne vivra. La migration `0012` a passé chaque projet
+existant sur Claude Code, avec une nouvelle version (son image gagne le SDK), et rangé son ancien
+modèle par défaut dans `taskAgentModels` quand le catalogue le connaît.
 
 ## Cycle de vie
 
@@ -46,8 +95,8 @@ POST /api/projects/:id/tasks
         1. un worker : libre dans le pool du projet (redémarré s'il était arrêté), sinon spawné et tagué `task`
         2. attend `ready`
         3. dans chaque dépôt : [machine recyclée : reset --hard + clean -fd] fetch + checkout -B <branche> origin/<base>
-        4. machine recyclée : `taskResetCommand` du projet
-        5. la session d'agent, en commande background dans le worker → running
+        4. la session d'agent (le runner de son app), en commande background dans le worker → running
+        5. la demande de titre, juste derrière le premier tour
    … la session rend la main (`session.ended` sans travail de fond derrière, ou fin du process) → in-review
    Accept → `taskValidateCommand` (optionnelle) ; exit 0 → done
    Drop   → tue la session, `taskCancelCommand`, → failed ("Cancelled")
@@ -116,11 +165,11 @@ rallumer). Le mode de relecture `stop`, c'est le Park automatique.
 
 **Un seul chemin de réveil** pour une réponse, Accept, Drop et Wake : un worker arrêté — ou tombé
 tout seul — est redémarré, un conteneur disparu est rebuildé sur le même volume ; seul un worker
-dont le *setup* a échoué est refusé (le relancer échouerait pareil). Avant de reprendre la
-session, une réponse lance dans chaque dépôt un **Branch check** (`followUpCheckoutScript`) : un
-arbre propre sur une autre branche est remis sur celle de la tâche, un arbre modifié n'est pas
-touché et la réponse est refusée avec la raison. Le script n'a aucun `exit` (Cloud #424 : dans le
-shell de login des commandes, `exit` passe par `~/.bash_logout`, qui échoue sans console).
+dont le *setup* a échoué est refusé (le relancer échouerait pareil). Le checkout **n'est pas
+touché** : la conversation reprend là où l'agent a laissé le dépôt, sur la branche de la tâche
+ou une autre qu'il a prise lui-même. Un *Branch check* remettait l'arbre sur la branche de la
+tâche et refusait la réponse si l'arbre était sale ; Cloud l'a retiré (#557) : il n'a refusé
+que des agents qui avaient changé de branche eux-mêmes, sur une machine qu'eux seuls tenaient.
 
 ## Un ordinateur qui redémarre
 
@@ -155,11 +204,13 @@ Lite tourne sur des portables et des postes qu'on redémarre souvent ; ce n'est 
   `seq` dense par tâche, les lignes du harnais gardées en `source` ;
 - **répondre** (dans le stdin vivant si la session écoute, sinon reprise `--resume` sur l'id lu
   dans le flux), **interrompre** (`control_request/interrupt`), le **nom** que la session se
-  donne (lu une fois dans son transcript), l'**usage** (contexte, tokens, coût venu du harnais),
+  donne (demandé à la session, ou lu une fois dans son transcript), l'**usage** (contexte, tokens, coût venu du harnais),
   les **pièces jointes** dans les deux sens (déposées dans le worker, affichées si ce sont des
   images raster, téléchargées sinon), le **diff** lu avec git dans la machine ;
-- les **réglages** : mêmes noms de champs que Cloud et que la spec portable, donc un projet
-  exporté emporte son harnais.
+- les **apps d'agent** : mêmes runners, mêmes features, mêmes catalogues et même validation —
+  tout vient de `@spunto/build/agent-runners` ;
+- les **réglages** : mêmes noms de champs que Cloud et que la spec portable. La spec ne porte
+  pas `agentAppIds` (l'export de Cloud non plus) : un projet importé démarre sur Claude Code.
 
 ## Ce qui diffère, et pourquoi
 
@@ -173,6 +224,8 @@ Lite tourne sur des portables et des postes qu'on redémarre souvent ; ce n'est 
 | Verrou du pool | advisory Postgres | chaîne de promesses par worker (un seul process) |
 | Pool | par membre | par projet (un seul utilisateur) |
 | Consigne d'agent | celle de l'org + celle du projet | la phrase par défaut + celle du projet |
+| Apps d'agent | installées par l'org (Integrations), désinstallation refusée tant qu'un projet s'en sert | toujours offertes, sans installation |
+| Mémoire du compositeur | dernier harnais/modèle/paramètres du membre par projet | aucune : le défaut du projet |
 | Diff indisponible | `no-machine`, `machine-stopped`, `node-unreachable`, `unsupported` | les deux premiers seulement : un seul démon Docker |
 | Pull request | lue sur la forge connectée | absente — Lite ne parle à aucune forge |
 
@@ -180,9 +233,11 @@ Lite tourne sur des portables et des postes qu'on redémarre souvent ; ce n'est 
 dans le plan de contrôle. Le redémarrage ne perd que ce qui vivait en mémoire — une allocation en
 cours, un Accept en cours.
 
-**Les réglages de tâche ne créent pas de version.** Rien n'entre dans l'image : changer de
-harnais ne doit pas marquer tous les workers comme périmés. La carte *Delegated work* fait un
-`PATCH` qui ne contient qu'eux, et `updateProject` les applique sans version.
+**Les réglages de tâche ne créent pas de version**, sauf la liste des harnais. Un modèle, une
+consigne ou une commande d'Accept n'entrent pas dans l'image et ne doivent pas marquer tous les
+workers comme périmés : `updateProject` les applique sans version. `agentAppIds`, lui, met une
+feature dans l'image : la carte *Delegated work* ne l'envoie que s'il a bougé, et c'est alors
+une nouvelle version.
 
 ## Deux pièges trouvés au portage
 
@@ -201,15 +256,15 @@ reste à vérifier là-bas, selon ce que sa lecture de commande répond pour un 
 
 | Réglage | Défaut | Renseigné |
 |---|---|---|
-| `taskAgentCommand` | `claude --dangerously-skip-permissions -p` | ta commande — le prompt arrive sur **stdin** |
-| `taskAgentProtocol` | `claude-stream` (lu en direct, interactif) | `claude-json`, `jsonl` (notre vocabulaire), `none` |
-| `taskFollowUpCommand` | `claude … --resume "$SPUNTO_TASK_SESSION_ID"` | ta reprise — la réponse arrive sur stdin |
-| `taskResetCommand` | rien | ce qu'une machine recyclée doit reposer, après le checkout |
+| `agentAppIds` | `["claude"]` à la création | les apps dont les tâches peuvent se servir, la première par défaut — **versionné** (dans l'image) |
+| `taskAgentModels` | le défaut de chaque app | `{ "claude": "claude-opus-5-5" }` — un par app autorisée, vérifié contre son catalogue ; une tâche peut le surclasser |
 | `taskValidateCommand` | Accept clôt la tâche | lancée par Accept dans le worker ; exit 0 ⇒ `done` |
 | `taskCancelCommand` | rien de plus que tuer la session | nettoyage lancé par Drop |
 | `taskReviewMode` | `keep` | `stop` : le conteneur est garé en revue (Park automatique), réveillé par Accept/Drop/une réponse/Wake |
-| `taskAgentModel` | le harnais choisit | modèle par défaut, ajouté en `--model` ; une tâche peut le surclasser |
 | `taskAgentInstructions` | rien | ajouté à la consigne de chaque tâche du projet |
+
+`taskResetCommand` a disparu comme dans Cloud (2026-10-26) : la branche est déjà remise à plat
+(`reset --hard`, `clean -fd`) sur une machine recyclée.
 
 Variables fournies aux commandes : `SPUNTO_TASK_ID`, `SPUNTO_TASK_TITLE`, `SPUNTO_TASK_BRANCH`,
 `SPUNTO_TASK_BASE_BRANCH`, `SPUNTO_TASK_STATE`, `SPUNTO_TASK_MODEL` (si résolu), plus les secrets
@@ -220,7 +275,7 @@ du projet **tels qu'ils sont maintenant** (l'environnement du conteneur date de 
 ```
 GET    /api/tasks                               — toutes les tâches (?state=&q=&projectId=&limit=&offset=), compteurs par état hors filtre d'état
 GET    /api/projects/:id/tasks                  — celles d'un projet
-POST   /api/projects/:id/tasks                  — délègue { prompt, title?, baseBranch?, model?, files? } → 201, queued
+POST   /api/projects/:id/tasks                  — délègue { prompt, title?, baseBranch?, model?, agentAppId?, agentOptions?, files? } → 201, queued
 GET    /api/tasks/:taskId                       — détail, re-dérivé, + canResume
 PATCH  /api/tasks/:taskId                       — renomme { title } (la branche ne bouge pas)
 DELETE /api/tasks/:taskId                       — oublie une tâche finie (409 si vivante)
@@ -235,7 +290,7 @@ POST   /api/tasks/:taskId/cancel                — Drop → 202
 POST   /api/tasks/:taskId/park                  — gare la machine d'une tâche en revue (409 sinon, ou pendant une action en vol)
 POST   /api/tasks/:taskId/wake                  — rallume la machine garée d'une tâche en revue
 GET    /api/tasks/:taskId/attachments/:id       — les octets d'une pièce jointe (PNG/JPEG/WebP/GIF inline, le reste en téléchargement)
-GET    /api/harness-packs                       — le catalogue des harnais (Claude Code)
+GET    /api/agent-apps                          — les apps d'agent et leur catalogue (modèles, paramètres)
 ```
 
 ## Où c'est implémenté
@@ -249,7 +304,7 @@ GET    /api/harness-packs                       — le catalogue des harnais (Cl
 | `services/task-diff.ts`, `lib/task-diff.ts` | le diff lu avec git dans le worker (scripts et parseurs repris de Cloud) |
 | `services/task-attachments.ts`, `lib/task-attachments.ts` | pièces jointes dans les deux sens |
 | `lib/worker-commands.ts` | commandes foreground/background dans un worker (port de l'agent de nœud Cloud) |
-| `lib/harness-packs.ts` | le catalogue des harnais et `packMatches` |
+| `lib/agent-apps.ts` | les apps d'agent : `effectiveFeatures`, `resolveTaskAgentApp`, `resolveAgentOptions`, `taskHarness`, `LEGACY_CLI` |
 | `app/(app)/agents/page.tsx` | le poste de pilotage |
 | `components/task-cockpit.tsx` | une conversation — les données ; tout ce qui dessine vient du design system |
 | `components/task-machine-controls.tsx` | Park / Wake sous la section Machine du cockpit |

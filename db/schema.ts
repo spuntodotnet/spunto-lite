@@ -98,6 +98,11 @@ export type ProjectVersionConfig = {
    * never assume the key is there.
    */
   sharedVolumes?: SharedVolume[]
+  /**
+   * The agent apps whose feature the image carries (RFC 0048). Absent on snapshots taken before
+   * agent apps — read it as `?? []`.
+   */
+  agentAppIds?: string[]
 }
 
 // ─── Tables ──────────────────────────────────────────────────────────────────
@@ -119,18 +124,27 @@ export const projects = sqliteTable("projects", {
   // /workspace) — a dependency cache, a dataset, build artifacts. They outlive
   // the workers and are only destroyed with the project (see lib/shared-volumes.ts).
   sharedVolumes: text("shared_volumes", { mode: "json" }).$type<SharedVolume[]>().notNull().default(sql`'[]'`),
+  /**
+   * The agent apps this project's tasks may run under (RFC 0048, docs/taches.md), in order — the
+   * first is the default. Part of the image: each one's feature is baked in, so the list is
+   * versioned like the features are.
+   */
+  agentAppIds: text("agent_app_ids", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
   currentVersion: integer("current_version").notNull().default(1),
   favorite: integer("favorite", { mode: "boolean" }).notNull().default(false),
   // ── Delegated work (docs/tasks.md) ──
   // How a task runs in this project. Not part of a version snapshot: none of it goes into the
-  // image, and changing the harness must not force a rebuild. All empty = Claude Code, read live.
-  /** The harness. Reads the prompt on stdin — the only contract. Null = `claude -p`. */
+  // image (the harness itself is `agentAppIds`, above).
+  /**
+   * Deprecated with agent apps (RFC 0048): no longer written nor offered. Read only for a task
+   * delegated before them (`agentAppId` null), which finishes on the CLI it began on.
+   */
   taskAgentCommand: text("task_agent_command"),
-  /** How its stdout is read (`@spunto/build/agent-stream`). `claude-stream` = live and interactive. */
+  /** Deprecated, as above: the dialect of a task delegated before agent apps. */
   taskAgentProtocol: text("task_agent_protocol").notNull().default("claude-stream"),
-  /** How a one-shot session is resumed for a follow-up turn. Null = `claude --resume`. */
+  /** Deprecated, as above. */
   taskFollowUpCommand: text("task_follow_up_command"),
-  /** Run on a recycled worker after the checkout — reseed, reinstall. Null = nothing. */
+  /** Deprecated (Cloud removed it on 2026-10-26): no longer run nor offered. */
   taskResetCommand: text("task_reset_command"),
   /** What Accept runs. Exit 0 ⇒ done. Null = Accept just closes the task. */
   taskValidateCommand: text("task_validate_command"),
@@ -138,8 +152,10 @@ export const projects = sqliteTable("projects", {
   taskCancelCommand: text("task_cancel_command"),
   /** `keep` leaves the worker running during review, `stop` parks it. */
   taskReviewMode: text("task_review_mode").notNull().default("keep"),
-  /** Default model of a task. Free text: the valid ids belong to the harness. */
+  /** Deprecated: the single default model before agent apps, moved into `taskAgentModels`. */
   taskAgentModel: text("task_agent_model"),
+  /** The default model of a task, per agent app (`{ claude: "claude-opus-5-5" }`). */
+  taskAgentModels: text("task_agent_models", { mode: "json" }).$type<Record<string, string>>().notNull().default(sql`'{}'`),
   /** Appended to the standing instruction every task of this project is given. */
   taskAgentInstructions: text("task_agent_instructions"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
@@ -281,6 +297,13 @@ export const tasks = sqliteTable(
     branch: text("branch").notNull(),
     /** Resolved once at creation: the task's own choice, else the project's default. */
     model: text("model"),
+    /**
+     * The agent app the task runs under (RFC 0048), fixed at creation like the model. Null for a
+     * task delegated before agent apps: it finishes on the CLI it began on (`LEGACY_CLI`).
+     */
+    agentAppId: text("agent_app_id"),
+    /** The app's own parameters the task picked (`{ effort: "high" }`), checked against its catalog. */
+    agentOptions: text("agent_options", { mode: "json" }).$type<Record<string, string>>(),
     workerId: text("worker_id").references(() => workers.id, { onDelete: "set null" }),
     /** The agent session — the `task_commands` row of the current turn. */
     commandId: text("command_id"),
@@ -404,3 +427,102 @@ export type Task = typeof tasks.$inferSelect
 export type TaskCommand = typeof taskCommands.$inferSelect
 export type TaskEvent = typeof taskEvents.$inferSelect
 export type TaskAttachment = typeof taskAttachments.$inferSelect
+
+// ─── MCP servers (docs/serveurs-mcp.md) ──────────────────────────────────────
+
+/**
+ * Cloud's organization MCP servers (RFC 0049), for Lite's single user: declared once by URL,
+ * connected in OAuth from Settings, and reached by task sessions through Lite's gateway
+ * (`/api/mcp-gateway/<id>`) — the worker never holds the vendor's credential.
+ */
+export const mcpServers = sqliteTable("mcp_servers", {
+  id: text("id").primaryKey(),
+  /** What the agent calls it (`mcp__<name>__<tool>`): lowercase letters, digits and dashes. */
+  name: text("name").notNull().unique(),
+  /** The Streamable HTTP endpoint. */
+  url: text("url").notNull(),
+  /** Deduced at declaration: `none` (it answered), `oauth` (it challenged with metadata), `header` (given). */
+  auth: text("auth").$type<"none" | "oauth" | "header">().notNull(),
+  /** `default`: every project's tasks get it unless one turns it off. `optional`: the reverse. */
+  mode: text("mode").$type<"default" | "optional">().notNull().default("default"),
+  /** What OAuth discovery found (`McpOAuthMetadata`, lib/mcp-oauth.ts). Null unless `oauth`. */
+  oauth: text("oauth", { mode: "json" }).$type<Record<string, unknown> | null>(),
+  /** Registered dynamically on first Connect, or given at declaration. */
+  clientId: text("client_id"),
+  encryptedClientSecret: text("encrypted_client_secret"),
+  /** The static header of an `auth: header` server, name and value both encrypted. */
+  encryptedHeaderName: text("encrypted_header_name"),
+  encryptedHeaderValue: text("encrypted_header_value"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+})
+
+/** The OAuth connection of a server — one per server, since Lite has one user. */
+export const mcpConnections = sqliteTable("mcp_connections", {
+  serverId: text("server_id")
+    .primaryKey()
+    .references(() => mcpServers.id, { onDelete: "cascade" }),
+  encryptedAccessToken: text("encrypted_access_token").notNull(),
+  encryptedRefreshToken: text("encrypted_refresh_token"),
+  /** Null when the authorization server gave no `expires_in`. */
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
+  /** `needs_reauth` once a refresh was refused: only a new Connect helps. */
+  status: text("status").$type<"ok" | "needs_reauth">().notNull().default("ok"),
+  scope: text("scope"),
+  connectedAt: integer("connected_at", { mode: "timestamp_ms" }).notNull(),
+})
+
+/**
+ * A project's departure from a server's mode. A row exists only to differ from it: switching
+ * back to what the mode says deletes the row, so the project keeps following the server.
+ */
+export const projectMcpSettings = sqliteTable(
+  "project_mcp_settings",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    serverId: text("server_id")
+      .notNull()
+      .references(() => mcpServers.id, { onDelete: "cascade" }),
+    enabled: integer("enabled", { mode: "boolean" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [uniqueIndex("project_mcp_settings_project_server_idx").on(t.projectId, t.serverId)],
+)
+
+/** An authorization in progress (15 minutes): what the callback needs to finish it. */
+export const mcpOauthStates = sqliteTable("mcp_oauth_states", {
+  state: text("state").primaryKey(),
+  serverId: text("server_id")
+    .notNull()
+    .references(() => mcpServers.id, { onDelete: "cascade" }),
+  encryptedCodeVerifier: text("encrypted_code_verifier").notNull(),
+  /** The issuer the answer must come from (RFC 9207). */
+  issuer: text("issuer").notNull(),
+  /** The `redirect_uri` of the authorization request, sent again with the code. */
+  redirectUri: text("redirect_uri").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+})
+
+/**
+ * What a task session shows the gateway (`Authorization: Bearer lmg_…`) — Cloud's worker token,
+ * narrowed to one task. SHA-256 of the token, never the token. Minted at every session start;
+ * all of a task's tokens die with its row.
+ */
+export const mcpGatewayTokens = sqliteTable(
+  "mcp_gateway_tokens",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => tasks.id, { onDelete: "cascade" }),
+    projectId: text("project_id").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [index("mcp_gateway_tokens_task_idx").on(t.taskId)],
+)
+
+export type McpServer = typeof mcpServers.$inferSelect
+export type McpConnection = typeof mcpConnections.$inferSelect
+export type ProjectMcpSetting = typeof projectMcpSettings.$inferSelect

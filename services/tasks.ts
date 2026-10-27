@@ -1,8 +1,10 @@
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
+import { MCP_ENV } from "@spunto/build/agent-runners"
 import {
   applyProtocol,
   interruptLine,
   isInteractive,
+  sessionTitleRequestLine,
   userTurnLine,
   type AgentProtocol,
 } from "@spunto/build/agent-stream"
@@ -10,7 +12,8 @@ import { db } from "../db/index"
 import { projects, tasks, workers, type Project, type Task, type TaskCommand, type Worker } from "../db/schema"
 import { newId } from "../lib/id"
 import { shellQuote } from "../lib/shell"
-import { DEFAULT_AGENT_COMMAND, DEFAULT_FOLLOW_UP_COMMAND } from "../lib/harness-packs"
+import { internalUrl } from "../lib/agent"
+import { AgentAppChoiceError, protocolOf, resolveAgentOptions, resolveTaskAgentApp, taskAgentAppBlocker, taskHarness, type Harness } from "../lib/agent-apps"
 import type { CreateTaskInput } from "../lib/validation"
 import { getProjectRow } from "./projects"
 import { resolveSecretsForSpawn } from "./secrets"
@@ -19,6 +22,7 @@ import * as commands from "./task-commands"
 import * as events from "./task-events"
 import * as attachments from "./task-attachments"
 import type { InlineFile, StoredFile } from "./task-attachments"
+import { mintMcpGatewayToken, taskMcpServers } from "./mcp-servers"
 
 /**
  * Delegated work (docs/tasks.md): a prompt handed to an agent, in a worker of the project, on a
@@ -52,7 +56,6 @@ export const TASK_POOL_TAG = "task"
 
 const WORKER_READY_TIMEOUT_MS = 30 * 60 * 1000
 const WORKER_READY_POLL_MS = 3_000
-const RESET_TIMEOUT_MS = 15 * 60 * 1000
 const SESSION_TIMEOUT_MS = 6 * 60 * 60 * 1000
 /** A read path pulls a live interactive stream at most this often per task. */
 const LIVE_INGEST_MIN_INTERVAL_MS = 10_000
@@ -146,39 +149,6 @@ export function branchSetupError(branch: string, cwd: string, gitOutput: string)
   return `Could not create branch "${branch}" in ${cwd}: ${tail}`
 }
 
-/**
- * Run in each repository before a follow-up resumes the session: make sure the checkout is still
- * on the task's branch (Cloud #423). It normally is — a task holds its machine until it is
- * terminal — but a worker someone used by hand meanwhile may sit elsewhere, and resuming there
- * would have the agent's commits land on the wrong branch. A clean tree is put back on the
- * branch (the local one, else the one the task pushed); a tree with uncommitted changes on
- * another branch is **not** touched — those belong to someone — and the follow-up is refused.
- *
- * No `exit` anywhere (Cloud #424): commands run in a login shell (`bash -lc`), where `exit`
- * sources `~/.bash_logout` still under `set -e` — Debian's runs `clear_console`, which fails
- * without a console, so an `exit 0` came back as 1 and every follow-up was refused.
- */
-export function followUpCheckoutScript(branch: string): string {
-  const b = shellQuote(branch)
-  return `set -euo pipefail
-current=$(git rev-parse --abbrev-ref HEAD)
-if [ "$current" = ${b} ]; then
-  echo "$current"
-elif [ -n "$(git status --porcelain)" ]; then
-  echo "The checkout is on $current, not ${branch}, with uncommitted changes — not switching" >&2
-  git status --short >&2
-  false
-else
-  echo "The checkout is on $current — switching back to ${branch}"
-  if git show-ref --verify --quiet refs/heads/${branch}; then
-    git checkout --quiet ${b}
-  else
-    git fetch origin ${b} --quiet
-    git checkout --quiet -B ${b} FETCH_HEAD
-  fi
-  git rev-parse --abbrev-ref HEAD
-fi`
-}
 
 /** `--model <id>`, unless the command already names one. */
 export function applyModel(command: string, model?: string | null): string {
@@ -187,17 +157,13 @@ export function applyModel(command: string, model?: string | null): string {
 }
 
 /**
- * The command that runs the session. One-shot: the prompt goes through a heredoc whose delimiter
- * carries the task id. Interactive: nothing is piped — the turn is written into the live stdin.
+ * The command that runs the session — the harness's (`taskHarness`): an agent app's runner, or the
+ * CLI for a task delegated before agent apps. One-shot: the prompt goes through a heredoc whose
+ * delimiter carries the task id. Interactive: nothing is piped — the turn is written into the live
+ * stdin.
  */
-export function sessionCommand(
-  taskId: string,
-  prompt: string,
-  agentCommand?: string | null,
-  protocol: AgentProtocol = "none",
-  model?: string | null,
-): string {
-  const bin = applyModel(applyProtocol(agentCommand?.trim() || DEFAULT_AGENT_COMMAND, protocol), model)
+export function sessionCommand(taskId: string, prompt: string, agentCommand: string, protocol: AgentProtocol = "none", model?: string | null): string {
+  const bin = applyModel(applyProtocol(agentCommand, protocol), model)
   if (isInteractive(protocol)) return bin
   const delimiter = `SPUNTO_TASK_${taskId.toUpperCase()}`
   return `cat <<'${delimiter}' | ${bin}\n${prompt}\n${delimiter}\n`
@@ -316,6 +282,19 @@ export class TaskActionError extends Error {
 export function createTask(projectId: string, input: CreateTaskInput): Task {
   const project = getProjectRow(projectId)
   if (!project) throw new TaskActionError("Project not found", 404)
+  // The harness, then what it runs: a model id and a parameter only mean something to their app.
+  let agentAppId: string
+  let model: string | null
+  let agentOptions: Record<string, string>
+  try {
+    agentAppId = resolveTaskAgentApp(project, input.agentAppId)
+    // The project's default model is per app: the one of the harness this task runs under.
+    model = input.model?.trim() || project.taskAgentModels[agentAppId] || null
+    agentOptions = resolveAgentOptions(agentAppId, model, input.agentOptions)
+  } catch (err) {
+    if (err instanceof AgentAppChoiceError) throw new TaskActionError(err.message, 400)
+    throw err
+  }
   const id = newId()
   const now = new Date()
   const given = input.title?.trim()
@@ -328,9 +307,11 @@ export function createTask(projectId: string, input: CreateTaskInput): Task {
     prompt: input.prompt,
     baseBranch: input.baseBranch?.trim() || null,
     branch: taskBranchName(title, id),
-    // Resolved once, here: a follow-up resumes the same session, and switching models mid-way
-    // because the project's default moved would be a surprise, not a setting.
-    model: input.model?.trim() || project.taskAgentModel || null,
+    // Resolved once, here: a follow-up resumes the same session, and switching models — or
+    // harnesses — mid-way because the project's default moved would be a surprise, not a setting.
+    model,
+    agentAppId,
+    agentOptions: Object.keys(agentOptions).length ? agentOptions : null,
     workerId: null,
     commandId: null,
     state: "queued",
@@ -391,10 +372,6 @@ function projectOf(task: Task): Project {
   return project
 }
 
-function protocolOf(project: Project | undefined): AgentProtocol {
-  return (project?.taskAgentProtocol as AgentProtocol | undefined) ?? "none"
-}
-
 function repoPaths(project: Project): string[] {
   const paths = project.repositories.map((r) => `/workspace/${r.workspacePath}`)
   return paths.length > 0 ? paths : ["/workspace"]
@@ -406,6 +383,10 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
   const task = getRawTask(taskId)
   if (!task || task.state !== "queued") return
   const project = projectOf(task)
+  // Before a machine is allocated: the project may have dropped this task's harness since, and its
+  // image may no longer carry the runner's SDK.
+  const blocked = taskAgentAppBlocker(task, project)
+  if (blocked) throw new Error(blocked)
 
   let workerId: string
   let recycled: boolean
@@ -450,24 +431,8 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
     }
   }
 
-  if (recycled && project.taskResetCommand?.trim()) {
-    const result = await commands.runTaskCommand(task.id, workerId, {
-      command: project.taskResetCommand,
-      cwd: paths[0],
-      env: taskCommandEnv(task),
-      timeoutMs: RESET_TIMEOUT_MS,
-      label: "Reset",
-    })
-    if (result.status !== "succeeded") {
-      const output = (result.stderr || result.stdout || "").trim().slice(-500)
-      throw new Error(
-        `The project's reset command failed on recycled worker ${workerId}, so the task never started — ` +
-          `the machine is not in the state this project needs. (exit ${result.exitCode}: ${output})`,
-      )
-    }
-  }
-
-  const protocol = protocolOf(project)
+  const harness = taskHarness(task, project)
+  const protocol = harness.protocol
   const files = attachments.attachmentsByIds(task.id, fileIds)
   const attachmentPaths = await attachments.materialize(workerId, task.id, files)
   const prompt = sessionPrompt({
@@ -485,9 +450,9 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
     prompt,
     task.prompt,
     {
-      command: sessionCommand(task.id, prompt, project.taskAgentCommand, protocol, task.model),
+      command: sessionCommand(task.id, prompt, harness.command, protocol, task.model),
       cwd: paths[0],
-      env: taskCommandEnv(task),
+      env: sessionEnv(task, harness),
       timeoutMs: SESSION_TIMEOUT_MS,
       label: "Agent session",
     },
@@ -502,7 +467,24 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
     .where(and(eq(tasks.id, task.id), eq(tasks.state, "queued")))
     .run()
   if (changes === 0) await commands.cancelTaskCommand(session).catch(() => {})
-  else console.log(`[task:${task.id}] agent session ${session.id} started on ${task.branch}`)
+  else {
+    console.log(`[task:${task.id}] agent session ${session.id} started on ${task.branch}`)
+    await askSessionTitle(task, session, protocol, task.prompt)
+  }
+}
+
+/**
+ * Ask a freshly started session to name its conversation, while the platform is still the one
+ * naming this task. Claude Code stopped doing it unprompted on a stream-json session
+ * (`sessionTitleRequestLine`), so the question is put right behind the turn it should be about;
+ * the answer comes back on stdout and is ingested like any other line. Best effort: a task
+ * without a name keeps its placeholder.
+ */
+async function askSessionTitle(task: Task, session: TaskCommand, protocol: AgentProtocol, description: string): Promise<void> {
+  if (!task.autoTitle) return
+  const line = sessionTitleRequestLine(protocol, session.id, description)
+  if (!line) return
+  await commands.writeTaskStdin(session, line).catch((err) => console.warn(`[task:${task.id}] session title request failed: ${err}`))
 }
 
 /**
@@ -705,6 +687,29 @@ function taskCommandEnv(row: Task, sessionStatus?: string): Record<string, strin
   }
 }
 
+/**
+ * What a session's process gets on top of `taskCommandEnv`: its harness's (the runner's text and
+ * the task's parameters) and, when the project has MCP servers on, where to reach them (RFC 0049).
+ * The runner resolves each server's `path` on `SPUNTO_API_URL` and calls it with
+ * `SPUNTO_WORKER_TOKEN` — here a token minted for this task, which only the gateway accepts: the
+ * machine never holds a vendor's token. Resolved at every session start, so a server connected
+ * since the last turn is there at the next one. Best effort, like the secrets.
+ */
+function sessionEnv(row: Task, harness: Harness): Record<string, string> {
+  let mcp: Record<string, string> = {}
+  if (harness.appId) {
+    try {
+      const servers = taskMcpServers(row.projectId)
+      if (servers.length) {
+        mcp = { [MCP_ENV]: JSON.stringify(servers), SPUNTO_API_URL: internalUrl(), SPUNTO_WORKER_TOKEN: mintMcpGatewayToken(row.id, row.projectId) }
+      }
+    } catch (err) {
+      console.warn(`[task:${row.id}] could not resolve MCP servers: ${err}`)
+    }
+  }
+  return { ...taskCommandEnv(row), ...harness.env, ...mcp }
+}
+
 // ─── Read paths: derive, don't poll ───────────────────────────────────────────
 
 export type TaskQuery = { states?: TaskState[]; query?: string; projectId?: string; limit?: number; offset?: number }
@@ -782,7 +787,7 @@ async function refreshTask(row: Task): Promise<Task> {
   if (!row.workerId || !row.commandId) return row
 
   const project = getProjectRow(row.projectId)
-  const protocol = protocolOf(project)
+  const protocol = protocolOf(row, project)
 
   // The machine before the session. A session is a process in that container, and its command is
   // only reconciled against a `ready` worker — so a container that went down under a running agent
@@ -862,9 +867,12 @@ async function refreshTask(row: Task): Promise<Task> {
   return now ? { ...fresh, title: now.title, autoTitle: now.autoTitle, eventsSeq: now.eventsSeq } : fresh
 }
 
-/** Can a reply pick this conversation up again — is there a session id, or a follow-up of the project's own? */
-function canResumeSession(taskId: string, project: Project | undefined): boolean {
-  return events.latestSessionId(taskId) !== null || !!project?.taskFollowUpCommand?.trim()
+/**
+ * Can a reply pick this conversation up again — is there a session id? A task delegated before
+ * agent apps could also be resumed by a follow-up command of its project's own.
+ */
+function canResumeSession(task: Task, project: Project | undefined): boolean {
+  return events.latestSessionId(task.id) !== null || (!task.agentAppId && !!project?.taskFollowUpCommand?.trim())
 }
 
 /**
@@ -884,8 +892,8 @@ function machineDown(row: Task, worker: Worker | null, project: Project | undefi
   if (brokenSetup) return { state: "failed", note: `The task's machine failed while the agent was working${worker.setupStatus?.error ? ` (${worker.setupStatus.error})` : ""}.` }
   const why = worker.state === "error" ? `stopped on its own${worker.error ? ` (${worker.error})` : ""}` : "was stopped (the computer or Docker restarted, or it was stopped by hand)"
   // The turn had already ended: there was nothing left to interrupt — it is plainly in review.
-  if (isInteractive(protocolOf(project)) && events.hasEndedTurn(row.id)) return { state: "in-review", note: null }
-  if (!canResumeSession(row.id, project)) {
+  if (isInteractive(protocolOf(row, project)) && events.hasEndedTurn(row.id)) return { state: "in-review", note: null }
+  if (!canResumeSession(row, project)) {
     return { state: "failed", note: `The task's machine ${why} while the agent was working, and this session cannot be resumed.` }
   }
   return {
@@ -922,7 +930,7 @@ function sessionState(
       if (session.status !== "succeeded") console.log(`[task:${row.id}] session ${session.status} between turns — the last one ended, in review`)
       return { state: "in-review" }
     }
-    if (session.status === "lost" && canResumeSession(row.id, project)) {
+    if (session.status === "lost" && canResumeSession(row, project)) {
       return {
         state: "in-review",
         note: "The agent session was interrupted (its machine restarted) before it handed back. Reply to pick it up where it stopped.",
@@ -1260,7 +1268,7 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
   const current = getRawTask(taskId)
   if (!current) throw new TaskActionError("Not found", 404)
   const project = getProjectRow(current.projectId)
-  const protocol = protocolOf(project)
+  const protocol = protocolOf(current, project)
   const allowed: TaskState[] = isInteractive(protocol) ? ["running", "in-review"] : ["in-review"]
   const task = await requireTask(taskId, allowed)
   if (!task.workerId) throw new TaskActionError("This task has no worker to continue in", 409)
@@ -1278,12 +1286,12 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
   }
 
   if (task.state !== "in-review") throw new TaskActionError("The session is not listening right now — wait for it to hand back", 409)
-  if (!project?.taskFollowUpCommand?.trim() && !events.latestSessionId(taskId)) {
-    throw new TaskActionError(
-      "Nothing to resume: this task has no captured session id. Set the project's Session stream to a harness Spunto can read (so it learns the id), or configure a follow-up command of your own.",
-      400,
-    )
+  if (!canResumeSession(task, project ?? undefined)) {
+    throw new TaskActionError("Nothing to resume: this task's session never said its id, so there is no conversation to pick up again.", 400)
   }
+  // Same check as a first run: a harness the project dropped may no longer be in the image.
+  const blocked = project ? taskAgentAppBlocker(task, project) : null
+  if (blocked) throw new TaskActionError(blocked, 409)
   const claimed = claimPending(taskId, "replying")
   const stored = attachments.storeFiles(taskId, null, "user", files)
   void runJob(
@@ -1298,21 +1306,12 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
         // Drain the finished turn before the cursor moves to the next command's file.
         await events.ingestTaskEvents(row, protocol).catch(() => 0)
         const paths = await attachments.materialize(row.workerId, taskId, attachments.attachmentsByIds(taskId, stored.map((f) => f.id)))
-        // Back on the task's branch before anything is said to the agent (see the script).
-        // The same repositories the branch was set up in (`/workspace` for a project without any).
-        for (const cwd of repoPaths(proj)) {
-          const check = await commands.runTaskCommand(taskId, row.workerId, {
-            command: followUpCheckoutScript(row.branch),
-            cwd,
-            timeoutMs: 120_000,
-            label: "Branch check",
-          })
-          if (check.status !== "succeeded") {
-            throw new Error(`Could not resume on ${row.branch} in ${cwd}: ${(check.stderr || check.stdout || "").trim().slice(-500)}`)
-          }
-        }
+        // The checkout is not touched: the conversation resumes wherever the agent left the
+        // repository (Cloud #557 — the Branch check only ever refused agents that had switched
+        // branches themselves, in a machine they held alone).
         const sessionId = events.latestSessionId(taskId) ?? ""
         const turn = `${prompt}${attachments.attachmentPreamble(paths)}`
+        const harness = taskHarness(row, proj)
         const session = await startAgentSession(
           taskId,
           row.workerId,
@@ -1320,9 +1319,9 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
           turn,
           prompt,
           {
-            command: sessionCommand(taskId, turn, proj.taskFollowUpCommand?.trim() || DEFAULT_FOLLOW_UP_COMMAND, protocol, row.model),
+            command: sessionCommand(taskId, turn, harness.followUpCommand, protocol, row.model),
             cwd: repoPaths(proj)[0],
-            env: { ...taskCommandEnv(row), SPUNTO_TASK_SESSION_ID: sessionId },
+            env: { ...sessionEnv(row, harness), SPUNTO_TASK_SESSION_ID: sessionId },
             timeoutMs: SESSION_TIMEOUT_MS,
             label: "Follow-up",
           },
@@ -1332,6 +1331,8 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
           .set({ commandId: session.id, state: "running", error: null, completedAt: null, lastActivityAt: new Date() })
           .where(and(eq(tasks.id, taskId), eq(tasks.state, "in-review")))
           .run()
+        // A task whose earlier session never got a name is asked again; once named, a no-op.
+        await askSessionTitle(getRawTask(taskId) ?? row, session, protocol, row.prompt)
       } finally {
         clearPending(taskId, "replying")
       }
@@ -1351,7 +1352,7 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
 export async function interruptTask(taskId: string): Promise<Task> {
   const current = getRawTask(taskId)
   if (!current) throw new TaskActionError("Not found", 404)
-  const protocol = protocolOf(getProjectRow(current.projectId))
+  const protocol = protocolOf(current, getProjectRow(current.projectId))
   const line = interruptLine(protocol, `spunto-${Date.now()}`)
   if (!line) {
     throw new TaskActionError(
