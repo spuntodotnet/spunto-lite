@@ -19,7 +19,7 @@
 | Fichier projet portable (`kind: "spunto/project"`) | **oui, le format** | `@spunto/build/spec` |
 | Formulaire de composition d'un projet | **oui, le composant** | `@spunto/design-system/projects` |
 | Pastilles et barre de progression d'un worker | **oui**, et sans adaptateur depuis le renommage | `@spunto/design-system/workers` |
-| Écrans des tâches (liste, cockpit, flux, diff, composer, dialogue de délégation) | **oui, les composants** | `@spunto/design-system/tasks` |
+| Écrans des tâches (liste, cockpit, flux, diff, composer, composer de délégation) | **oui, les composants** | `@spunto/design-system/tasks` |
 | Lecture d'une session d'agent (adaptateurs, vocabulaire, usage, fenêtre de contexte) | **oui, le code** | `@spunto/build/agent-stream` |
 | Réglages de tâche d'un projet (`task*`) | **oui, les noms** — mêmes champs, même spec portable | `@spunto/build/spec` |
 | **Routes des tâches** | non — `/api/tasks/:id` à plat contre `/api/orgs/…/projects/…/tasks/:id` ; mêmes verbes, mêmes corps, mêmes formes de réponse | [`taches.md`](taches.md) |

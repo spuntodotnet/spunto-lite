@@ -5,7 +5,7 @@ import { useTaskListActions } from "@/hooks/use-task-actions"
 import { nextLink } from "@/lib/link-render"
 import type { Task } from "@/lib/task-cache"
 import type { Worker } from "@/lib/types"
-import { NewTaskButton } from "@/components/new-task-button"
+import { NewTaskButton } from "@/components/new-task"
 
 /**
  * A project's delegated work — what is running, and what is waiting for me? Drawn by the design

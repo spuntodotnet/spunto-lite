@@ -69,7 +69,7 @@ conversation est **demandé** à la session juste après le premier tour (`sessi
 Claude Code ne se nomme plus tout seul en `stream-json`.
 
 **Le modèle et les paramètres suivent le harnais.** Le projet a un modèle par défaut **par app**
-(`taskAgentModels`, vérifié contre le catalogue de l'app) ; le dialogue de délégation propose le
+(`taskAgentModels`, vérifié contre le catalogue de l'app) ; le composer de délégation propose le
 harnais en premier, puis les modèles de cette app et **une chip par paramètre qu'elle déclare**
 (Claude : `effort` ; Codex : `reasoningEffort` restreint par modèle, `webSearch`). La tâche fige
 son choix (`tasks.agent_app_id`, `tasks.agent_options`, vérifiés contre le catalogue), conservé à
@@ -262,6 +262,10 @@ reste à vérifier là-bas, selon ce que sa lecture de commande répond pour un 
 | `taskCancelCommand` | rien de plus que tuer la session | nettoyage lancé par Drop |
 | `taskReviewMode` | `keep` | `stop` : le conteneur est garé en revue (Park automatique), réveillé par Accept/Drop/une réponse/Wake |
 | `taskAgentInstructions` | rien | ajouté à la consigne de chaque tâche du projet |
+
+Ils se règlent dans le formulaire du projet, page **Agents** (section *Delegated work*, à côté des
+serveurs MCP), comme dans Spunto Cloud, et s'enregistrent avec le reste du formulaire, à la
+création comme à l'édition.
 
 `taskResetCommand` a disparu comme dans Cloud (2026-10-26) : la branche est déjà remise à plat
 (`reset --hard`, `clean -fd`) sur une machine recyclée.

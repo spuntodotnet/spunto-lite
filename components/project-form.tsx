@@ -2,17 +2,19 @@
 
 import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "@spunto/design-system"
 import {
+  DEFAULT_GROUPS,
   EDIT_SECTIONS,
   ProjectForm as DesignSystemProjectForm,
   type ProjectFeatureSelection,
   type ProjectFormCustomSection,
+  type ProjectFormGroup,
   type ProjectFormSectionId,
 } from "@spunto/design-system/projects"
 import type { DevcontainerFeatureEntry, VscodeExtensionEntry } from "@spunto/design-system/devcontainer"
-import { HardDrive, Plus, Trash2, Upload } from "lucide-react"
+import { Bot, HardDrive, Plug, Plus, Trash2, Upload, Workflow } from "lucide-react"
 import { api } from "@/lib/api"
 import { EXTENSION_ID_HINT, isExtensionId } from "@/lib/extensions"
 import {
@@ -37,8 +39,12 @@ import type {
   ExtensionLookup,
   ExtensionRegistryInfo,
   ExtensionSuggestion,
+  SecretMeta,
   SharedVolume,
 } from "@/lib/types"
+import { useAgentApps } from "@/components/new-task"
+import { ProjectTaskFields, taskSettingsSummary } from "@/components/project-task-fields"
+import { ProjectMcpServersSection, useProjectMcpServers } from "@/components/project-mcp-servers-section"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -55,44 +61,66 @@ const HIDDEN_SECTIONS: ProjectFormSectionId[] = ["ports", "prewarm"]
 /**
  * Lite's own section (see `SHARED_VOLUMES_SECTION`). An id the package doesn't
  * know is a first-class section since 0.15: it lands where this id lands in
- * `sections`, numbered and folded like the rest.
+ * `sections`, and on the page `GROUPS` puts it on.
  */
 const SHARED_VOLUMES: ProjectFormSectionId = "sharedVolumes"
+/** How the project's tasks run, and the MCP servers they get — Lite's sections, Cloud's ids. */
+const TASKS: ProjectFormSectionId = "tasks"
+const MCP: ProjectFormSectionId = "mcp-servers"
 
 /**
- * The three sections that decide what a worker *is* stay in front; everything
- * else — Lite's own section included — is tuning, and folds.
+ * The `sidebar` layout's pages — Spunto Cloud's, so that someone going from one to
+ * the other finds things in the same place: the package's pages, plus **Agents**
+ * (delegated work, MCP servers) before Secrets.
  *
- * Spelled out rather than "the package's default plus mine": its default is
- * internal, so a section it grows next would silently land in front of the fold
- * instead of inside it. Derived from `sections` here, so that can't happen.
+ * One difference, because Lite has something to put there: Cloud drops Runtime
+ * (it hides ports, prewarm and docker-in-docker), Lite keeps it for
+ * docker-in-docker and its shared volumes — both about what a running worker has
+ * around it. Ports and prewarm are listed there too but hidden (see
+ * `HIDDEN_SECTIONS`); a group drops whatever isn't shown.
  */
-const PRIMARY_SECTIONS: ProjectFormSectionId[] = ["identity", "image", "repositories"]
-const advancedFor = (sections: ProjectFormSectionId[]) => sections.filter((s) => !PRIMARY_SECTIONS.includes(s))
+const GROUPS: ProjectFormGroup[] = DEFAULT_GROUPS.flatMap((group): ProjectFormGroup[] =>
+  group.id === "runtime"
+    ? [
+        {
+          ...group,
+          hint: "What a running worker has around it: Docker inside, and the volumes every worker of the project shares.",
+          sections: [...group.sections, SHARED_VOLUMES],
+        },
+      ]
+    : group.id === "secrets"
+      ? [
+          {
+            id: "agents",
+            title: "Agents",
+            hint: "How this project's delegated tasks run, and the MCP servers its agents get.",
+            icon: Bot,
+            sections: [TASKS, MCP],
+          },
+          group,
+        ]
+      : [group],
+)
 
 /**
  * Creating shows the rest — including docker-in-docker, which the dashboard only
  * reveals when editing, because in Lite a project *is* its devcontainer spec and
  * there's no second screen to tune it on.
  */
-const CREATE_FORM_SECTIONS: ProjectFormSectionId[] = [
+const FORM_SECTIONS: ProjectFormSectionId[] = [
   ...EDIT_SECTIONS.filter((s) => !HIDDEN_SECTIONS.includes(s)),
   SHARED_VOLUMES,
+  TASKS,
+  MCP,
 ]
-/**
- * Editing also drops `secrets`: the edit page has its own `SecretsCard` below the
- * form, which lists and deletes what's already stored — things the form's
- * write-only list can't do.
- */
-const EDIT_FORM_SECTIONS: ProjectFormSectionId[] = CREATE_FORM_SECTIONS.filter((s) => s !== "secrets")
 
 /** What an import pre-filled, for the banner above the form. */
 type ImportedSpec = { name: string; secretNames: string[]; formKey: number }
 
 /**
  * The "compose a devcontainer" screen, which is `ProjectForm` from
- * `@spunto/design-system/projects` — the catalogs, the pickers, the numbered
- * sections, the advanced fold and the build manifest all come from the package.
+ * `@spunto/design-system/projects` — the catalogs, the pickers, the rail of pages
+ * (what each holds, what's still required) and the submit all come from the package.
  * What stays here is what the package deliberately doesn't know: Lite's routes,
  * its catalogs' data, its extension-registry endpoints, and the fields of its
  * project model the package's `ProjectFormValue` has no room for — appended
@@ -102,6 +130,7 @@ type ImportedSpec = { name: string; secretNames: string[]; formKey: number }
  */
 export function ProjectForm({ initial }: { initial?: Project }) {
   const router = useRouter()
+  const qc = useQueryClient()
   const editing = !!initial
 
   const [value, setValue] = useState<LiteFormValue>(() =>
@@ -127,6 +156,17 @@ export function ProjectForm({ initial }: { initial?: Project }) {
     staleTime: Infinity,
   })
   const registryName = registry?.name ?? "the extension registry"
+
+  const { data: agentApps = [] } = useAgentApps()
+  const { data: mcpServers } = useProjectMcpServers(initial?.id)
+  // The secrets already stored, write-only: the Secrets page lists their names, and a removal is
+  // applied on save (`removedSecretIds`), like the rest of the form.
+  const secretsKey = ["secrets", initial?.id]
+  const { data: savedSecrets = [] } = useQuery({
+    queryKey: secretsKey,
+    queryFn: () => api.get<SecretMeta[]>(`/api/projects/${initial!.id}/secrets`),
+    enabled: editing,
+  })
 
   // Ids the registry search handed back this session. Anything in here provably
   // exists, so it skips the verification below.
@@ -180,11 +220,9 @@ export function ProjectForm({ initial }: { initial?: Project }) {
 
   function applyImport(spec: ProjectExport) {
     setValue(fromExport(spec))
-    // `formKey` remounts the form (see `key` below). The advanced fold decides
-    // whether to open from the value it is *mounted* with — deliberately, so a
-    // later keystroke can't yank it open under the cursor — and an import arrives
-    // after mount. Without the remount, a spec bringing ports, prewarm or
-    // lifecycle commands would land entirely behind a shut drawer.
+    // `formKey` remounts the form (see `key` below): an import replaces the
+    // whole spec, so the review starts over on the first page rather than on
+    // whichever one was open, and the pickers drop the UI state of the old one.
     setImported((prev) => ({
       name: spec.project.name,
       secretNames: spec.project.secretNames,
@@ -230,6 +268,11 @@ export function ProjectForm({ initial }: { initial?: Project }) {
       const saved = editing
         ? await api.patch<Project>(`/api/projects/${initial!.id}`, payload)
         : await api.post<Project>("/api/projects", payload)
+      if (editing) {
+        for (const id of submitted.removedSecretIds) await api.del(`/api/projects/${initial!.id}/secrets/${id}`)
+        qc.invalidateQueries({ queryKey: secretsKey })
+      }
+      qc.setQueryData(["project", saved.id], saved)
       toast.success(editing ? "Project updated" : "Project created")
       router.push(`/projects/${saved.id}`)
       router.refresh()
@@ -292,12 +335,46 @@ export function ProjectForm({ initial }: { initial?: Project }) {
         value={value}
         onChange={handleChange}
         onSubmit={submit}
-        sections={editing ? EDIT_FORM_SECTIONS : CREATE_FORM_SECTIONS}
-        advancedSections={advancedFor(editing ? EDIT_FORM_SECTIONS : CREATE_FORM_SECTIONS)}
+        // A rail of pages, as on the dashboard's project screens: each entry says what it holds and
+        // what is still missing, and the submit sits under it.
+        layout="sidebar"
+        groups={GROUPS}
+        sections={FORM_SECTIONS}
+        savedSecrets={savedSecrets.map(({ id, name }) => ({ id, name }))}
         images={images}
         features={features}
         onSearchExtensions={searchExtensions}
-        customSections={[SHARED_VOLUMES_SECTION]}
+        customSections={[
+          SHARED_VOLUMES_SECTION,
+          {
+            id: TASKS,
+            title: "Delegated work",
+            hint: "How this project's tasks run and report back",
+            icon: Workflow,
+            accent: "run",
+            render: (v, patch) => <ProjectTaskFields value={v} onChange={patch} apps={agentApps} />,
+            summary: (v) => taskSettingsSummary(v, agentApps),
+          },
+          {
+            id: MCP,
+            title: "MCP servers",
+            hint: "The MCP servers this project's tasks get",
+            icon: Plug,
+            accent: "build",
+            render: () =>
+              initial ? (
+                <ProjectMcpServersSection projectId={initial.id} />
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  A new project gets the servers that are on by default. Choose them here once the project exists.
+                </p>
+              ),
+            summary: () => {
+              const on = mcpServers?.filter((s) => s.enabled).length ?? 0
+              return on ? `${on} server${on > 1 ? "s" : ""} on` : null
+            },
+          },
+        ]}
         // No `gitProviders`, and no `renderRepoField`: Lite reaches no forge, so it declares no
         // hosting provider. The package then draws the one control that matches — "Add Git URL",
         // a clone URL cloned with the mounted SSH key — and drops the repository picker and the
@@ -334,11 +411,11 @@ export function ProjectForm({ initial }: { initial?: Project }) {
  * `/workspace` — a pnpm store, `~/.m2`, a dataset, a build-artifact directory.
  *
  * A section of Lite's own, described here and drawn by the package's chrome
- * (`customSections`, since 0.15): it gets its place in `sections`, its number in
- * the shared sequence, its line in the closed fold's summary and its row in the
- * build manifest — none of which a hand-rolled card rendered after the form
- * could have. Generic over `LiteFormValue`, so `render`/`summary`/`manifestRow`
- * read `sharedVolumes` with no cast at the boundary.
+ * (`customSections`, since 0.15): it gets its place in `sections`, a page in
+ * the rail (`GROUPS`) and its line in that page's recap — none of which a
+ * hand-rolled card rendered after the form could have. Generic over
+ * `LiteFormValue`, so `render`/`summary` read `sharedVolumes` with no cast at
+ * the boundary.
  *
  * Deliberately no client-side path guard beyond the hint: the API is the one
  * that decides (`lib/shared-volumes.ts`), and duplicating the rule here is how
@@ -350,15 +427,12 @@ const SHARED_VOLUMES_SECTION: ProjectFormCustomSection<LiteFormValue> = {
   hint: "Persistent, mounted in every workspace of this project",
   icon: HardDrive,
   accent: "run",
-  // Both count what would actually be saved, not the rows on screen: a blank row
-  // the user just added is dropped on submit (see `isDeclaredVolume`).
+  // Counts what would actually be saved, not the rows on screen: a blank row the
+  // user just added is dropped on submit (see `isDeclaredVolume`). No
+  // `manifestRow`: the sidebar layout draws no manifest, the rail is the recap.
   summary: ({ sharedVolumes }) => {
     const n = sharedVolumes.filter(isDeclaredVolume).length
     return n ? `${n} shared volume${n > 1 ? "s" : ""}` : null
-  },
-  manifestRow: ({ sharedVolumes }) => {
-    const n = sharedVolumes.filter(isDeclaredVolume).length
-    return { label: "volumes", value: `${n}`, done: n > 0 }
   },
   render: (value, patch) => (
     <SharedVolumeRows

@@ -19,7 +19,7 @@ test("a project's workspaces and tasks are two tabs, and the tab survives a relo
     await tasks.click()
     await expect(page).toHaveURL(/\?tab=tasks$/)
     await expect(page.getByText("Tabbed task")).toBeVisible()
-    await expect(page.getByRole("button", { name: "New task" }).first()).toBeVisible()
+    await expect(page.getByRole("link", { name: "New task" }).first()).toBeVisible()
     await expect(page.getByRole("button", { name: "New workspace" })).toHaveCount(0)
 
     await page.reload()

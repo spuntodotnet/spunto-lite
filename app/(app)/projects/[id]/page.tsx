@@ -26,7 +26,7 @@ import { useTabParam } from "@/hooks/use-tab-param"
 import { BuildLogsSheet } from "@/components/build-logs-sheet"
 import { SpawnWorkerButton } from "@/components/spawn-worker-button"
 import { TaskPanel } from "@/components/task-panel"
-import { NewTaskButton } from "@/components/new-task-button"
+import { NewTaskButton } from "@/components/new-task"
 import { PROJECT_TASKS_KEY, taskPollInterval, type Task } from "@/lib/task-cache"
 
 /** The single build target of a Lite install — named once, shown on the row and in its log panel. */
