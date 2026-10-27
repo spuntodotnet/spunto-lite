@@ -14,6 +14,7 @@ import { AGENT_CONNECT_PATH, handleAgentAsset, handleAgentUpgrade } from "./lib/
 import "./services/workers"
 import { startTaskScheduler } from "./services/tasks"
 import { startSshAgentProxy } from "./lib/ssh-agent"
+import { joinSharedNetworkAsLite } from "./lib/docker"
 
 const dev = process.env.NODE_ENV !== "production"
 const app = next({ dev })
@@ -59,6 +60,9 @@ async function main() {
   startTaskScheduler()
   // The agent socket every worker mounts — what a passphrase-protected key signs through.
   startSshAgentProxy()
+  // Where agent workers dial us back (lib/agent.ts). A recreated Lite container (an update) is no
+  // longer on the shared network: the agents of the workers still running reconnect only once we are.
+  void joinSharedNetworkAsLite()
   await app.prepare()
 
   const onRequest = (req: IncomingMessage, res: ServerResponse) => {
