@@ -69,7 +69,7 @@ conversation est **demandé** à la session juste après le premier tour (`sessi
 Claude Code ne se nomme plus tout seul en `stream-json`.
 
 **Le modèle et les paramètres suivent le harnais.** Le projet a un modèle par défaut **par app**
-(`taskAgentModels`, vérifié contre le catalogue de l'app) ; le dialogue de délégation propose le
+(`taskAgentModels`, vérifié contre le catalogue de l'app) ; le composer de délégation propose le
 harnais en premier, puis les modèles de cette app et **une chip par paramètre qu'elle déclare**
 (Claude : `effort` ; Codex : `reasoningEffort` restreint par modèle, `webSearch`). La tâche fige
 son choix (`tasks.agent_app_id`, `tasks.agent_options`, vérifiés contre le catalogue), conservé à

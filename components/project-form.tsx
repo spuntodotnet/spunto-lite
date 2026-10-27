@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation"
 import { useQuery } from "@tanstack/react-query"
 import { toast } from "@spunto/design-system"
 import {
+  DEFAULT_GROUPS,
   EDIT_SECTIONS,
   ProjectForm as DesignSystemProjectForm,
   type ProjectFeatureSelection,
   type ProjectFormCustomSection,
+  type ProjectFormGroup,
   type ProjectFormSectionId,
 } from "@spunto/design-system/projects"
 import type { DevcontainerFeatureEntry, VscodeExtensionEntry } from "@spunto/design-system/devcontainer"
@@ -55,20 +57,26 @@ const HIDDEN_SECTIONS: ProjectFormSectionId[] = ["ports", "prewarm"]
 /**
  * Lite's own section (see `SHARED_VOLUMES_SECTION`). An id the package doesn't
  * know is a first-class section since 0.15: it lands where this id lands in
- * `sections`, numbered and folded like the rest.
+ * `sections`, and on the page `GROUPS` puts it on.
  */
 const SHARED_VOLUMES: ProjectFormSectionId = "sharedVolumes"
 
 /**
- * The three sections that decide what a worker *is* stay in front; everything
- * else — Lite's own section included — is tuning, and folds.
- *
- * Spelled out rather than "the package's default plus mine": its default is
- * internal, so a section it grows next would silently land in front of the fold
- * instead of inside it. Derived from `sections` here, so that can't happen.
+ * The `sidebar` layout's pages: the package's, with Lite's shared volumes on the
+ * Runtime page next to docker-in-docker — both are about what a running worker
+ * has around it. Ports and prewarm are listed there too but hidden (see
+ * `HIDDEN_SECTIONS`); a group drops whatever isn't shown, and a page left with
+ * nothing to show is dropped altogether.
  */
-const PRIMARY_SECTIONS: ProjectFormSectionId[] = ["identity", "image", "repositories"]
-const advancedFor = (sections: ProjectFormSectionId[]) => sections.filter((s) => !PRIMARY_SECTIONS.includes(s))
+const GROUPS: ProjectFormGroup[] = DEFAULT_GROUPS.map((group) =>
+  group.id === "runtime"
+    ? {
+        ...group,
+        hint: "What a running worker has around it: Docker inside, and the volumes every worker of the project shares.",
+        sections: [...group.sections, SHARED_VOLUMES],
+      }
+    : group,
+)
 
 /**
  * Creating shows the rest — including docker-in-docker, which the dashboard only
@@ -91,8 +99,8 @@ type ImportedSpec = { name: string; secretNames: string[]; formKey: number }
 
 /**
  * The "compose a devcontainer" screen, which is `ProjectForm` from
- * `@spunto/design-system/projects` — the catalogs, the pickers, the numbered
- * sections, the advanced fold and the build manifest all come from the package.
+ * `@spunto/design-system/projects` — the catalogs, the pickers, the rail of pages
+ * (what each holds, what's still required) and the submit all come from the package.
  * What stays here is what the package deliberately doesn't know: Lite's routes,
  * its catalogs' data, its extension-registry endpoints, and the fields of its
  * project model the package's `ProjectFormValue` has no room for — appended
@@ -180,11 +188,9 @@ export function ProjectForm({ initial }: { initial?: Project }) {
 
   function applyImport(spec: ProjectExport) {
     setValue(fromExport(spec))
-    // `formKey` remounts the form (see `key` below). The advanced fold decides
-    // whether to open from the value it is *mounted* with — deliberately, so a
-    // later keystroke can't yank it open under the cursor — and an import arrives
-    // after mount. Without the remount, a spec bringing ports, prewarm or
-    // lifecycle commands would land entirely behind a shut drawer.
+    // `formKey` remounts the form (see `key` below): an import replaces the
+    // whole spec, so the review starts over on the first page rather than on
+    // whichever one was open, and the pickers drop the UI state of the old one.
     setImported((prev) => ({
       name: spec.project.name,
       secretNames: spec.project.secretNames,
@@ -292,8 +298,11 @@ export function ProjectForm({ initial }: { initial?: Project }) {
         value={value}
         onChange={handleChange}
         onSubmit={submit}
+        // A rail of pages, as on the dashboard's project screens: each entry says what it holds and
+        // what is still missing, and the submit sits under it.
+        layout="sidebar"
+        groups={GROUPS}
         sections={editing ? EDIT_FORM_SECTIONS : CREATE_FORM_SECTIONS}
-        advancedSections={advancedFor(editing ? EDIT_FORM_SECTIONS : CREATE_FORM_SECTIONS)}
         images={images}
         features={features}
         onSearchExtensions={searchExtensions}
@@ -334,11 +343,11 @@ export function ProjectForm({ initial }: { initial?: Project }) {
  * `/workspace` — a pnpm store, `~/.m2`, a dataset, a build-artifact directory.
  *
  * A section of Lite's own, described here and drawn by the package's chrome
- * (`customSections`, since 0.15): it gets its place in `sections`, its number in
- * the shared sequence, its line in the closed fold's summary and its row in the
- * build manifest — none of which a hand-rolled card rendered after the form
- * could have. Generic over `LiteFormValue`, so `render`/`summary`/`manifestRow`
- * read `sharedVolumes` with no cast at the boundary.
+ * (`customSections`, since 0.15): it gets its place in `sections`, a page in
+ * the rail (`GROUPS`) and its line in that page's recap — none of which a
+ * hand-rolled card rendered after the form could have. Generic over
+ * `LiteFormValue`, so `render`/`summary` read `sharedVolumes` with no cast at
+ * the boundary.
  *
  * Deliberately no client-side path guard beyond the hint: the API is the one
  * that decides (`lib/shared-volumes.ts`), and duplicating the rule here is how
@@ -350,15 +359,12 @@ const SHARED_VOLUMES_SECTION: ProjectFormCustomSection<LiteFormValue> = {
   hint: "Persistent, mounted in every workspace of this project",
   icon: HardDrive,
   accent: "run",
-  // Both count what would actually be saved, not the rows on screen: a blank row
-  // the user just added is dropped on submit (see `isDeclaredVolume`).
+  // Counts what would actually be saved, not the rows on screen: a blank row the
+  // user just added is dropped on submit (see `isDeclaredVolume`). No
+  // `manifestRow`: the sidebar layout draws no manifest, the rail is the recap.
   summary: ({ sharedVolumes }) => {
     const n = sharedVolumes.filter(isDeclaredVolume).length
     return n ? `${n} shared volume${n > 1 ? "s" : ""}` : null
-  },
-  manifestRow: ({ sharedVolumes }) => {
-    const n = sharedVolumes.filter(isDeclaredVolume).length
-    return { label: "volumes", value: `${n}`, done: n > 0 }
   },
   render: (value, patch) => (
     <SharedVolumeRows

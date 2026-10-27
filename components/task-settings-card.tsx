@@ -7,7 +7,7 @@ import { CatalogCard, CatalogChip, CatalogMark, resolveStackMark } from "@spunto
 import { Bot, TerminalSquare } from "lucide-react"
 import { api } from "@/lib/api"
 import type { AgentAppInfo, Project } from "@/lib/types"
-import { useAgentApps } from "@/components/new-task-button"
+import { useAgentApps } from "@/components/new-task"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"

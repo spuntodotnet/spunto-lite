@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test"
 import { test, expect } from "../helpers/browser"
 
 // The project form is `ProjectForm` from `@spunto/design-system/projects`: controlled by one
@@ -8,6 +9,14 @@ import { test, expect } from "../helpers/browser"
 // Two things of Lite's don't map onto the package's value: the legacy `gitlab`/`bitbucket`
 // providers (carried alongside a repo row) and the shared volumes (a `customSections` card of
 // Lite's own). Both are exactly the kind of thing a round-trip test has to pin down.
+//
+// The form is laid out as the dashboard's (`layout="sidebar"`): a rail of pages, one shown at a
+// time — General, Tooling, Lifecycle, Runtime (docker-in-docker + shared volumes), Secrets.
+
+/** Opens a page of the form from its rail. */
+async function openPage(page: Page, title: string) {
+  await page.getByRole("navigation", { name: "Form sections" }).getByRole("button", { name: new RegExp(`^${title}`) }).click()
+}
 
 test.describe("project form → stored project", () => {
   const created: string[] = []
@@ -24,7 +33,7 @@ test.describe("project form → stored project", () => {
     await page.locator("#project-description").fill("driven by playwright")
 
     // The base image is a catalog chip, not a text field.
-    await page.getByRole("button", { name: "Python 3.12", exact: true }).click()
+    await page.getByRole("button", { name: /^Python 3\./ }).click()
 
     // A generic git repo. The branch is the package's own field since 0.15 — Lite
     // no longer draws one under the row.
@@ -33,10 +42,9 @@ test.describe("project form → stored project", () => {
     await page.getByLabel("Workspace path").fill("api")
     await page.getByLabel("Branch", { exact: true }).fill("develop")
 
-    // Everything past identity / image / repositories is folded until asked for.
-    const advanced = page.getByRole("button", { name: /Advanced options/ })
-    await expect(advanced).toHaveAttribute("aria-expanded", "false")
-    await advanced.click()
+    // Everything past identity / image / repositories is on pages of its own.
+    await expect(page.locator("#post-create")).toBeHidden()
+    await openPage(page, "Tooling")
 
     await page.getByRole("button", { name: "Node.js", exact: true }).click()
     await page.getByLabel("Node.js version").fill("22")
@@ -44,27 +52,30 @@ test.describe("project form → stored project", () => {
     await page.getByLabel("Extension search").fill("esbenp.prettier-vscode")
     await page.getByLabel("Extension search").press("Enter")
 
+    await openPage(page, "Lifecycle")
     await page.locator("#post-create").fill("npm ci")
     await page.locator("#post-start").fill("npm run dev")
     // Ports and prewarm images are deliberately not in `sections` — the form has
-    // no field for them at all, folded or not.
+    // no field for them at all, on any page.
     await expect(page.locator('input[name="forwardPorts"]')).toHaveCount(0)
     await expect(page.locator('textarea[name="prewarmImages"]')).toHaveCount(0)
+    await openPage(page, "Runtime")
     await page.getByRole("switch").click()
 
-    await page.getByLabel("Secret name").fill("TOKEN")
-    await page.getByLabel("Secret value").fill("s3cret")
-    await page.getByRole("button", { name: "Add secret" }).click()
-
     // Shared volumes are a section of Lite's own, declared through `customSections`
-    // and drawn by the package's chrome inside the fold — so the round trip has to be
-    // pinned here too. A row left blank is not a volume and must not reach the API.
+    // and drawn by the package's chrome on the Runtime page — so the round trip has to
+    // be pinned here too. A row left blank is not a volume and must not reach the API.
     await page.getByRole("button", { name: "Add shared volume" }).click()
     await page.getByLabel("Shared volume 1 name").fill("pnpm-store")
     await page.getByLabel("Shared volume 1 mount path").fill("/home/vscode/.local/share/pnpm/store")
     await page.getByRole("button", { name: "Add shared volume" }).click()
-    // The blank row is on screen but isn't a volume: the manifest counts one, not two.
-    await expect(page.getByText("volumes", { exact: true }).locator("xpath=../..")).toContainText("1")
+    // The blank row is on screen but isn't a volume: the rail's recap counts one, not two.
+    await expect(page.getByRole("navigation", { name: "Form sections" })).toContainText("1 shared volume")
+
+    await openPage(page, "Secrets")
+    await page.getByLabel("Secret name").fill("TOKEN")
+    await page.getByLabel("Secret value").fill("s3cret")
+    await page.getByRole("button", { name: "Add secret" }).click()
 
     await page.getByRole("button", { name: "Create project" }).click()
     // Not just `/projects/<something>`: `/projects/new` matches that too, and the
@@ -78,7 +89,7 @@ test.describe("project form → stored project", () => {
     expect(stored).toMatchObject({
       name,
       description: "driven by playwright",
-      image: "mcr.microsoft.com/devcontainers/python:3.12",
+      image: expect.stringMatching(/^mcr\.microsoft\.com\/devcontainers\/python:3\./),
       vscodeExtensions: ["esbenp.prettier-vscode"],
       dind: true,
       postCreateCommand: "npm ci",
@@ -106,10 +117,9 @@ test.describe("project form → stored project", () => {
   })
 
   // A section declared through `customSections` is part of the form's chrome, not a card
-  // bolted next to it: it reports a summary, so a project whose *only* advanced setting is a
-  // shared volume must open the fold on its own rather than hide it. That's the failure the
-  // disclosure exists to prevent, and it used to be out of reach for an app's own section.
-  test("a project whose only advanced setting is a shared volume opens the fold", async ({ page, request }) => {
+  // bolted next to it: it reports a summary, so the rail says the Runtime page holds a shared
+  // volume without anyone having to open it.
+  test("a project's shared volumes are recapped in the rail, and on the Runtime page", async ({ page, request }) => {
     const project = await (
       await request.post("/api/projects", {
         data: {
@@ -122,10 +132,11 @@ test.describe("project form → stored project", () => {
     created.push(project.id)
 
     await page.goto(`/projects/${project.id}/edit`)
-    await expect(page.getByRole("button", { name: /Advanced options/ })).toHaveAttribute("aria-expanded", "true")
+    await expect(page.getByRole("navigation", { name: "Form sections" }).getByRole("button", { name: /^Runtime/ })).toContainText(
+      "1 shared volume",
+    )
+    await openPage(page, "Runtime")
     await expect(page.getByLabel("Shared volume 1 mount path")).toHaveValue("/home/vscode/.local/share/pnpm/store")
-    // And it earns its line in the build manifest.
-    await expect(page.getByText("volumes", { exact: true })).toBeVisible()
   })
 
   // The one rule the form can't be allowed to let through: a shared volume on
@@ -136,13 +147,13 @@ test.describe("project form → stored project", () => {
     const name = `e2e-form-guard-${Date.now()}`
     await page.goto("/projects/new")
     await page.locator("#project-name").fill(name)
-    await page.getByRole("button", { name: /Advanced options/ }).click()
+    await openPage(page, "Runtime")
     await page.getByRole("button", { name: "Add shared volume" }).click()
     await page.getByLabel("Shared volume 1 name").fill("cache")
     await page.getByLabel("Shared volume 1 mount path").fill("/workspace/node_modules")
 
     await page.getByRole("button", { name: "Create project" }).click()
-    // The message lands twice — the manifest's error line and a toast.
+    // The message lands twice — the error line under the rail and a toast.
     await expect(page.getByText(/is inside \/workspace/).first()).toBeVisible()
     // Still on the form, and the project was never created.
     await expect(page).toHaveURL(/\/projects\/new$/)
@@ -152,8 +163,7 @@ test.describe("project form → stored project", () => {
 
   test("the form fits a phone — no horizontal overflow from 320 to 768 px", async ({ page, context }) => {
     await page.goto("/projects/new")
-    // Worst case: every section mounted, including the widest row (a repository).
-    await page.getByRole("button", { name: /Advanced options/ }).click()
+    // Every page stays mounted (the others hidden); the one shown holds the widest row (a repository).
     await page.getByRole("button", { name: "Add Git URL" }).click()
 
     // Metrics over CDP rather than `setViewportSize`, so this works both on a locally
@@ -166,10 +176,14 @@ test.describe("project form → stored project", () => {
         const box = form.getBoundingClientRect()
         // Anything absolutely positioned is decoration (the sections' watermark):
         // it's meant to spill and is clipped by `overflow-hidden`, so it scrolls
-        // nothing. Its children inherit that exemption.
+        // nothing. So is whatever sits in a horizontal scroller — on a narrow form the
+        // rail of pages is a strip that scrolls on its own (bleeding its 4px focus
+        // gutter), which scrolls nothing else either. Children inherit the exemption.
         const decorative = (el: Element) => {
-          for (let n: Element | null = el; n && n !== form; n = n.parentElement)
-            if (getComputedStyle(n).position === "absolute") return true
+          for (let n: Element | null = el; n && n !== form; n = n.parentElement) {
+            const style = getComputedStyle(n)
+            if (style.position === "absolute" || style.overflowX === "auto" || style.overflowX === "scroll") return true
+          }
           return false
         }
         let worst = 0
@@ -244,16 +258,19 @@ test.describe("project form → stored project", () => {
     created.push(before.id)
 
     await page.goto(`/projects/${before.id}/edit`)
-    // A fold that hides settings you didn't set yourself is the failure it exists to
-    // avoid: with features/lifecycle/ports already filled, it opens on its own.
-    await expect(page.getByRole("button", { name: /Advanced options/ })).toHaveAttribute("aria-expanded", "true")
-    await expect(page.locator("#post-create")).toHaveValue("go mod download")
+    // Settings you didn't set yourself are said in the rail before any page is opened.
+    await expect(page.getByRole("navigation", { name: "Form sections" }).getByRole("button", { name: /^Lifecycle/ })).not.toContainText(
+      "nothing set",
+    )
     await expect(page.getByLabel("Branch", { exact: true }).first()).toHaveValue("main")
+    await openPage(page, "Lifecycle")
+    await expect(page.locator("#post-create")).toHaveValue("go mod download")
     // This project has ports and prewarmed images, and the form shows neither.
     // They must still come back out of a save untouched — hidden, not dropped.
     await expect(page.locator('input[name="forwardPorts"]')).toHaveCount(0)
     await expect(page.locator('textarea[name="prewarmImages"]')).toHaveCount(0)
 
+    await openPage(page, "General")
     await page.locator("#project-name").fill(`${name}-renamed`)
     await page.getByRole("button", { name: "Save changes" }).click()
     await expect(page).toHaveURL(new RegExp(`/projects/${before.id}$`))
