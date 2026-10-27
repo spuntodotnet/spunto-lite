@@ -42,11 +42,12 @@ test.describe("build steps", () => {
       .toBeGreaterThan(0)
     const [build] = await (await request.get(`/api/projects/${projectId}/builds`)).json()
 
-    // Every image is made of the same two features before the project's own, so the plan is
-    // knowable before a single line is logged — which is the whole reason it is stored rather
+    // Every image is made of the same two features before the project's own, then the feature of
+    // each agent app the project allows (a new project starts on Claude Code) — so the plan is
+    // knowable before a single line is logged, which is the whole reason it is stored rather
     // than parsed back out of the log afterwards.
     const labels = build.steps.map((s: { label: string }) => s.label)
-    expect(labels).toEqual(["Bootstrap", "common-utils", "spunto-pack", "Finalizing image"])
+    expect(labels).toEqual(["Bootstrap", "common-utils", "spunto-pack", "spunto-agent-claude", "Finalizing image"])
 
     // The OCI refs ride along as the second line of each block: what a feature *is*, not just
     // that it ran.

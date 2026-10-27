@@ -19,6 +19,7 @@ import { MAX_READ_BYTES, readCommandOutput, runCommand } from "../lib/worker-com
 import { mayCarryFile, referenceAttachment, scanFileBlocks } from "../lib/task-attachments"
 import { resolveSecretsForSpawn } from "./secrets"
 import * as attachments from "./task-attachments"
+import { protocolOf } from "../lib/agent-apps"
 
 /**
  * Ingesting an agent session's stream into `task_events` (RFC 0020) — Spunto Cloud's
@@ -41,9 +42,10 @@ const MAX_CHUNKS_PER_PASS = 6
 const MAX_LINE_BYTES = 12 * 1024 * 1024
 const MAX_SOURCE_CHARS = 64 * 1024
 
-export function taskProtocol(projectId: string): AgentProtocol {
-  const p = db.select({ protocol: projects.taskAgentProtocol }).from(projects).where(eq(projects.id, projectId)).get()
-  return (p?.protocol as AgentProtocol | undefined) ?? "none"
+/** How a task's stream is read: its agent app's dialect, or — before agent apps — its project's. */
+export function taskProtocol(task: Pick<Task, "projectId" | "agentAppId">): AgentProtocol {
+  const p = db.select({ taskAgentProtocol: projects.taskAgentProtocol }).from(projects).where(eq(projects.id, task.projectId)).get()
+  return protocolOf(task, p)
 }
 
 /**
@@ -51,7 +53,7 @@ export function taskProtocol(projectId: string): AgentProtocol {
  * stored — 0 covers every uninteresting case (no protocol, no session, worker asleep, nothing new).
  */
 export async function ingestTaskEvents(task: Task, protocol?: AgentProtocol): Promise<number> {
-  const dialect = protocol ?? taskProtocol(task.projectId)
+  const dialect = protocol ?? taskProtocol(task)
   if (dialect === "none") return 0
   if (!task.workerId || !task.commandId) return 0
   const worker = db.select().from(workers).where(eq(workers.id, task.workerId)).get()

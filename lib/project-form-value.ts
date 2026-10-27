@@ -44,19 +44,13 @@ export interface LiteFormValue extends ProjectFormValue {
   taskSettings?: TaskSettings
 }
 
-/** The spec's task fields (`@spunto/build/spec`), as they ride from a file to a new project. */
+/**
+ * The spec's task fields (`@spunto/build/spec`), as they ride from a file to a new project. The
+ * spec still has the CLI-era fields (`taskAgentCommand`…) for older files; agent apps replaced
+ * them (RFC 0048), so an import leaves them behind.
+ */
 export type TaskSettings = Partial<
-  Pick<
-    ProjectExport["project"],
-    | "taskAgentCommand"
-    | "taskAgentProtocol"
-    | "taskFollowUpCommand"
-    | "taskResetCommand"
-    | "taskValidateCommand"
-    | "taskCancelCommand"
-    | "taskReviewMode"
-    | "taskAgentModel"
-  >
+  Pick<ProjectExport["project"], "taskValidateCommand" | "taskCancelCommand" | "taskReviewMode" | "taskAgentModels">
 >
 
 /** The body POSTed to /api/projects and PATCHed to /api/projects/:id. */
@@ -125,14 +119,10 @@ export function fromExport({ project: p }: ProjectExport): LiteFormValue {
     // A spec exported before shared volumes existed simply doesn't have the key.
     sharedVolumes: p.sharedVolumes ?? [],
     taskSettings: {
-      taskAgentCommand: p.taskAgentCommand,
-      taskAgentProtocol: p.taskAgentProtocol,
-      taskFollowUpCommand: p.taskFollowUpCommand,
-      taskResetCommand: p.taskResetCommand,
       taskValidateCommand: p.taskValidateCommand,
       taskCancelCommand: p.taskCancelCommand,
       taskReviewMode: p.taskReviewMode,
-      taskAgentModel: p.taskAgentModel,
+      taskAgentModels: p.taskAgentModels,
     },
   }
 }

@@ -1,26 +1,24 @@
 import { test, expect } from "@playwright/test"
 import type { APIRequestContext } from "@playwright/test"
 import { execFileSync } from "node:child_process"
-import { readFileSync } from "node:fs"
-import path from "node:path"
-import { fileURLToPath } from "node:url"
 
 // Delegated work end to end, on a real container, with no forge and no API key.
 //
 // The project fabricates its own git repository and a bare `origin` in its postCreate (the Cloud's
-// "Tasks Sandbox"), and its agent command is `fixtures/fake-claude.js` — a stand-in that speaks
-// Claude Code's interactive stream-json on stdin/stdout, commits and pushes for real, and names
-// the conversation in its transcript. So the default protocol (`claude-stream`) runs for real:
-// the FIFO stdin, `session.ended` as the hand-back, a live reply, an interrupt, the title probe.
+// "Tasks Sandbox"), and runs under the Claude Code app (RFC 0048): its feature is really baked into
+// the image (a private Node and the SDK under /opt/spunto/agents), and the session really runs a
+// runner file on that Node, written from the session's environment. Only the runner's *text* is a
+// stand-in — `fixtures/agent-runners/claude.mjs`, which speaks the runner contract on stdin and
+// Claude Code's stream-json on stdout, with no SDK and no API key. So the `claude-runner` dialect
+// runs for real: the FIFO stdin, `session.ended` as the hand-back, a live reply, an interrupt, the
+// title request, a resume.
 //
-// Opt-in, like the other specs that spawn workers: E2E_DOCKER=1.
+// Opt-in, like the other specs that spawn workers: E2E_DOCKER=1 — and Lite started with
+// AGENT_RUNNERS_DIR=e2e/fixtures/agent-runners.
 
 const RUN = process.env.E2E_DOCKER === "1"
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const FAKE = readFileSync(path.join(__dirname, "../fixtures/fake-claude.js")).toString("base64")
 
 const POST_CREATE = `set -e
-echo ${FAKE} | base64 -d > $HOME/fake-claude.js
 cd /workspace
 if [ ! -d .git ]; then
   git init -q -b main .
@@ -85,8 +83,7 @@ test.describe("task lifecycle on a real worker", () => {
         name: `e2e-tasks-lifecycle-${Date.now()}`,
         image: "node:24",
         postCreateCommand: POST_CREATE,
-        taskAgentCommand: "node $HOME/fake-claude.js",
-        taskFollowUpCommand: "node $HOME/fake-claude.js",
+        agentAppIds: ["claude"],
         taskValidateCommand: 'git log --oneline -1 "$SPUNTO_TASK_BRANCH" && echo accepted',
       },
     })
@@ -101,12 +98,14 @@ test.describe("task lifecycle on a real worker", () => {
 
   test("delegate → running → in review → reply live → interrupt → accept", async ({ request }) => {
     test.setTimeout(12 * 60_000)
-    const created = await (await request.post(`/api/projects/${projectId}/tasks`, { data: { prompt: "Write a note" } })).json()
+    const created = await (await request.post(`/api/projects/${projectId}/tasks`, { data: { prompt: "Write a note", agentOptions: { effort: "high" } } })).json()
+    expect(created.agentAppId).toBe("claude")
+    expect(created.agentOptions).toEqual({ effort: "high" })
 
     let t = await until(request, created.id, (x) => x.state === "in-review" || x.state === "failed", 10 * 60_000)
     expect(t.state, t.error ?? "").toBe("in-review")
     if (t.workerId) workers.add(t.workerId)
-    // The session named itself, out of band, from its transcript.
+    // The session named the conversation when asked, right behind its first turn.
     expect(t.title).toBe("Fake session names itself")
     expect(t.canResume).toBe(true)
 
@@ -115,6 +114,9 @@ test.describe("task lifecycle on a real worker", () => {
     expect(types[0]).toBe("message") // what the human said, written by the platform
     expect(types).toEqual(expect.arrayContaining(["session.started", "tool.call", "tool.result", "usage", "session.ended", "session.title"]))
     expect(log.usage?.turns).toBe(1)
+    // The task's parameters reached the runner, in its environment (the fake echoes them in init).
+    const raw = (await (await request.get(`/api/tasks/${created.id}/events?since=0&limit=20&source=true`)).json()) as { events: { type: string; source?: string }[] }
+    expect(raw.events.find((e) => e.type === "session.started")?.source).toContain('{\\"effort\\":\\"high\\"}')
 
     const diff = await (await request.get(`/api/tasks/${created.id}/diff`)).json()
     expect(diff.available).toBe(true)
@@ -154,7 +156,7 @@ test.describe("task lifecycle on a real worker", () => {
 
   test("the next task recycles the pool worker, parks it for review, wakes it for a reply, and drops", async ({ request }) => {
     test.setTimeout(8 * 60_000)
-    await request.patch(`/api/projects/${projectId}`, { data: { taskReviewMode: "stop", taskResetCommand: "echo reset-ran" } })
+    await request.patch(`/api/projects/${projectId}`, { data: { taskReviewMode: "stop" } })
     const created = await (await request.post(`/api/projects/${projectId}/tasks`, { data: { title: "Second", prompt: "Another note" } })).json()
     let t = await until(request, created.id, (x) => x.state === "in-review" || x.state === "failed", 5 * 60_000)
     expect(t.state, t.error ?? "").toBe("in-review")
@@ -162,8 +164,6 @@ test.describe("task lifecycle on a real worker", () => {
     // A typed title is never replaced by the session's.
     expect(t.title).toBe("Second")
 
-    const commands = await (await request.get(`/api/tasks/${created.id}/commands`)).json()
-    expect(commands.find((c: { label: string }) => c.label === "Reset")?.stdout).toContain("reset-ran")
     // Review mode `stop` parks the worker.
     await expect.poll(async () => (await (await request.get(`/api/workers/${t.workerId}`)).json()).state, { timeout: 60_000 }).toBe("stopped")
 
@@ -209,7 +209,7 @@ test.describe("task lifecycle on a real worker", () => {
     expect(t.machine).toBe("parked")
     expect(t.error).toContain("reply to wake it")
 
-    // A reply wakes the machine, checks the branch, and resumes the session.
+    // A reply wakes the machine and resumes the session, wherever the checkout is.
     const reply = await request.post(`/api/tasks/${created.id}/messages`, { data: { prompt: "Pick it up" } })
     expect(reply.status(), await reply.text()).toBe(202)
     t = await until(request, created.id, (x) => x.pendingAction === null, 3 * 60_000)
@@ -217,7 +217,8 @@ test.describe("task lifecycle on a real worker", () => {
     t = await until(request, created.id, (x) => x.state === "in-review", 60_000)
     expect(t.state).toBe("in-review")
     const labels = (await (await request.get(`/api/tasks/${created.id}/commands`)).json()).map((c: { label: string }) => c.label)
-    expect(labels).toEqual(expect.arrayContaining(["Branch check", "Follow-up"]))
+    expect(labels).toContain("Follow-up")
+    expect(labels).not.toContain("Branch check")
 
     // Park and Wake by hand.
     expect((await request.post(`/api/tasks/${created.id}/park`)).status()).toBe(200)

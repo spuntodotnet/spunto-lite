@@ -47,6 +47,7 @@ import { getSettings } from "./settings"
 import { isEncryptedPrivateKey, readHostPrivateKey } from "../lib/ssh-keys"
 import { WORKER_AGENT_SOCK, workerAgentBind, workerPublicKeyLine } from "../lib/ssh-agent"
 import { shellQuote } from "../lib/shell"
+import { effectiveFeatures } from "../lib/agent-apps"
 
 /**
  * The tag carries two versions: the project's, and the *recipe's* — what `buildImageScript` bakes
@@ -105,7 +106,7 @@ export async function ensureProjectImage(project: Project, version: number, forc
   // upfront cannot list something the script doesn't run. That is the whole reason it is returned
   // here rather than derived from `project.features` on the side.
   const { script, steps } = buildImageScript({
-    features: project.features,
+    features: effectiveFeatures(project),
     vscodeExtensions: project.vscodeExtensions,
     dind: project.dind,
     // Read from the environment here and passed in: the generator takes no configuration from
@@ -194,7 +195,7 @@ function buildFullScript(project: Project, workerId: string, branch?: string | n
   const { script: setup } = buildSetupScript({
     project: {
       repositories: project.repositories,
-      features: project.features,
+      features: effectiveFeatures(project),
       dind: project.dind,
       postCreateCommand: project.postCreateCommand,
     },
@@ -210,7 +211,7 @@ function buildFullScript(project: Project, workerId: string, branch?: string | n
   const { script: start } = buildStartScript({
     project: {
       name: project.name,
-      features: project.features,
+      features: effectiveFeatures(project),
       dind: project.dind,
       postCreateCommand: project.postCreateCommand,
       postStartCommand: project.postStartCommand,
@@ -542,7 +543,7 @@ async function planFor(workerId: string): Promise<ProjectPlan | null> {
   const project = getProjectRow(w.projectId)
   if (!project) return null
   const { script: bake } = buildImageScript({
-    features: project.features,
+    features: effectiveFeatures(project),
     vscodeExtensions: project.vscodeExtensions,
     dind: project.dind,
     extensionsGallery: EXTENSIONS_GALLERY_RAW,

@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ProjectForm } from "@/components/project-form"
 import { SecretsCard } from "@/components/secrets-card"
 import { TaskSettingsCard } from "@/components/task-settings-card"
+import { ProjectMcpServersCard } from "@/components/project-mcp-servers-card"
 import { DeleteProjectDialog } from "@/components/delete-project-dialog"
 
 export default function EditProjectPage({ params }: { params: Promise<{ id: string }> }) {
@@ -39,6 +40,7 @@ export default function EditProjectPage({ params }: { params: Promise<{ id: stri
           two columns (sections + build manifest) as soon as it has the room. */}
       <div className="mx-auto -mt-2 max-w-6xl space-y-4 px-6 pb-10">
         <TaskSettingsCard project={project} />
+        <ProjectMcpServersCard projectId={id} />
 
         <SecretsCard
           title="Project secrets"

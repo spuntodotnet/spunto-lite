@@ -14,6 +14,13 @@ import { AVAILABLE_FEATURES } from "../lib/catalogs"
 import { TASK_SETTING_KEYS, type CreateProjectInput, type TaskSettingsInput, type UpdateProjectInput } from "../lib/validation"
 import { buildProjectSpec, type ProjectExport } from "../lib/project-export"
 import { setProjectSecret, listProjectSecrets } from "./secrets"
+import { agentAppIdsError, projectModelsError } from "../lib/agent-apps"
+
+/** Why a project's harness settings cannot be saved — an unknown app, or a model of another app. */
+export class ProjectAgentAppsError extends Error {}
+
+/** The harness every new project starts with when it names none — so it can delegate right away. */
+const DEFAULT_AGENT_APP_IDS = ["claude"]
 
 /**
  * Resolves each feature id against the catalog, baking in its ociRef/localScript.
@@ -46,6 +53,7 @@ export function buildVersionConfig(p: Project): ProjectVersionConfig {
     repositories: p.repositories,
     forwardPorts: p.forwardPorts,
     sharedVolumes: p.sharedVolumes,
+    agentAppIds: p.agentAppIds,
   }
 }
 
@@ -54,8 +62,8 @@ function createVersion(projectId: string, version: number, config: ProjectVersio
 }
 
 /**
- * Public shape. Identical to the row today, and kept as its own name because the project row has
- * held a secret before and may again.
+ * Public shape: the row minus the columns agent apps deprecated (below). Kept as its own name
+ * because the project row has held a secret before and may again.
  *
  * It used to carry a `deployPublicKey`: a per-project key Lite generated to clone a raw-URL
  * repository. It went away with the provider notion — one mounted SSH key clones everything now
@@ -63,10 +71,18 @@ function createVersion(projectId: string, version: number, config: ProjectVersio
  * its public half, so there was no way to register it on a host, so it could only ever clone a
  * public repository. A private one failed with a key the user could not see, let alone install.
  */
-export type SerializedProject = Project
+export type SerializedProject = Omit<Project, (typeof DEPRECATED_COLUMNS)[number]>
+
+/**
+ * Columns agent apps replaced (RFC 0048): still on the row so that a task delegated before them can
+ * finish on the CLI it began on, but neither written nor exposed any more.
+ */
+const DEPRECATED_COLUMNS = ["taskAgentCommand", "taskAgentProtocol", "taskFollowUpCommand", "taskResetCommand", "taskAgentModel"] as const
 
 export function serializeProject(p: Project): SerializedProject {
-  return p
+  const out: Partial<Project> = { ...p }
+  for (const key of DEPRECATED_COLUMNS) delete out[key]
+  return out as SerializedProject
 }
 
 export function listProjects(): SerializedProject[] {
@@ -82,8 +98,22 @@ export function getProject(id: string): SerializedProject | undefined {
   return row ? serializeProject(row) : undefined
 }
 
+/** Throws `ProjectAgentAppsError` when the apps or their default models do not hold together. */
+function checkAgentApps(agentAppIds: string[], models: Record<string, string>): void {
+  const problem = agentAppIdsError(agentAppIds) ?? projectModelsError(agentAppIds, models)
+  if (problem) throw new ProjectAgentAppsError(problem)
+}
+
+/** Blank values mean "the harness's default", which is no entry at all. */
+function cleanModels(models: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!models) return undefined
+  return Object.fromEntries(Object.entries(models).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]))
+}
+
 export function createProject(input: CreateProjectInput): SerializedProject {
   const id = newId()
+  const agentAppIds = input.agentAppIds ?? DEFAULT_AGENT_APP_IDS
+  checkAgentApps(agentAppIds, cleanModels(input.taskAgentModels) ?? {})
   const row: Project = {
     id,
     name: input.name,
@@ -98,6 +128,7 @@ export function createProject(input: CreateProjectInput): SerializedProject {
     repositories: input.repositories,
     forwardPorts: input.forwardPorts,
     sharedVolumes: input.sharedVolumes,
+    agentAppIds,
     currentVersion: 1,
     favorite: false,
     taskAgentCommand: null,
@@ -108,6 +139,7 @@ export function createProject(input: CreateProjectInput): SerializedProject {
     taskCancelCommand: null,
     taskReviewMode: "keep",
     taskAgentModel: null,
+    taskAgentModels: {},
     taskAgentInstructions: null,
     ...taskSettingsColumns(input),
     createdAt: new Date(),
@@ -130,7 +162,8 @@ function taskSettingsColumns(input: TaskSettingsInput): Partial<Project> {
   for (const key of TASK_SETTING_KEYS) {
     const value = input[key]
     if (value === undefined) continue
-    if (key === "taskAgentProtocol" || key === "taskReviewMode") out[key] = value
+    if (key === "taskReviewMode") out[key] = value
+    else if (key === "taskAgentModels") out[key] = cleanModels(value as Record<string, string>)
     else out[key] = typeof value === "string" && value.trim() ? value.trim() : null
   }
   return out as Partial<Project>
@@ -140,8 +173,18 @@ export function updateProject(id: string, input: UpdateProjectInput): Serialized
   const existing = getProjectRow(id)
   if (!existing) return undefined
 
+  // The default models must name apps the project allows — the list as it will be after this patch.
+  if (input.agentAppIds || input.taskAgentModels) {
+    const appIds = input.agentAppIds ?? existing.agentAppIds
+    // An app switched off takes its default model with it, unless the patch sets the map itself.
+    const models = cleanModels(input.taskAgentModels) ?? Object.fromEntries(Object.entries(existing.taskAgentModels).filter(([k]) => appIds.includes(k)))
+    checkAgentApps(appIds, models)
+    if (!input.taskAgentModels) input = { ...input, taskAgentModels: models }
+  }
+
   // Task settings live beside the version history, not in it: none of them goes into the image,
-  // so changing the harness must not mint a version (and mark every worker out of date).
+  // so changing a model or an instruction must not mint a version (and mark every worker out of
+  // date). The harness list does go into the image (`agentAppIds`), and is versioned below.
   const taskSettings = taskSettingsColumns(input)
   if (Object.keys(taskSettings).length > 0) db.update(projects).set(taskSettings).where(eq(projects.id, id)).run()
   const buildKeys = Object.keys(input).filter(
@@ -165,6 +208,7 @@ export function updateProject(id: string, input: UpdateProjectInput): Serialized
     repositories: input.repositories ?? existing.repositories,
     forwardPorts: input.forwardPorts ?? existing.forwardPorts,
     sharedVolumes: input.sharedVolumes ?? existing.sharedVolumes,
+    agentAppIds: input.agentAppIds ?? existing.agentAppIds,
     currentVersion: existing.currentVersion + 1,
   }
 
@@ -182,6 +226,7 @@ export function updateProject(id: string, input: UpdateProjectInput): Serialized
       repositories: merged.repositories,
       forwardPorts: merged.forwardPorts,
       sharedVolumes: merged.sharedVolumes,
+      agentAppIds: merged.agentAppIds,
       currentVersion: merged.currentVersion,
     })
     .where(eq(projects.id, id))
@@ -258,17 +303,13 @@ export function exportProject(id: string): ProjectExport | undefined {
     // The *declaration* travels — a name and a mount path, no data and nothing
     // sensitive. The volume itself is per-instance and created on first spawn.
     sharedVolumes: p.sharedVolumes,
-    // How delegated work runs here — the spec's own fields, shared with Spunto Cloud, so the
-    // harness travels with the environment it runs in. Defaults are left out like every other
-    // unset field. (`taskAgentInstructions` has no field in the spec yet, so it stays behind.)
-    taskAgentCommand: p.taskAgentCommand ?? undefined,
-    taskAgentProtocol: p.taskAgentProtocol as ProjectExport["project"]["taskAgentProtocol"],
-    taskFollowUpCommand: p.taskFollowUpCommand ?? undefined,
-    taskResetCommand: p.taskResetCommand ?? undefined,
+    // How delegated work runs here — the spec's own fields, shared with Spunto Cloud. Defaults are
+    // left out like every other unset field. The spec has no field for the agent apps themselves
+    // (Cloud's export leaves them out too): a project made from the file starts on Claude Code.
     taskValidateCommand: p.taskValidateCommand ?? undefined,
     taskCancelCommand: p.taskCancelCommand ?? undefined,
     taskReviewMode: p.taskReviewMode as ProjectExport["project"]["taskReviewMode"],
-    taskAgentModel: p.taskAgentModel ?? undefined,
+    taskAgentModels: Object.keys(p.taskAgentModels).length ? p.taskAgentModels : undefined,
     secretNames: listProjectSecrets(id).map((s) => s.name),
   })
 }
@@ -310,6 +351,8 @@ export function restoreVersion(projectId: string, version: number): SerializedPr
       forwardPorts: c.forwardPorts,
       // Snapshots taken before shared volumes existed simply don't have the key.
       sharedVolumes: c.sharedVolumes ?? [],
+      // Snapshots taken before agent apps: the image had none injected.
+      agentAppIds: c.agentAppIds ?? [],
       currentVersion: newVersion,
     })
     .where(eq(projects.id, projectId))

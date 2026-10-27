@@ -1,5 +1,4 @@
 import { z } from "zod"
-import { AGENT_PROTOCOLS } from "@spunto/build/agent-stream"
 import { EXTENSION_ID_HINT, isExtensionId } from "./extensions"
 import {
   SHARED_VOLUME_NAME_HINT,
@@ -79,20 +78,22 @@ export const FeatureInputSchema = z.object({
 })
 
 /**
- * How delegated work runs in a project (docs/tasks.md § "Ce que le projet décide"). Every field
- * accepts `null` or an empty string to mean "back to the default", which is the harness Spunto
- * reads best: Claude Code, interactive. Same names as Spunto Cloud's project fields and as the
- * portable spec (`@spunto/build/spec`), so an exported project carries them across.
+ * How delegated work runs in a project (docs/taches.md § "Réglages du projet"). Every field
+ * accepts `null` or an empty string to mean "back to the default". Same names as Spunto Cloud's
+ * project fields and as the portable spec (`@spunto/build/spec`), so an exported project carries
+ * them across.
+ *
+ * The harness itself is not here: it is `agentAppIds` (RFC 0048), which goes into the image. The
+ * CLI-era fields (`taskAgentCommand`, `taskAgentProtocol`, `taskFollowUpCommand`, and
+ * `taskResetCommand`) are gone with it — an older client or file that still sends them has them
+ * dropped by the parse, like any unknown key.
  */
 export const TaskSettingsSchema = z.object({
-  taskAgentCommand: z.string().max(2_000).nullable().optional(),
-  taskAgentProtocol: z.enum(AGENT_PROTOCOLS).optional(),
-  taskFollowUpCommand: z.string().max(2_000).nullable().optional(),
-  taskResetCommand: z.string().max(10_000).nullable().optional(),
   taskValidateCommand: z.string().max(10_000).nullable().optional(),
   taskCancelCommand: z.string().max(10_000).nullable().optional(),
   taskReviewMode: z.enum(["keep", "stop"]).optional(),
-  taskAgentModel: z.string().max(200).nullable().optional(),
+  /** The default model per agent app, `{ claude: "claude-opus-5-5" }`. Replaces the whole map. */
+  taskAgentModels: z.record(z.string(), z.string().trim().max(200)).optional(),
   taskAgentInstructions: z.string().max(10_000).nullable().optional(),
 })
 
@@ -115,6 +116,11 @@ export const CreateProjectSchema = z.object({
   forwardPorts: z.array(z.number().int().min(1).max(65535)).default([]),
   sharedVolumes: SharedVolumesSchema.default([]),
   secrets: z.array(SecretInputSchema).optional(),
+  /**
+   * The agent apps this project's tasks may run under, the first being the default (RFC 0048).
+   * Absent = Claude Code, so that a new project can delegate out of the box.
+   */
+  agentAppIds: z.array(z.string().min(1).max(100)).max(10).optional(),
 }).extend(TaskSettingsSchema.shape)
 
 /**
@@ -140,6 +146,8 @@ export const UpdateProjectSchema = z.object({
   forwardPorts: z.array(z.number().int().min(1).max(65535)).optional(),
   sharedVolumes: SharedVolumesSchema.optional(),
   secrets: z.array(SecretInputSchema).optional(),
+  /** Replaces the whole list. Part of the image: a change mints a version, like features. */
+  agentAppIds: z.array(z.string().min(1).max(100)).max(10).optional(),
 }).extend(TaskSettingsSchema.shape)
 
 // ─── Shared services ──────────────────────────────────────────────────────────
@@ -269,6 +277,10 @@ export const CreateTaskSchema = z.object({
   files: z.array(TaskFileInputSchema).max(10).optional(),
   baseBranch: z.string().trim().max(255).refine((v) => v === "" || isValidGitRef(v), "Invalid git branch name").optional(),
   model: z.string().trim().max(200).optional(),
+  /** The harness picked — one of the project's `agentAppIds`. Absent = the project's default. */
+  agentAppId: z.string().max(100).nullable().optional(),
+  /** The app's own parameters (`{ effort: "high" }`), checked against its catalog. */
+  agentOptions: z.record(z.string(), z.string().max(200)).nullable().optional(),
 })
 
 export const TaskMessageSchema = z.object({

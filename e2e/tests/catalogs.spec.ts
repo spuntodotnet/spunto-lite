@@ -14,7 +14,7 @@ test.describe("catalog endpoints", () => {
       expect(typeof img.image).toBe("string")
     }
     // A known catalog entry the other tests rely on.
-    expect(images.map((i: { id: string }) => i.id)).toContain("typescript-node-20")
+    expect(images.map((i: { id: string }) => i.id)).toContain("typescript-node-24")
   })
 
   test("GET /api/templates lists project templates", async ({ request }) => {

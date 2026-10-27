@@ -105,3 +105,11 @@ export const WORKER_DATA_PLANE: "agent" | "exec" = process.env.WORKER_DATA_PLANE
  * sees it (`host.docker.internal`, which every worker container maps to the host gateway).
  */
 export const LITE_INTERNAL_URL = (process.env.LITE_INTERNAL_URL?.trim() || "").replace(/\/+$/, "")
+
+/**
+ * A directory of agent runners (`<harness>.mjs`) to start sessions with **instead of** the ones
+ * `@spunto/build` ships (lib/agent-apps.ts). For developing a runner, and for the e2e lifecycle
+ * test, whose fake runner needs no SDK and no API key. A harness with no file there, and an unset
+ * variable (the default), run the package's.
+ */
+export const AGENT_RUNNERS_DIR = process.env.AGENT_RUNNERS_DIR?.trim() || ""
