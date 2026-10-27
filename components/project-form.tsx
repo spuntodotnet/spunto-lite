@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "@spunto/design-system"
 import {
   DEFAULT_GROUPS,
@@ -14,7 +14,7 @@ import {
   type ProjectFormSectionId,
 } from "@spunto/design-system/projects"
 import type { DevcontainerFeatureEntry, VscodeExtensionEntry } from "@spunto/design-system/devcontainer"
-import { HardDrive, Plus, Trash2, Upload } from "lucide-react"
+import { Bot, HardDrive, Plug, Plus, Trash2, Upload, Workflow } from "lucide-react"
 import { api } from "@/lib/api"
 import { EXTENSION_ID_HINT, isExtensionId } from "@/lib/extensions"
 import {
@@ -39,8 +39,12 @@ import type {
   ExtensionLookup,
   ExtensionRegistryInfo,
   ExtensionSuggestion,
+  SecretMeta,
   SharedVolume,
 } from "@/lib/types"
+import { useAgentApps } from "@/components/new-task"
+import { ProjectTaskFields, taskSettingsSummary } from "@/components/project-task-fields"
+import { ProjectMcpServersSection, useProjectMcpServers } from "@/components/project-mcp-servers-section"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -60,22 +64,42 @@ const HIDDEN_SECTIONS: ProjectFormSectionId[] = ["ports", "prewarm"]
  * `sections`, and on the page `GROUPS` puts it on.
  */
 const SHARED_VOLUMES: ProjectFormSectionId = "sharedVolumes"
+/** How the project's tasks run, and the MCP servers they get — Lite's sections, Cloud's ids. */
+const TASKS: ProjectFormSectionId = "tasks"
+const MCP: ProjectFormSectionId = "mcp-servers"
 
 /**
- * The `sidebar` layout's pages: the package's, with Lite's shared volumes on the
- * Runtime page next to docker-in-docker — both are about what a running worker
- * has around it. Ports and prewarm are listed there too but hidden (see
- * `HIDDEN_SECTIONS`); a group drops whatever isn't shown, and a page left with
- * nothing to show is dropped altogether.
+ * The `sidebar` layout's pages — Spunto Cloud's, so that someone going from one to
+ * the other finds things in the same place: the package's pages, plus **Agents**
+ * (delegated work, MCP servers) before Secrets.
+ *
+ * One difference, because Lite has something to put there: Cloud drops Runtime
+ * (it hides ports, prewarm and docker-in-docker), Lite keeps it for
+ * docker-in-docker and its shared volumes — both about what a running worker has
+ * around it. Ports and prewarm are listed there too but hidden (see
+ * `HIDDEN_SECTIONS`); a group drops whatever isn't shown.
  */
-const GROUPS: ProjectFormGroup[] = DEFAULT_GROUPS.map((group) =>
+const GROUPS: ProjectFormGroup[] = DEFAULT_GROUPS.flatMap((group): ProjectFormGroup[] =>
   group.id === "runtime"
-    ? {
-        ...group,
-        hint: "What a running worker has around it: Docker inside, and the volumes every worker of the project shares.",
-        sections: [...group.sections, SHARED_VOLUMES],
-      }
-    : group,
+    ? [
+        {
+          ...group,
+          hint: "What a running worker has around it: Docker inside, and the volumes every worker of the project shares.",
+          sections: [...group.sections, SHARED_VOLUMES],
+        },
+      ]
+    : group.id === "secrets"
+      ? [
+          {
+            id: "agents",
+            title: "Agents",
+            hint: "How this project's delegated tasks run, and the MCP servers its agents get.",
+            icon: Bot,
+            sections: [TASKS, MCP],
+          },
+          group,
+        ]
+      : [group],
 )
 
 /**
@@ -83,16 +107,12 @@ const GROUPS: ProjectFormGroup[] = DEFAULT_GROUPS.map((group) =>
  * reveals when editing, because in Lite a project *is* its devcontainer spec and
  * there's no second screen to tune it on.
  */
-const CREATE_FORM_SECTIONS: ProjectFormSectionId[] = [
+const FORM_SECTIONS: ProjectFormSectionId[] = [
   ...EDIT_SECTIONS.filter((s) => !HIDDEN_SECTIONS.includes(s)),
   SHARED_VOLUMES,
+  TASKS,
+  MCP,
 ]
-/**
- * Editing also drops `secrets`: the edit page has its own `SecretsCard` below the
- * form, which lists and deletes what's already stored — things the form's
- * write-only list can't do.
- */
-const EDIT_FORM_SECTIONS: ProjectFormSectionId[] = CREATE_FORM_SECTIONS.filter((s) => s !== "secrets")
 
 /** What an import pre-filled, for the banner above the form. */
 type ImportedSpec = { name: string; secretNames: string[]; formKey: number }
@@ -110,6 +130,7 @@ type ImportedSpec = { name: string; secretNames: string[]; formKey: number }
  */
 export function ProjectForm({ initial }: { initial?: Project }) {
   const router = useRouter()
+  const qc = useQueryClient()
   const editing = !!initial
 
   const [value, setValue] = useState<LiteFormValue>(() =>
@@ -135,6 +156,17 @@ export function ProjectForm({ initial }: { initial?: Project }) {
     staleTime: Infinity,
   })
   const registryName = registry?.name ?? "the extension registry"
+
+  const { data: agentApps = [] } = useAgentApps()
+  const { data: mcpServers } = useProjectMcpServers(initial?.id)
+  // The secrets already stored, write-only: the Secrets page lists their names, and a removal is
+  // applied on save (`removedSecretIds`), like the rest of the form.
+  const secretsKey = ["secrets", initial?.id]
+  const { data: savedSecrets = [] } = useQuery({
+    queryKey: secretsKey,
+    queryFn: () => api.get<SecretMeta[]>(`/api/projects/${initial!.id}/secrets`),
+    enabled: editing,
+  })
 
   // Ids the registry search handed back this session. Anything in here provably
   // exists, so it skips the verification below.
@@ -236,6 +268,11 @@ export function ProjectForm({ initial }: { initial?: Project }) {
       const saved = editing
         ? await api.patch<Project>(`/api/projects/${initial!.id}`, payload)
         : await api.post<Project>("/api/projects", payload)
+      if (editing) {
+        for (const id of submitted.removedSecretIds) await api.del(`/api/projects/${initial!.id}/secrets/${id}`)
+        qc.invalidateQueries({ queryKey: secretsKey })
+      }
+      qc.setQueryData(["project", saved.id], saved)
       toast.success(editing ? "Project updated" : "Project created")
       router.push(`/projects/${saved.id}`)
       router.refresh()
@@ -302,11 +339,42 @@ export function ProjectForm({ initial }: { initial?: Project }) {
         // what is still missing, and the submit sits under it.
         layout="sidebar"
         groups={GROUPS}
-        sections={editing ? EDIT_FORM_SECTIONS : CREATE_FORM_SECTIONS}
+        sections={FORM_SECTIONS}
+        savedSecrets={savedSecrets.map(({ id, name }) => ({ id, name }))}
         images={images}
         features={features}
         onSearchExtensions={searchExtensions}
-        customSections={[SHARED_VOLUMES_SECTION]}
+        customSections={[
+          SHARED_VOLUMES_SECTION,
+          {
+            id: TASKS,
+            title: "Delegated work",
+            hint: "How this project's tasks run and report back",
+            icon: Workflow,
+            accent: "run",
+            render: (v, patch) => <ProjectTaskFields value={v} onChange={patch} apps={agentApps} />,
+            summary: (v) => taskSettingsSummary(v, agentApps),
+          },
+          {
+            id: MCP,
+            title: "MCP servers",
+            hint: "The MCP servers this project's tasks get",
+            icon: Plug,
+            accent: "build",
+            render: () =>
+              initial ? (
+                <ProjectMcpServersSection projectId={initial.id} />
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  A new project gets the servers that are on by default. Choose them here once the project exists.
+                </p>
+              ),
+            summary: () => {
+              const on = mcpServers?.filter((s) => s.enabled).length ?? 0
+              return on ? `${on} server${on > 1 ? "s" : ""} on` : null
+            },
+          },
+        ]}
         // No `gitProviders`, and no `renderRepoField`: Lite reaches no forge, so it declares no
         // hosting provider. The package then draws the one control that matches — "Add Git URL",
         // a clone URL cloned with the mounted SSH key — and drops the repository picker and the

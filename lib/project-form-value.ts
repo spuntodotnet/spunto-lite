@@ -35,23 +35,35 @@ export const DEFAULT_IMAGE = "mcr.microsoft.com/devcontainers/javascript-node:20
  * infers from `value`) makes every callback, including a custom section's
  * `render`, speak this type with no cast at the boundary.
  */
-export interface LiteFormValue extends ProjectFormValue {
+export interface LiteFormValue extends ProjectFormValue, TaskSettings {
   sharedVolumes: SharedVolume[]
-  /**
-   * How delegated work runs, when an imported spec said so. Not drawn by the form — the edit
-   * page has its own card for it (`TaskSettingsCard`) — only carried from the file to the POST.
-   */
-  taskSettings?: TaskSettings
 }
 
 /**
- * The spec's task fields (`@spunto/build/spec`), as they ride from a file to a new project. The
- * spec still has the CLI-era fields (`taskAgentCommand`…) for older files; agent apps replaced
- * them (RFC 0048), so an import leaves them behind.
+ * How delegated work runs (docs/taches.md § "Réglages du projet") — the form's "Delegated work"
+ * section, on its Agents page, as in Spunto Cloud. Strings rather than nulls: a field emptied in
+ * the form is sent as "", which the API stores as "back to the default".
  */
-export type TaskSettings = Partial<
-  Pick<ProjectExport["project"], "taskValidateCommand" | "taskCancelCommand" | "taskReviewMode" | "taskAgentModels">
->
+export interface TaskSettings {
+  /** The agent apps the project's tasks may run under, the first being the default (RFC 0048). */
+  agentAppIds: string[]
+  /** The default model per app; an app left out runs its own default. */
+  taskAgentModels: Record<string, string>
+  taskAgentInstructions: string
+  taskValidateCommand: string
+  taskCancelCommand: string
+  taskReviewMode: "keep" | "stop"
+}
+
+/** A new project's: Claude Code, as the API defaults to — so it can delegate out of the box. */
+const DEFAULT_TASK_SETTINGS: TaskSettings = {
+  agentAppIds: ["claude"],
+  taskAgentModels: {},
+  taskAgentInstructions: "",
+  taskValidateCommand: "",
+  taskCancelCommand: "",
+  taskReviewMode: "keep",
+}
 
 /** The body POSTed to /api/projects and PATCHed to /api/projects/:id. */
 export type ProjectPayload = {
@@ -72,7 +84,7 @@ export type ProjectPayload = {
 
 /** A fresh creation form: everything empty but the default base image. */
 export function newProjectFormValue(): LiteFormValue {
-  return { ...toProjectFormValue({ image: DEFAULT_IMAGE }), sharedVolumes: [] }
+  return { ...toProjectFormValue({ image: DEFAULT_IMAGE }), sharedVolumes: [], ...DEFAULT_TASK_SETTINGS }
 }
 
 /** An existing project, as the form edits it. */
@@ -92,6 +104,12 @@ export function fromProject(p: Project): LiteFormValue {
       dockerInDocker: p.dind,
     }),
     sharedVolumes: p.sharedVolumes ?? [],
+    agentAppIds: p.agentAppIds ?? [],
+    taskAgentModels: p.taskAgentModels ?? {},
+    taskAgentInstructions: p.taskAgentInstructions ?? "",
+    taskValidateCommand: p.taskValidateCommand ?? "",
+    taskCancelCommand: p.taskCancelCommand ?? "",
+    taskReviewMode: p.taskReviewMode === "stop" ? "stop" : "keep",
   }
 }
 
@@ -118,12 +136,17 @@ export function fromExport({ project: p }: ProjectExport): LiteFormValue {
     }),
     // A spec exported before shared volumes existed simply doesn't have the key.
     sharedVolumes: p.sharedVolumes ?? [],
-    taskSettings: {
-      taskValidateCommand: p.taskValidateCommand,
-      taskCancelCommand: p.taskCancelCommand,
-      taskReviewMode: p.taskReviewMode,
-      taskAgentModels: p.taskAgentModels,
-    },
+    // The spec has no harness list (it is this instance's apps): the new project's default. Its
+    // CLI-era fields (`taskAgentCommand`…) are left behind — agent apps replaced them (RFC 0048).
+    ...DEFAULT_TASK_SETTINGS,
+    // Default models are kept only for apps the project allows — the API refuses the others.
+    taskAgentModels: Object.fromEntries(
+      Object.entries(p.taskAgentModels ?? {}).filter(([app]) => DEFAULT_TASK_SETTINGS.agentAppIds.includes(app)),
+    ),
+    taskAgentInstructions: p.taskAgentInstructions ?? "",
+    taskValidateCommand: p.taskValidateCommand ?? "",
+    taskCancelCommand: p.taskCancelCommand ?? "",
+    taskReviewMode: p.taskReviewMode === "stop" ? "stop" : "keep",
   }
 }
 
@@ -207,7 +230,15 @@ export function toProjectPayload(value: LiteFormValue): ProjectPayload {
       .filter(isDeclaredVolume)
       .map((v) => ({ name: v.name.trim(), mountPath: v.mountPath.trim() })),
     secrets: value.secrets.filter((s) => s.name && s.value).map(({ name, value: v }) => ({ name, value: v })),
-    ...value.taskSettings,
+    agentAppIds: value.agentAppIds,
+    // The whole map, only for apps still allowed: one whose model was cleared runs its own default.
+    taskAgentModels: Object.fromEntries(
+      Object.entries(value.taskAgentModels).filter(([app, model]) => model && value.agentAppIds.includes(app)),
+    ),
+    taskAgentInstructions: value.taskAgentInstructions,
+    taskValidateCommand: value.taskValidateCommand,
+    taskCancelCommand: value.taskCancelCommand,
+    taskReviewMode: value.taskReviewMode,
   }
 }
 

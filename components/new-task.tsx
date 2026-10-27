@@ -206,7 +206,7 @@ export function NewTask({
       remembered={{ key: composerKey }}
       description={
         project && allowedIds.length === 0
-          ? `${project.name} has no harness yet: switch on an agent app in its settings (Edit → Delegated work) to delegate here.`
+          ? `${project.name} has no harness yet: allow an agent app in its settings (Edit project → Agents) to delegate here.`
           : project
             ? `In ${project.name}, on a worker and a branch of its own. Its session streams right here as soon as it starts — answer it as it works.`
             : undefined

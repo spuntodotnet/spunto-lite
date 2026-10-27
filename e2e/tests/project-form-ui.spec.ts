@@ -295,4 +295,50 @@ test.describe("project form → stored project", () => {
     }
     expect(after.currentVersion).toBe(before.currentVersion + 1)
   })
+
+  // Spunto Cloud's pages, so nobody gets lost going from one to the other — with Lite's Runtime
+  // kept for docker-in-docker and its shared volumes.
+  test("the rail has Cloud's pages, Agents among them", async ({ page }) => {
+    await page.goto("/projects/new")
+    const entries = await page.getByRole("navigation", { name: "Form sections" }).getByRole("button").allTextContents()
+    const pages = ["General", "Tooling", "Lifecycle", "Runtime", "Agents", "Secrets"]
+    // Then the submit block, which sits under the rail.
+    expect(entries.slice(pages.length)).toEqual(["Create project", "Cancel"])
+    pages.forEach((title, i) => expect(entries[i].startsWith(title), `${entries[i]} should be ${title}`).toBe(true))
+  })
+
+  // Delegated work is a section of the form now, saved with it — no second Save button.
+  test("the Agents page edits how tasks run, and a saved secret can be removed", async ({ page, request }) => {
+    const project = await (
+      await request.post("/api/projects", {
+        data: {
+          name: `e2e-agents-${Date.now()}`,
+          image: "mcr.microsoft.com/devcontainers/go:1.21",
+          secrets: [{ name: "OLD_TOKEN", value: "x" }],
+        },
+      })
+    ).json()
+    created.push(project.id)
+
+    await page.goto(`/projects/${project.id}/edit`)
+    await expect(page.getByRole("navigation", { name: "Form sections" }).getByRole("button", { name: /^Agents/ })).toContainText("Claude Code")
+    await openPage(page, "Agents")
+    await page.getByRole("button", { name: "Codex" }).click()
+    await page.getByPlaceholder("Run `npm test` before pushing.").fill("Run go test ./...")
+    await page.getByText("Stop it").click()
+
+    await openPage(page, "Secrets")
+    await page.getByRole("button", { name: "Remove OLD_TOKEN" }).click()
+
+    await page.getByRole("button", { name: "Save changes" }).click()
+    await expect(page).toHaveURL(new RegExp(`/projects/${project.id}$`))
+
+    const stored = await (await request.get(`/api/projects/${project.id}`)).json()
+    expect(stored).toMatchObject({
+      agentAppIds: ["claude", "codex"],
+      taskAgentInstructions: "Run go test ./...",
+      taskReviewMode: "stop",
+    })
+    expect(await (await request.get(`/api/projects/${project.id}/secrets`)).json()).toEqual([])
+  })
 })
