@@ -3,8 +3,17 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { FolderGit2, Server, Settings, KeyRound, Activity, MessagesSquare } from "lucide-react"
-import { SpuntoLogo } from "@spunto/design-system/brand"
-import { cn } from "@/lib/utils"
+import { SidebarBrand } from "@spunto/design-system"
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+} from "@/components/ui/sidebar"
 
 const NAV = [
   { href: "/projects", label: "Projects", icon: FolderGit2 },
@@ -18,37 +27,37 @@ const NAV = [
   { href: "/settings", label: "Settings", icon: Settings },
 ]
 
+// Lite is a single-user local app: no organisation to switch, no account to sign out of — so the
+// design system's brand and nav only, without the org switcher or the user menu.
 export function AppSidebar() {
   const pathname = usePathname()
   return (
-    <aside className="w-56 shrink-0 border-r border-border bg-sidebar flex flex-col">
-      <Link href="/" className="flex items-center gap-2 px-4 h-14 border-b border-border">
-        {/* The Spunto logo in Lite's declension (sky tile, ink blue) — the one the site shows for Lite. */}
-        <SpuntoLogo tone="build" size={28} className="rounded-[4px]" />
-        <span className="font-display tracking-tight">Spunto Lite</span>
-      </Link>
-      <nav className="flex-1 p-2 space-y-1">
-        {NAV.map(({ href, label, icon: Icon }) => {
-          const active = pathname === href || pathname.startsWith(href + "/")
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={cn(
-                "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                active
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground",
-              )}
-            >
-              <Icon className="size-4" /> {label}
-            </Link>
-          )
-        })}
-      </nav>
-      <div className="p-3 text-xs text-muted-foreground border-t border-border">
-        Local control plane · <span className="font-mono">Docker</span>
-      </div>
-    </aside>
+    <Sidebar className="border-sidebar-border">
+      <SidebarHeader className="border-b border-sidebar-border px-2 pt-3 pb-2">
+        <SidebarBrand product="Lite" href="/" render={({ href }) => <Link href={href} />} />
+      </SidebarHeader>
+      <SidebarContent className="py-3">
+        <SidebarGroup className="px-2">
+          <SidebarMenu>
+            {NAV.map(({ href, label, icon: Icon }) => (
+              <SidebarMenuItem key={href}>
+                <SidebarMenuButton
+                  isActive={pathname === href || pathname.startsWith(href + "/")}
+                  render={<Link href={href} />}
+                  className="font-medium"
+                >
+                  <Icon className="size-4" /> {label}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarFooter className="border-t border-sidebar-border p-3 text-xs text-muted-foreground">
+        <p>
+          Local control plane · <span className="font-mono">Docker</span>
+        </p>
+      </SidebarFooter>
+    </Sidebar>
   )
 }
