@@ -236,7 +236,7 @@ const NOTE_COLORS = ["note-sky", "note-cream", "note-marker", "note-white"]
     const first: Parameters<Diorama["spawn"]>[0][] = [
       { color: "ink", name: "worker-a1b2", slot: 2 },
       { agent: true, color: "marker", name: "claude", slot: 3 },
-      { color: "sky", slot: 0 },
+      { color: "sky", slot: 1 },
     ]
     first.forEach((o, i) => setTimeout(() => d.spawn(o), reducedMotion ? 0 : 500 + i * 450))
     const dismiss = () => hint.classList.add("is-gone")
@@ -337,6 +337,12 @@ const NOTE_COLORS = ["note-sky", "note-cream", "note-marker", "note-white"]
     white-space: nowrap;
     rotate: var(--rot);
     translate: -105% -120%;
+  }
+  .home .pin.is-covered {
+    opacity: 0.12;
+  }
+  .home .pin {
+    transition: opacity 0.3s;
   }
   .home .arrow {
     position: absolute;
