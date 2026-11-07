@@ -10,11 +10,13 @@ interface Props {
   locale: Locale
   /** The nav goes over the dark product band on the home page. */
   overDark?: boolean
+  /** Nav transparent until scrolled, over a light page. */
+  transparentNav?: boolean
   /** The docs use a wider grid than the home page; the nav follows it. */
   wide?: boolean
 }
 
-const { title, description, locale, overDark = false, wide = false } = Astro.props
+const { title, description, locale, overDark = false, transparentNav = false, wide = false } = Astro.props
 const path = Astro.url.pathname.replace(/\/$/, "") || "/"
 const canonical = new URL(path, Astro.site)
 const alternates = {
@@ -53,7 +55,7 @@ const ogImage = new URL("/og.png", Astro.site)
     </script>
   </head>
   <body class="min-h-screen overflow-x-clip bg-background font-sans text-foreground antialiased">
-    <SiteNav locale={locale} overDark={overDark} wide={wide} />
+    <SiteNav locale={locale} overDark={overDark} transparent={transparentNav} wide={wide} />
     <slot />
     <SiteFooter locale={locale} />
   </body>

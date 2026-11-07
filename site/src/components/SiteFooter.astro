@@ -28,7 +28,7 @@ const links: [string, string][] = [
       {links.map(([label, href]) => <a href={href} class="transition-colors hover:text-foreground">{label}</a>)}
     </div>
     <p class="text-xs text-muted-foreground/70">
-      <a href={locale === "fr" ? `${SPUNTO_URL}/fr` : SPUNTO_URL} class="hover:text-foreground">{t.footerBy}</a> · {t.license} · {t.builtOn}
+      <a href={locale === "fr" ? `${SPUNTO_URL}/fr` : SPUNTO_URL} class="hover:text-foreground">{t.footerBy}</a> · {t.license} · {t.builtOn}{" "}
       <a href="https://ui.shadcn.com" class="hover:text-foreground">shadcn/ui</a>
     </p>
   </div>
