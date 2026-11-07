@@ -1,8 +1,9 @@
 # Agents — le travail délégué
 
 Une **tâche** est une unité de travail confiée à un agent : « corrige le login qui casse sous
-Safari ». Elle a un worker, une branche, une session d'agent, et elle produit quelque chose à
-relire. C'est la fonctionnalité *Agents* de Spunto Cloud, portée dans Lite : même modèle, mêmes
+Safari ». Elle a un worker et une session d'agent, et elle produit quelque chose à relire. Pas de
+branche à elle : Lite n'en crée plus, l'agent en fait une s'il en a besoin, et la nomme (voir
+« [Sans git : l'agent décide](#sans-git--lagent-décide) »). C'est la fonctionnalité *Agents* de Spunto Cloud, portée dans Lite : même modèle, mêmes
 états, mêmes écrans (ils viennent de `@spunto/design-system/tasks`), même lecture de session (elle
 vient de `@spunto/build/agent-stream`). La référence détaillée du modèle reste le `docs/tasks.md`
 du dépôt Cloud ; cette page dit **ce qui est pareil, ce qui diffère dans Lite, et pourquoi**.
@@ -17,9 +18,9 @@ du dépôt Cloud ; cette page dit **ce qui est pareil, ce qui diffère dans Lite
 - **Page projet** → section *Tasks* au-dessus des workspaces, bouton **New task** dans l'en-tête,
   Accept / Drop sur la ligne.
 - **Une conversation à son URL** : `/projects/:id/tasks/:taskId` — onglets *Session*, *Diff* et
-  *Terminal*, la boîte de réponse sous les deux premiers, la colonne de faits à droite (branche, usage de la session, machine,
-  prompt, ce qui a tourné).
-- **Terminal** : un shell dans la machine de la tâche, sur sa branche. Ce sont les mêmes sessions
+  *Terminal*, la boîte de réponse sous les deux premiers, la colonne de faits à droite (usage de la session, machine,
+  prompt, ce qui a tourné ; la branche, pour une tâche d'avant 2026-11).
+- **Terminal** : un shell dans la machine de la tâche, sur le checkout tel que l'agent l'a laissé. Ce sont les mêmes sessions
   dtach persistantes que la page worker (onglets, reprise après fermeture) — un shell ouvert ici s'y
   retrouve, et la session de l'agent n'en fait jamais partie. L'onglet n'existe que si la tâche a une
   machine ; machine arrêtée (garée pour la revue), il dit pourquoi il n'y a rien où taper.
@@ -43,8 +44,9 @@ Il faut donc, dans le projet :
    arrive avec Claude Code ; un projet sans app ne peut pas déléguer (`400`) ;
 2. le **secret** de l'app (projet ou global) — le runner n'en lit aucun lui-même, le binaire
    lancé par le SDK hérite de l'environnement de la session ;
-3. un **dépôt git** : une tâche travaille sur une branche. Le clone utilise la clé SSH des
-   réglages, qui sert aussi au `git push` de l'agent.
+3. c'est tout : **un dépôt n'est pas requis**. Sans dépôt, la session tourne dans `/workspace` ;
+   avec, dans le premier dépôt, cloné avec la clé SSH des réglages — celle qui sert aussi au
+   `git push` de la branche que l'agent choisit de pousser.
 
 **L'image.** Chaque app allumée ajoute sa feature (`spunto-agent-claude`, `spunto-agent-codex`,
 des `localScript` livrés par `@spunto/build`, cachés du sélecteur) **après** celles du projet
@@ -90,11 +92,13 @@ modèle par défaut dans `taskAgentModels` quand le catalogue le connaît.
 
 ```
 POST /api/projects/:id/tasks
-   ├─ insert (state=queued, branch=task/<slug>-<id6>)
+   ├─ insert (state=queued, branch=null)
    └─ en tâche de fond :
-        1. un worker : libre dans le pool du projet (redémarré s'il était arrêté), sinon spawné et tagué `task`
+        1. un worker : libre dans le pool du projet (redémarré s'il était arrêté), sinon spawné
+           (cloné sur la base de la tâche) et tagué `task`
         2. attend `ready`
-        3. dans chaque dépôt : [machine recyclée : reset --hard + clean -fd] fetch + checkout -B <branche> origin/<base>
+        3. machine recyclée seulement — « Workspace reset », dans chaque dépôt : reset --hard + clean -fd,
+           fetch + checkout -B <base> origin/<base> (le checkout d'un clone neuf) ; machine neuve : rien
         4. la session d'agent (le runner de son app), en commande background dans le worker → running
         5. la demande de titre, juste derrière le premier tour
    … la session rend la main (`session.ended` sans travail de fond derrière, ou fin du process) → in-review
@@ -105,7 +109,7 @@ POST /api/projects/:id/tasks
 
 | État | Veut dire |
 |---|---|
-| `queued` | la tâche attend sa machine (allocation, build d'image, démarrage, branche) |
+| `queued` | la tâche attend sa machine (allocation, build d'image, démarrage, remise à plat d'une machine recyclée) |
 | `running` | la session d'agent tourne |
 | `in-review` | elle a rendu la main proprement : il y a quelque chose à juger |
 | `done` | accepté — **seulement** par un clic |
@@ -117,7 +121,7 @@ personne ne regarde — c'est lui qui gare un worker en mode `stop`, voit une ma
 une session, et rend au pool celle d'une session morte.
 
 **Le worker appartient à la tâche** jusqu'à `done`/`failed` : le libérer à l'entrée en revue
-laisserait la tâche suivante faire `checkout -B` par-dessus ce qu'on relit. Un worker qu'un
+laisserait la tâche suivante remettre à plat le checkout qu'on relit. Un worker qu'un
 humain utilise n'est jamais réquisitionné : seuls les workers tagués `task` forment le pool.
 
 **Une fin de tour n'est pas une main rendue** (Cloud #385) : un tour de Claude Code peut finir
@@ -166,10 +170,71 @@ rallumer). Le mode de relecture `stop`, c'est le Park automatique.
 **Un seul chemin de réveil** pour une réponse, Accept, Drop et Wake : un worker arrêté — ou tombé
 tout seul — est redémarré, un conteneur disparu est rebuildé sur le même volume ; seul un worker
 dont le *setup* a échoué est refusé (le relancer échouerait pareil). Le checkout **n'est pas
-touché** : la conversation reprend là où l'agent a laissé le dépôt, sur la branche de la tâche
-ou une autre qu'il a prise lui-même. Un *Branch check* remettait l'arbre sur la branche de la
-tâche et refusait la réponse si l'arbre était sale ; Cloud l'a retiré (#557) : il n'a refusé
-que des agents qui avaient changé de branche eux-mêmes, sur une machine qu'eux seuls tenaient.
+touché** : la conversation reprend là où l'agent a laissé le dépôt, sur la branche qu'il a prise
+(ou aucune). Un *Branch check* remettait l'arbre sur la branche de la tâche et refusait la
+réponse si l'arbre était sale ; Cloud l'a retiré (#557) : il n'a refusé que des agents qui
+avaient changé de branche eux-mêmes, sur une machine qu'eux seuls tenaient.
+
+## Sans git : l'agent décide
+
+Comme dans Cloud depuis la RFC 0056 (BAC-61, Cloud `ab56551c`) : **Lite ne crée plus de
+branche**, et ne demande plus de dépôt. Le *Branch setup* (`fetch` + `checkout -B task/<slug>-<id6>`
+dans chaque dépôt avant la session) a disparu : il se battait avec les checkouts que l'agent ou
+l'humain avaient mis ailleurs, et faisait échouer toute tâche d'un projet sans dépôt (« No git
+repository at /workspace, so there is nothing to branch »). La session démarre sur le checkout tel
+que le setup du worker l'a cloné ; l'agent crée une branche s'il en veut une, et la nomme.
+
+- **La base reste** (chip *Base branch* du composer, `baseBranch`), pour ce qu'elle est : la branche
+  que le worker clone (`spawnWorker(…, baseBranch)`), et celle sur laquelle une machine recyclée est
+  remise. Vide : la branche configurée du dépôt, sinon celle par défaut du remote. Un projet sans
+  dépôt n'a pas de chip, et une base envoyée par l'API y est ignorée (`baseBranch: null`).
+- **Le préambule ne parle plus de branche** : `Spunto context: you are running in a disposable
+  worker, in <cwd>[, starting from <base>].` La consigne par défaut est un fait, pas une
+  procédure git : *« This worker goes to another task once this one is accepted or dropped, and its
+  checkout is reset then: anything worth keeping has to leave it before then (for code: commit it
+  on a branch you name, and push it). »*
+- **Le diff reste**, en lecture : il compare l'arbre au merge-base de la base (celle de la tâche,
+  sinon la branche configurée du dépôt, sinon celle du remote), quelle que soit la branche que
+  l'agent a créée ; l'en-tête montre la branche **courante**, lue dans le worker. Un `/workspace`
+  sans `.git` dit « No git repository in /workspace, so there is no diff to show » au lieu d'une
+  erreur.
+- **Accept / Drop** tournent dans le worker de la tâche : ils lisent la branche de l'agent dans le
+  checkout — `git push origin "$(git branch --show-current)"`. `SPUNTO_TASK_BRANCH` n'est posé que
+  pour une tâche qui en a une (les anciennes) ; `SPUNTO_TASK_BASE_BRANCH` reste.
+- **Les tâches d'avant** gardent leur branche (`tasks.branch` devient nullable, migration `0013`,
+  aucune valeur effacée) : elle est affichée dans la liste et les détails, passée en
+  `SPUNTO_TASK_BRANCH`, et l'étape *Branch* de leur démarrage est encore dessinée (le design
+  system ne la montre que si une commande `Branch setup` a tourné). Une réponse reprend leur
+  session sans toucher au checkout, comme avant.
+- **Le panneau « PR de la branche »** que Cloud a retiré (`7f1b709d`) n'a jamais existé dans Lite,
+  qui ne parle à aucune forge : rien à retirer.
+
+La migration `0013` est écrite à la main : SQLite ne sait pas retirer un `NOT NULL`, il faut
+reconstruire la table, et la reconstruction que génère drizzle-kit (`PRAGMA foreign_keys=OFF`,
+`DROP TABLE tasks`) effacerait en cascade l'historique de chaque tâche — le pragma ne fait rien
+dans la transaction du migrateur. Les tables filles (`task_commands`, `task_events`,
+`task_attachments`, `mcp_gateway_tokens`) sont donc copiées à part, puis remises.
+
+### La machine recyclée : propre, comme un clone neuf
+
+C'est la seule différence de fond avec Cloud, où chaque tâche a sa sandbox, jetée à l'Accept ou au
+Drop. Le worker d'une tâche Lite retourne au pool, et la tâche suivante le reprend : sans branche
+de setup, rien ne remettait plus son checkout à plat. Avant la session, dans chaque dépôt (ou
+`/workspace`), Lite lance donc **« Workspace reset »** (`workspaceResetScript`) — seulement sur une
+machine recyclée, jamais sur une neuve :
+
+1. ce qui est jeté est **affiché d'abord** (`git status --porcelain`, et la branche où l'agent
+   précédent avait laissé l'arbre) ;
+2. `reset --hard` puis `clean -fd`, **jamais `-x`** : les fichiers ignorés (`node_modules`, caches)
+   sont la raison d'être du recyclage ;
+3. `fetch` + `checkout -B <base> origin/<base>` : le checkout d'un clone neuf, sur la base de la
+   nouvelle tâche. Un commit jamais poussé sur cette branche locale est un reste comme un autre ;
+   les branches que l'agent précédent a créées restent dans le dépôt, hors du checkout.
+
+Pas de dépôt à cet endroit : l'étape le dit (« No git repository in /workspace — nothing to
+reset ») et passe ; les fichiers de la tâche précédente restent dans `/workspace`. Un échec
+(base inconnue du remote, remote injoignable) fait échouer la tâche avec un message qui dit quoi
+faire, avant toute session.
 
 ## Un ordinateur qui redémarre
 
@@ -193,9 +258,9 @@ Lite tourne sur des portables et des postes qu'on redémarre souvent ; ce n'est 
 ## Ce qui est pareil que dans Cloud
 
 - les **états**, la **dérivation**, l'**ordre des listes** (`lastActivityAt`), le **pool** ;
-- le **script de branche** (`branchSetupScript`) et ses trois détails payés cher : `reset --hard`
-  avant `checkout -B` sur une machine recyclée, `clean -fd` et jamais `-x`, ce qui est jeté est
-  affiché avant ;
+- **pas de git pour la tâche** (RFC 0056) : ni branche créée, ni dépôt requis, la base comme point
+  de départ du clone, le préambule et la consigne par défaut sans branche, `SPUNTO_TASK_BRANCH`
+  pour les seules anciennes tâches, le diff qui dit « pas de dépôt » ;
 - la **session comme commande background dans le worker**, avec la même arborescence
   (`~/.spunto/commands/<id>/{cmd.sh,run.sh,stdin,stdout.log,exit_code}`) et le même
   `exec 9<>stdin` qui garde une session interactive vivante entre deux tours — portée depuis
@@ -224,10 +289,13 @@ Lite tourne sur des portables et des postes qu'on redémarre souvent ; ce n'est 
 | Verrou du pool | advisory Postgres | chaîne de promesses par worker (un seul process) |
 | Pool | par membre | par projet (un seul utilisateur) |
 | Consigne d'agent | celle de l'org + celle du projet | la phrase par défaut + celle du projet |
+| Consigne par défaut | « this sandbox is deleted once the task is accepted or dropped… » | « this worker goes to another task… and its checkout is reset then… » : la machine est recyclée, pas détruite |
+| Avant la session | rien (une sandbox par tâche) | rien sur une machine neuve ; « Workspace reset » sur une machine recyclée |
+| Base de la tâche | ignorée avec `fromSnapshot` (chip masqué) | pas de snapshot ; ignorée sans dépôt (chip masqué) |
 | Apps d'agent | installées par l'org (Integrations), désinstallation refusée tant qu'un projet s'en sert | toujours offertes, sans installation |
 | Mémoire du compositeur | dernier harnais/modèle/paramètres du membre par projet | aucune : le défaut du projet |
 | Diff indisponible | `no-machine`, `machine-stopped`, `node-unreachable`, `unsupported` | les deux premiers seulement : un seul démon Docker |
-| Pull request | lue sur la forge connectée | absente — Lite ne parle à aucune forge |
+| Pull request | plus de panneau « PR de la branche » (`7f1b709d`) : une PR partagée dans la conversation passe par le bloc embed de l'app GitHub | absente — Lite ne parle à aucune forge |
 
 **La session, elle, survit à un redémarrage de Lite** : c'est un process dans le worker, pas
 dans le plan de contrôle. Le redémarrage ne perd que ce qui vivait en mémoire — une allocation en
@@ -267,12 +335,14 @@ Ils se règlent dans le formulaire du projet, page **Agents** (section *Delegate
 serveurs MCP), comme dans Spunto Cloud, et s'enregistrent avec le reste du formulaire, à la
 création comme à l'édition.
 
-`taskResetCommand` a disparu comme dans Cloud (2026-10-26) : la branche est déjà remise à plat
-(`reset --hard`, `clean -fd`) sur une machine recyclée.
+`taskResetCommand` a disparu comme dans Cloud (2026-10-26) : le checkout est déjà remis à plat
+(« Workspace reset ») sur une machine recyclée.
 
-Variables fournies aux commandes : `SPUNTO_TASK_ID`, `SPUNTO_TASK_TITLE`, `SPUNTO_TASK_BRANCH`,
-`SPUNTO_TASK_BASE_BRANCH`, `SPUNTO_TASK_STATE`, `SPUNTO_TASK_MODEL` (si résolu), plus les secrets
-du projet **tels qu'ils sont maintenant** (l'environnement du conteneur date de son spawn).
+Variables fournies aux commandes : `SPUNTO_TASK_ID`, `SPUNTO_TASK_TITLE`,
+`SPUNTO_TASK_BASE_BRANCH`, `SPUNTO_TASK_STATE`, `SPUNTO_TASK_MODEL` (si résolu),
+`SPUNTO_TASK_BRANCH` (seulement pour une tâche d'avant la RFC 0056 — sinon
+`$(git branch --show-current)`), plus les secrets du projet **tels qu'ils sont maintenant**
+(l'environnement du conteneur date de son spawn).
 
 ## Routes
 
@@ -281,11 +351,11 @@ GET    /api/tasks                               — toutes les tâches (?state=&
 GET    /api/projects/:id/tasks                  — celles d'un projet
 POST   /api/projects/:id/tasks                  — délègue { prompt, title?, baseBranch?, model?, agentAppId?, agentOptions?, files? } → 201, queued
 GET    /api/tasks/:taskId                       — détail, re-dérivé, + canResume
-PATCH  /api/tasks/:taskId                       — renomme { title } (la branche ne bouge pas)
+PATCH  /api/tasks/:taskId                       — renomme { title } (rien d'autre ne bouge)
 DELETE /api/tasks/:taskId                       — oublie une tâche finie (409 si vivante)
 GET    /api/tasks/:taskId/commands              — ce que la plateforme a lancé, plus ancien d'abord
 GET    /api/tasks/:taskId/events                — la session (?since= | ?tail=true | ?before=, &limit=, &source=true) + usage
-GET    /api/tasks/:taskId/diff                  — ce que la branche change, par dépôt
+GET    /api/tasks/:taskId/diff                  — ce que la tâche a changé depuis sa base, par dépôt
 GET    /api/tasks/:taskId/diff/patch            — le patch d'un fichier (?path=&repo=&oldPath=&untracked=)
 POST   /api/tasks/:taskId/messages              — répond { prompt, files? } → 202
 POST   /api/tasks/:taskId/interrupt             — arrête le tour en cours sans tuer la session → 202
@@ -302,7 +372,7 @@ GET    /api/agent-apps                          — les apps d'agent et leur cat
 | Fichier | Rôle |
 |---|---|
 | `db/schema.ts` | tables `tasks`, `task_commands`, `task_events`, `task_attachments`, colonnes `projects.task_*` |
-| `services/tasks.ts` | création, allocation, branche, session, dérivation, plancher de fond, Accept/Drop/réponse/interruption |
+| `services/tasks.ts` | création, allocation, remise à plat d'une machine recyclée, session, dérivation, plancher de fond, Accept/Drop/réponse/interruption |
 | `services/task-commands.ts` | ce qui a tourné pour une tâche, et sa réconciliation avec le worker |
 | `services/task-events.ts` | ingestion par curseur, titre de session, usage |
 | `services/task-diff.ts`, `lib/task-diff.ts` | le diff lu avec git dans le worker (scripts et parseurs repris de Cloud) |

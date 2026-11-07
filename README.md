@@ -132,8 +132,9 @@ HTTPS with a local mkcert certificate. See
 ## Agents
 
 Delegate work to a coding agent the way Spunto Cloud does: **New task** on a project (or
-**Agents** in the sidebar), write what you want, and a worker from the project's pool gets its own
-branch and an agent session — **Claude Code** or **Codex**, picked per task. You watch it work live, answer it or interrupt it, read the diff
+**Agents** in the sidebar), write what you want, and a worker from the project's pool gets an
+agent session — **Claude Code** or **Codex**, picked per task. No repository required, and no
+branch cut for it: the agent makes one if it needs one, and names it. You watch it work live, answer it or interrupt it, read the diff
 from the machine itself, open a shell on it from the **Terminal** tab, then **Accept** or **Drop**. Every conversation of every project is on
 the **Agents** page, grouped by what needs you.
 
