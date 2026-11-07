@@ -92,6 +92,13 @@
       "when": 1793090472323,
       "tag": "0012_agent_apps_and_mcp_servers",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1794031301355,
+      "tag": "0013_dashboard_color",
+      "breakpoints": true
     }
   ]
 }

@@ -18,6 +18,7 @@ export function getSettings(): Settings {
     sshKeyPath: null,
     dotfilesRepo: null,
     gcpRegistryKey: null,
+    dashboardColor: null,
   }
   db.insert(settings).values(fresh).run()
   return fresh

@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { EXTENSION_ID_HINT, isExtensionId } from "./extensions"
+import { isDashboardColor } from "./appearance"
 import {
   SHARED_VOLUME_NAME_HINT,
   SHARED_VOLUME_NAME_RE,
@@ -243,6 +244,8 @@ export const SettingsSchema = z.object({
     .optional(),
   // Plaintext SA key: string to set, null to clear, absent to leave unchanged.
   gcpRegistryKey: z.string().nullable().optional(),
+  /** Settings → Appearance (lib/appearance.ts): a colour name or a palette id; null = Lite's blue. */
+  dashboardColor: z.string().refine(isDashboardColor, "Unknown dashboard colour").nullable().optional(),
 })
 
 export type CreateProjectInput = z.infer<typeof CreateProjectSchema>

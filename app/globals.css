@@ -2,6 +2,10 @@
 @import "tw-animate-css";
 @import "@xterm/xterm/css/xterm.css";
 @import "@spunto/design-system/styles.css";
+/* The 50 `data-palette` pairs (Settings → Appearance, lib/appearance.ts). After styles.css on
+   purpose: a palette block and a product block have the same specificity, so the later one —
+   the palette — wins on `<html>`, which wears both. */
+@import "@spunto/design-system/palettes.css";
 
 /* Scan the design-system's JS primitives so Tailwind emits their utility classes. */
 @source "../node_modules/@spunto/design-system";
