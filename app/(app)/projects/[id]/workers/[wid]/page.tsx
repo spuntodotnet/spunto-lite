@@ -28,6 +28,8 @@ import {
   ArrowUpCircle,
 } from "lucide-react"
 import { chartColors } from "@spunto/design-system/colors"
+import { MachinePorts, machinePortsShown } from "@spunto/design-system/workers"
+import type { TaskMachinePort } from "@spunto/design-system/tasks"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
 import type { Worker, Project, ProjectImageBuild, SetupStatus } from "@/lib/types"
@@ -93,7 +95,7 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
     refetchInterval: running ? 3000 : false,
     enabled: running,
   })
-  const { data: ports = [] } = useQuery({
+  const { data: detectedPorts = [] } = useQuery({
     queryKey: ["ports", wid],
     queryFn: () => api.get<number[]>(`/api/workers/${wid}/ports`),
     refetchInterval: running ? 5000 : false,
@@ -124,6 +126,7 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
   const activeBuild = builds[0]
   const codeUrl = workerBaseUrl(worker.id)
   const outdated = !!project && !settingUp && worker.projectVersion < project.currentVersion
+  const ports = workerPorts(running ? detectedPorts : [], project?.forwardPorts ?? [])
 
   const controlPanel = (
     <div className="p-4 space-y-5">
@@ -211,19 +214,13 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
         </div>
       )}
 
-      {running && ports.length > 0 && (
+      {/* Drawn as a task's sidebar draws them (`MachinePorts`, Spunto Cloud's sandbox cockpit):
+          green and opening in a new tab while something listens, greyed while a port the project
+          forwards doesn't — the worker stopped included. */}
+      {machinePortsShown(ports, running).length > 0 && (
         <div>
           <SH>Open ports</SH>
-          <div className="space-y-1.5">
-            {ports.map((p) => (
-              <div key={p} className="flex items-center justify-between rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
-                <span className="text-xs font-mono text-foreground">:{p}</span>
-                <a href={workerBaseUrl(worker.id, p)} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "h-6 px-2 text-[11px] gap-1 text-muted-foreground shrink-0")}>
-                  <ExternalLink className="h-3 w-3" /> Open
-                </a>
-              </div>
-            ))}
-          </div>
+          <MachinePorts ports={ports} running={running} portHref={(port) => workerBaseUrl(worker.id, port)} />
         </div>
       )}
 
@@ -288,7 +285,7 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
         <div className="flex items-center gap-2 shrink-0">
           {running && (
             <a href={codeUrl} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "default", size: "sm" }), "h-8 px-3 text-xs gap-1.5")}>
-              <Code2 className="h-3.5 w-3.5" /> Open VS Code <ExternalLink className="h-2.5 w-2.5 opacity-70" />
+              <Code2 className="h-3.5 w-3.5" /> Open IDE <ExternalLink className="h-2.5 w-2.5 opacity-70" />
             </a>
           )}
           {running && (
@@ -369,6 +366,21 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
       </div>
     </div>
   )
+}
+
+// ─── Ports ───────────────────────────────────────────────────────────────────
+
+/**
+ * What the cockpit says of a worker's ports: what listens in the container (only asked while it
+ * runs), and what the project forwards (`forwardPorts`), even while nothing listens on it. A
+ * declared port that listens is one chip, not two.
+ */
+function workerPorts(detected: number[], declared: number[]): TaskMachinePort[] {
+  const forwarded = new Set(declared)
+  const listening = new Set(detected)
+  return [...new Set([...declared, ...detected])]
+    .sort((a, b) => a - b)
+    .map((port) => ({ port, listening: listening.has(port), declared: forwarded.has(port) }))
 }
 
 // ─── SetupTimeline ───────────────────────────────────────────────────────────

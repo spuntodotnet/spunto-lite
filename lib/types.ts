@@ -272,7 +272,7 @@ export type SearchHit = {
 export type SearchIndex = { hits: SearchHit[]; generatedAt: string }
 
 export type SecretMeta = { id: string; name: string }
-export type Settings = { id: string; gitUserName: string | null; gitUserEmail: string | null; sshKeyPath: string | null; dotfilesRepo: string | null; gcpRegistryConfigured: boolean }
+export type Settings = { id: string; gitUserName: string | null; gitUserEmail: string | null; sshKeyPath: string | null; dotfilesRepo: string | null; dashboardColor: string | null; gcpRegistryConfigured: boolean }
 export type HostKey = { name: string; hasPublic: boolean; encrypted: boolean }
 
 /** GET /api/settings/ssh-agent — how workers authenticate with the selected key (lib/ssh-agent.ts). */

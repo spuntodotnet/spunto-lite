@@ -482,6 +482,10 @@ export const settings = sqliteTable("settings", {
   // Control-plane credential used to pull private Artifact Registry / GCR base
   // images — NOT injected into workers (unlike user/project secrets).
   gcpRegistryKey: text("gcp_registry_key"),
+  // The dashboard colour picked in Settings → Appearance (lib/appearance.ts): a product colour name
+  // (`amber`, `plum`…) or one of the design system's palette ids (`lagoon-amber`…). Null = Lite's
+  // own blue. Read by the root layout on every render, so the HTML arrives already dressed in it.
+  dashboardColor: text("dashboard_color"),
 })
 
 export type Project = typeof projects.$inferSelect
