@@ -120,9 +120,12 @@ function pullRequestTile(links: SharedLink[]): TaskAppTile | null {
  * harness's view of its session (Claude Code only — Codex writes none of these lines), and the
  * pull requests among the shared links.
  */
-export function taskTiles(task: Pick<Task, "id" | "projectId" | "agentAppId">): TaskAppTile[] {
+export function taskTiles(task: Pick<Task, "id" | "projectId" | "agentAppId" | "sessionProtocol" | "commandId">): TaskAppTile[] {
   const tiles: TaskAppTile[] = []
-  if (CLAUDE_PROTOCOLS.has(taskProtocol(task))) {
+  // On the contract (`agent-v1`) every app shares one protocol: the app says it is Claude, and each
+  // event's `source` is still Claude's own message — the lines this tile reads.
+  const protocol = taskProtocol(task)
+  if (CLAUDE_PROTOCOLS.has(protocol) || (protocol === "agent-v1" && task.agentAppId === "claude")) {
     const claude = claudeTile(claudeSessionLines(task.id))
     if (claude) tiles.push(claude)
   }
