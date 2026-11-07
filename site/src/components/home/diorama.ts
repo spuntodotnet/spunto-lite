@@ -631,6 +631,15 @@ export class Diorama {
     for (const p of this.pins) {
       this.v.copy(p.at).project(this.camera)
       p.el.style.transform = `translate(${((this.v.x + 1) / 2) * w}px, ${((1 - this.v.y) / 2) * h}px)`
+      // A box can land right under a note: the note steps back rather than
+      // being written over by the box's label.
+      const r = p.el.getBoundingClientRect()
+      const covered = this.boxes.some((b) => {
+        if (b.state === "leaving") return false
+        const l = b.label.getBoundingClientRect()
+        return l.left < r.right && l.right > r.left && l.top < r.bottom && l.bottom > r.top
+      })
+      p.el.classList.toggle("is-covered", covered)
     }
   }
 }
