@@ -1,7 +1,7 @@
 # Serveurs MCP
 
 On **déclare des serveurs MCP** par leur URL, on **s'y connecte en OAuth depuis Settings**, et les
-**sessions des tâches** (Claude Code comme Codex) les ont sans une ligne de config dans le dépôt.
+**sessions des tâches** (Claude Code, Codex comme Mistral Vibe) les ont sans une ligne de config dans le dépôt.
 La session ne voit jamais le serveur de l'éditeur ni son jeton : elle appelle la **passerelle** de
 Lite avec le jeton de sa tâche, et Lite relaie avec le jeton qu'il détient. C'est la
 fonctionnalité *serveurs MCP d'organisation* de Spunto Cloud (RFC 0049 et `docs/mcp-servers.md`
@@ -59,7 +59,8 @@ a le serveur éteint.
 
 Les runners de `@spunto/build` traduisent, sans rien savoir de Lite : Claude →
 `mcpServers[name] = { type: "http", url, headers: { Authorization: "Bearer $SPUNTO_WORKER_TOKEN" } }`,
-Codex → `mcp_servers[name] = { url, bearer_token_env_var: "SPUNTO_WORKER_TOKEN" }`.
+Codex → `mcp_servers[name] = { url, bearer_token_env_var: "SPUNTO_WORKER_TOKEN" }`,
+Mistral Vibe → les `mcpServers` d'ACP (`{ type: "http", name, url, headers: [Authorization] }`).
 
 ## La passerelle
 

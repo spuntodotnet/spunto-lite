@@ -1,5 +1,5 @@
 import { getTask } from "@/services/tasks"
-import { ingestTaskEvents, listTaskEvents, listTaskEventsBefore, listTaskEventsTail, taskProtocol, taskUsage } from "@/services/task-events"
+import { ingestTaskEvents, listTaskEvents, listTaskEventsBefore, listTaskEventsTail, taskDraft, taskProtocol, taskUsage } from "@/services/task-events"
 import { json, notFound } from "@/lib/http"
 
 export const dynamic = "force-dynamic"
@@ -9,7 +9,8 @@ export const runtime = "nodejs"
  * The session, event by event (RFC 0020). Three ways to page: `?since=<seq>` forward (what a
  * poll does), `?tail=true` to open at the end, `?before=<seq>` backwards as the reader scrolls
  * up. Reading is also what ingests. `usage` is computed over the whole task, never the page.
- * `?source=true` adds the harness line each event was read from.
+ * `?source=true` adds the harness line each event was read from. `draft` is the text block the
+ * agent is still writing (`{ text, truncated, updatedAt }`, or null) — Cloud ebadc730.
  */
 export async function GET(req: Request, { params }: { params: Promise<{ taskId: string }> }) {
   const { taskId } = await params
@@ -52,5 +53,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ taskId: 
       commandId: e.commandId,
       ...(withSource ? { source: e.source } : {}),
     })),
+    // What the agent is writing right now, folded from its partial messages by the ingestion
+    // above — in memory, never stored, replaced by the finished `message` event when it lands.
+    draft: taskDraft(task),
   })
 }

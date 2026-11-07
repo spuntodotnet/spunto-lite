@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
-import { MCP_ENV } from "@spunto/build/agent-runners"
+import { MCP_ENV, STREAM_ENV } from "@spunto/build/agent-runners"
 import {
   applyProtocol,
   interruptLine,
@@ -314,6 +314,7 @@ export function createTask(projectId: string, input: CreateTaskInput): Task {
     agentOptions: Object.keys(agentOptions).length ? agentOptions : null,
     workerId: null,
     commandId: null,
+    sessionProtocol: null,
     state: "queued",
     error: null,
     pendingAction: null,
@@ -431,8 +432,12 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
     }
   }
 
-  const harness = taskHarness(task, project)
+  const harness = await taskHarness(task, project)
   const protocol = harness.protocol
+  // The dialect is written before the launch, not with the command id: a restart between the two
+  // adopts the session (`findTaskCommand` above) and must read it in the dialect it was started in.
+  // A task launched by a Lite from before the contract has none, and is read in its app's previous one.
+  db.update(tasks).set({ sessionProtocol: protocol }).where(and(eq(tasks.id, task.id), eq(tasks.state, "queued"))).run()
   const files = attachments.attachmentsByIds(task.id, fileIds)
   const attachmentPaths = await attachments.materialize(workerId, task.id, files)
   const prompt = sessionPrompt({
@@ -689,7 +694,7 @@ function taskCommandEnv(row: Task, sessionStatus?: string): Record<string, strin
 
 /**
  * What a session's process gets on top of `taskCommandEnv`: its harness's (the runner's text and
- * the task's parameters) and, when the project has MCP servers on, where to reach them (RFC 0049).
+ * the task's parameters), the token streaming switch and, when the project has MCP servers on, where to reach them (RFC 0049).
  * The runner resolves each server's `path` on `SPUNTO_API_URL` and calls it with
  * `SPUNTO_WORKER_TOKEN` — here a token minted for this task, which only the gateway accepts: the
  * machine never holds a vendor's token. Resolved at every session start, so a server connected
@@ -707,7 +712,10 @@ function sessionEnv(row: Task, harness: Harness): Record<string, string> {
       console.warn(`[task:${row.id}] could not resolve MCP servers: ${err}`)
     }
   }
-  return { ...taskCommandEnv(row), ...harness.env, ...mcp }
+  // Every session streams the tokens of its messages (Cloud 0b31082b, no flag any more): a runner
+  // then prints `message.delta` lines, folded into the draft the timeline shows while the agent
+  // writes (`taskDraft`). A CLI from before agent apps ignores it.
+  return { ...taskCommandEnv(row), ...harness.env, ...mcp, [STREAM_ENV]: "1" }
 }
 
 // ─── Read paths: derive, don't poll ───────────────────────────────────────────
@@ -1311,15 +1319,18 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
         // branches themselves, in a machine they held alone).
         const sessionId = events.latestSessionId(taskId) ?? ""
         const turn = `${prompt}${attachments.attachmentPreamble(paths)}`
-        const harness = taskHarness(row, proj)
+        const harness = await taskHarness(row, proj)
+        // The new session's dialect, not the finished one's: a task whose last session began on an
+        // app's previous dialect resumes on the contract (RFC 0048 § 9), and is read in it from here.
+        const sessionProtocol = harness.protocol
         const session = await startAgentSession(
           taskId,
           row.workerId,
-          protocol,
+          sessionProtocol,
           turn,
           prompt,
           {
-            command: sessionCommand(taskId, turn, harness.followUpCommand, protocol, row.model),
+            command: sessionCommand(taskId, turn, harness.followUpCommand, sessionProtocol, row.model),
             cwd: repoPaths(proj)[0],
             env: { ...sessionEnv(row, harness), SPUNTO_TASK_SESSION_ID: sessionId },
             timeoutMs: SESSION_TIMEOUT_MS,
@@ -1328,11 +1339,11 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
           stored,
         )
         db.update(tasks)
-          .set({ commandId: session.id, state: "running", error: null, completedAt: null, lastActivityAt: new Date() })
+          .set({ commandId: session.id, sessionProtocol, state: "running", error: null, completedAt: null, lastActivityAt: new Date() })
           .where(and(eq(tasks.id, taskId), eq(tasks.state, "in-review")))
           .run()
         // A task whose earlier session never got a name is asked again; once named, a no-op.
-        await askSessionTitle(getRawTask(taskId) ?? row, session, protocol, row.prompt)
+        await askSessionTitle(getRawTask(taskId) ?? row, session, sessionProtocol, row.prompt)
       } finally {
         clearPending(taskId, "replying")
       }

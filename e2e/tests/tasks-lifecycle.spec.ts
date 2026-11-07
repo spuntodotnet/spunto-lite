@@ -8,10 +8,10 @@ import { execFileSync } from "node:child_process"
 // "Tasks Sandbox"), and runs under the Claude Code app (RFC 0048): its feature is really baked into
 // the image (a private Node and the SDK under /opt/spunto/agents), and the session really runs a
 // runner file on that Node, written from the session's environment. Only the runner's *text* is a
-// stand-in — `fixtures/agent-runners/claude.mjs`, which speaks the runner contract on stdin and
-// Claude Code's stream-json on stdout, with no SDK and no API key. So the `claude-runner` dialect
-// runs for real: the FIFO stdin, `session.ended` as the hand-back, a live reply, an interrupt, the
-// title request, a resume.
+// stand-in — `fixtures/agent-runners/claude.mjs`, bundled like the real one, which speaks the runner
+// contract on stdin and the Spunto agent contract on stdout, with no SDK and no API key. So the
+// `agent-v1` dialect runs for real: the FIFO stdin, `session.ended` as the hand-back, a live reply,
+// an interrupt, the title request, a resume, and the draft of a message being written.
 //
 // Opt-in, like the other specs that spawn workers: E2E_DOCKER=1 — and Lite started with
 // AGENT_RUNNERS_DIR=e2e/fixtures/agent-runners.

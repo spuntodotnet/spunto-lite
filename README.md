@@ -133,14 +133,14 @@ HTTPS with a local mkcert certificate. See
 
 Delegate work to a coding agent the way Spunto Cloud does: **New task** on a project (or
 **Agents** in the sidebar), write what you want, and a worker from the project's pool gets its own
-branch and an agent session — **Claude Code** or **Codex**, picked per task. You watch it work live, answer it or interrupt it, read the diff
+branch and an agent session — **Claude Code**, **Codex** or **Mistral Vibe**, picked per task. You watch it work live (its reply appears as it is written), answer it or interrupt it, read the diff
 from the machine itself, open a shell on it from the **Terminal** tab, then **Accept** or **Drop**. Every conversation of every project is on
 the **Agents** page, grouped by what needs you.
 
 Harnesses are **agent apps**, as in Spunto Cloud: a project switches on the ones its tasks may
 use (a new project starts with Claude Code), each puts its official SDK in the project's image,
 and each task picks one — with that app's models and its own parameters (effort, reasoning…).
-All it needs is the app's key as a secret (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). The
+All it needs is the app's key as a secret (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `MISTRAL_API_KEY`). The
 harnesses, the default models, what Accept and Drop run and whether the worker stays up during
 review are the project's *Delegated work* settings. The screens come from `@spunto/design-system/tasks` and the session parsing from
 `@spunto/build/agent-stream`, shared with Spunto Cloud. Details, and what differs from the Cloud

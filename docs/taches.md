@@ -25,7 +25,7 @@ du dépôt Cloud ; cette page dit **ce qui est pareil, ce qui diffère dans Lite
   machine ; machine arrêtée (garée pour la revue), il dit pourquoi il n'y a rien où taper.
 - **Réglages** : page d'édition du projet → carte *Delegated work*.
 
-## Démarrer : les apps d'agent (Claude Code, Codex)
+## Démarrer : les apps d'agent (Claude Code, Codex, Mistral Vibe)
 
 Comme dans Cloud depuis la RFC 0048 (`docs/agent-apps.md` du dépôt Cloud), le projet ne décrit
 plus *comment* lancer son agent : il **dit quelles apps ses tâches peuvent utiliser**, et **chaque
@@ -35,6 +35,7 @@ tâche choisit la sienne**.
 |---|---|---|
 | `claude` — **Claude Code** | `@anthropic-ai/claude-agent-sdk` | `ANTHROPIC_API_KEY` |
 | `codex` — **Codex** | `@openai/codex-sdk` | `OPENAI_API_KEY` ou `CODEX_API_KEY` |
+| `mistral` — **Mistral Vibe** | aucun : `vibe-acp` (Python), piloté en ACP par le runner | `MISTRAL_API_KEY` |
 
 Il faut donc, dans le projet :
 
@@ -47,23 +48,46 @@ Il faut donc, dans le projet :
    réglages, qui sert aussi au `git push` de l'agent.
 
 **L'image.** Chaque app allumée ajoute sa feature (`spunto-agent-claude`, `spunto-agent-codex`,
-des `localScript` livrés par `@spunto/build`, cachés du sélecteur) **après** celles du projet
-(`effectiveFeatures`, `lib/agent-apps.ts`) : un Node privé et le SDK épinglé sous
-`/opt/spunto/agents`, plus le CLI sur le `PATH` pour les humains du terminal. La liste fait donc
+`spunto-agent-mistral`, des `localScript` livrés par `@spunto/build`, cachés du sélecteur) **après**
+celles du projet (`effectiveFeatures`, `lib/agent-apps.ts`) : un Node privé et le SDK épinglé sous
+`/opt/spunto/agents`, plus le CLI sur le `PATH` pour les humains du terminal. Mistral Vibe n'a pas
+de SDK Node : sa feature installe uv, un Python à lui et `mistral-vibe` épinglé sous
+`/opt/spunto/agents/mistral` (le Python de l'image, absent ou trop vieux, ne compte jamais), et
+met `vibe` / `vibe-acp` sur le `PATH`. Le build télécharge uv depuis astral.sh. La liste fait donc
 partie de la version : la changer crée une version et rebuild, comme changer une feature.
 
-**La session : le runner.** Un fichier `.mjs` sans dépendance du paquet (`claude.mjs`,
-`codex.mjs`), **pas** cuit dans l'image : Lite le lit à chaque démarrage de session et le passe en
-base64 dans l'environnement de la commande, qui l'écrit puis s'exécute dessus — une correction
-du runner arrive avec une montée de `@spunto/build`, sans rebuild :
+**La session : le runner.** Une entrée `.mjs` du paquet (`claude.mjs`, `codex.mjs`,
+`mistral.mjs`) qui importe l'adaptateur de son harnais (`claude/adapter.ts`…). Depuis
+`@spunto/build` 0.23, Lite la **bundle** avec ce qu'elle importe (esbuild, `platform: node`,
+`format: esm`, `target: node20`, une fois par process et gardé, comme `runnerBundle` de Cloud) en un
+seul fichier, **pas** cuit dans l'image : il est passé en base64 dans l'environnement de la
+commande, qui l'écrit puis s'exécute dessus — une correction du runner arrive avec une montée de
+`@spunto/build`, sans rebuild. esbuild est donc une dépendance de prod de Lite, et reste hors du
+bundle serveur de Next (`serverExternalPackages`) ; dans ce bundle, `runnerFile` pointe sur une copie
+du seul `.mjs`, sans son adaptateur, et l'entrée est relue dans `node_modules/@spunto/build`.
+`AGENT_RUNNERS_DIR` remplace toujours l'entrée d'un harnais par `<id>.mjs`, bundlée à chaque session
+(c'est un outil de mise au point) :
 
 ```
 <node> <runner>.mjs run [--model <id>] [--resume <session id>]
 stdin   {"type":"user","text"} · {"type":"interrupt","id"} · {"type":"title","id","description"}
-stdout  les événements du harnais, normalisés par Lite (dialectes claude-runner, codex-runner)
+stdout  le contrat d'agent Spunto (agent-v1) : notre vocabulaire, une ligne par événement,
+        avec en `source` le message du harnais dont il vient — lu par un seul lecteur strict
 ```
 
-Les deux dialectes sont interactifs : une réponse pendant un tour part dans le stdin vivant (Codex
+**Une session garde le dialecte sur lequel elle a commencé** (Cloud cf96aa07) :
+`tasks.session_protocol` (migration `0013`) est écrit au lancement de chaque session (`agent-v1`
+aujourd'hui) et dit comment la lire (`protocolOf`). Une session lancée par un Lite d'avant la montée
+n'en a pas : elle reste lue dans l'ancien dialecte de son app (`claude-runner`, `codex-runner`, le
+`legacyProtocol` du harnais) jusqu'à sa fin ; sa prochaine reprise démarre sur le contrat. Le
+dialecte d'une session est écrit **avant** son lancement : un redémarrage de Lite entre le lancement
+et la ligne qui l'enregistre adopte la session, et doit la lire dans le bon dialecte.
+
+Comme dans Cloud, Lite ne mesure plus la fenêtre de contexte auprès de l'API Models d'Anthropic :
+le runner Claude la donne lui-même dans `session.started`, et Lite ne lit plus aucune clé ni jeton
+Anthropic.
+
+Tous les dialectes de runner sont interactifs : une réponse pendant un tour part dans le stdin vivant (Codex
 la garde pour la fin du tour), une interruption arrête le tour sans tuer la session. Le titre de la
 conversation est **demandé** à la session juste après le premier tour (`sessionTitleRequestLine`) :
 Claude Code ne se nomme plus tout seul en `stream-json`.
@@ -77,6 +101,16 @@ chaque reprise, et le runner le reçoit dans `SPUNTO_AGENT_OPTIONS`.
 
 **Les serveurs MCP** allumés pour le projet arrivent dans la session par `SPUNTO_AGENT_MCP`,
 servis par la passerelle de Lite → [serveurs-mcp.md](serveurs-mcp.md).
+
+**Le texte s'affiche pendant qu'il s'écrit** (Cloud ebadc730, 0b31082b) : chaque session reçoit
+`SPUNTO_AGENT_STREAM=1` (`STREAM_ENV`), et son runner imprime alors les morceaux d'un message en
+cours (`message.delta` : Claude par `includePartialMessages`, Mistral par les chunks ACP de Vibe ;
+Codex n'en donne que s'il envoie des `item.updated`). Ce ne sont pas des événements : l'ingestion
+les plie (`foldDraft`) en un **brouillon** tenu en mémoire (sur `globalThis`, les deux graphes de
+modules du process le partagent), jamais stocké, remplacé par le `message` fini dès qu'il arrive,
+oublié après 5 minutes sans suite. `GET /api/tasks/:id/events` le rend dans `draft`, le fil le
+dessine à la place de « working… » (`TaskEventStream`, prop `draft`) et sonde toutes les 700 ms
+tant qu'il y en a un. Un redémarrage de Lite ne perd que quelques secondes d'aperçu.
 
 **Les tâches d'avant les apps** (`agent_app_id` nul) finissent sur le CLI où elles ont commencé
 (`LEGACY_CLI`, avec la commande et le dialecte de l'ancienne colonne du projet) : une session
@@ -284,7 +318,7 @@ GET    /api/tasks/:taskId                       — détail, re-dérivé, + canR
 PATCH  /api/tasks/:taskId                       — renomme { title } (la branche ne bouge pas)
 DELETE /api/tasks/:taskId                       — oublie une tâche finie (409 si vivante)
 GET    /api/tasks/:taskId/commands              — ce que la plateforme a lancé, plus ancien d'abord
-GET    /api/tasks/:taskId/events                — la session (?since= | ?tail=true | ?before=, &limit=, &source=true) + usage
+GET    /api/tasks/:taskId/events                — la session (?since= | ?tail=true | ?before=, &limit=, &source=true) + usage + draft
 GET    /api/tasks/:taskId/diff                  — ce que la branche change, par dépôt
 GET    /api/tasks/:taskId/diff/patch            — le patch d'un fichier (?path=&repo=&oldPath=&untracked=)
 POST   /api/tasks/:taskId/messages              — répond { prompt, files? } → 202
@@ -304,7 +338,7 @@ GET    /api/agent-apps                          — les apps d'agent et leur cat
 | `db/schema.ts` | tables `tasks`, `task_commands`, `task_events`, `task_attachments`, colonnes `projects.task_*` |
 | `services/tasks.ts` | création, allocation, branche, session, dérivation, plancher de fond, Accept/Drop/réponse/interruption |
 | `services/task-commands.ts` | ce qui a tourné pour une tâche, et sa réconciliation avec le worker |
-| `services/task-events.ts` | ingestion par curseur, titre de session, usage |
+| `services/task-events.ts` | ingestion par curseur, titre de session, usage, brouillon en mémoire |
 | `services/task-diff.ts`, `lib/task-diff.ts` | le diff lu avec git dans le worker (scripts et parseurs repris de Cloud) |
 | `services/task-attachments.ts`, `lib/task-attachments.ts` | pièces jointes dans les deux sens |
 | `lib/worker-commands.ts` | commandes foreground/background dans un worker (port de l'agent de nœud Cloud) |

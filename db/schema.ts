@@ -307,6 +307,14 @@ export const tasks = sqliteTable(
     workerId: text("worker_id").references(() => workers.id, { onDelete: "set null" }),
     /** The agent session — the `task_commands` row of the current turn. */
     commandId: text("command_id"),
+    /**
+     * The dialect the session `commandId` speaks (`@spunto/build` → `AGENT_PROTOCOLS`), fixed when
+     * it starts: `agent-v1`, the Spunto agent contract, for every session started since the runners
+     * print it (RFC 0048 § 9). Null = a session started before — read with its app's previous
+     * dialect, or its project's for a task delegated before agent apps — so a conversation keeps the
+     * dialect it began on until it ends (Cloud cf96aa07, `protocolOf`).
+     */
+    sessionProtocol: text("session_protocol"),
     // queued | running | in-review | done | failed
     state: text("state").notNull().default("queued"),
     error: text("error"),
