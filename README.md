@@ -103,7 +103,12 @@ HTTPS with a local mkcert certificate. See
   (`GET /api/projects/:id/export`), *Import* on the dashboard (or in the
   new-project form) pre-fills the creation form from such a file. Secret
   **values** are never exported — only their names, so the form can lay out the
-  rows to fill in.
+  rows to fill in. Port labels and a delayed park travel too, beside the shared
+  spec (which has no field for them yet), under Spunto Cloud's names.
+- **Named ports**: every port that listens in a worker is reachable without being
+  declared, but a port declared in the project form (*Runtime → Ports*) gets a
+  **label** and a **landing path**. A task's Machine panel lists them green while
+  something listens and greyed while nothing does — parked machine included.
 - **Extension registry is configurable**: the extension picker searches
   [Open VSX](https://open-vsx.org) by default. Set `EXTENSIONS_GALLERY` on the
   control plane — the same JSON blob code-server takes — and the picker, the

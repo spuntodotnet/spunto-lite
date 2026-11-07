@@ -20,6 +20,7 @@ import {
 import { AVAILABLE_FEATURES } from "./catalogs"
 import { EXTENSION_ID_HINT, isExtensionId } from "./extensions"
 import type { ProjectExport } from "./project-export"
+import { cleanPortsAttributes, type PortsAttributes } from "./ports"
 import { isDeclaredVolume, validateSharedVolumes } from "./shared-volumes"
 import type { Project, ProjectFeature, Repository, SharedVolume } from "./types"
 
@@ -37,6 +38,8 @@ export const DEFAULT_IMAGE = "mcr.microsoft.com/devcontainers/javascript-node:20
  */
 export interface LiteFormValue extends ProjectFormValue, TaskSettings {
   sharedVolumes: SharedVolume[]
+  /** A label and a path per declared port, edited under the package's port list (lib/ports.ts). */
+  portsAttributes: PortsAttributes
 }
 
 /**
@@ -53,6 +56,8 @@ export interface TaskSettings {
   taskValidateCommand: string
   taskCancelCommand: string
   taskReviewMode: "keep" | "stop"
+  /** With `stop`: minutes a task stays in review, machine awake, before it is parked. 0 = at once. */
+  taskReviewParkAfterMinutes: number
 }
 
 /** A new project's: Claude Code, as the API defaults to — so it can delegate out of the box. */
@@ -63,6 +68,7 @@ const DEFAULT_TASK_SETTINGS: TaskSettings = {
   taskValidateCommand: "",
   taskCancelCommand: "",
   taskReviewMode: "keep",
+  taskReviewParkAfterMinutes: 0,
 }
 
 /** The body POSTed to /api/projects and PATCHed to /api/projects/:id. */
@@ -78,13 +84,14 @@ export type ProjectPayload = {
   postStartCommand?: string
   repositories: Repository[]
   forwardPorts: number[]
+  portsAttributes: PortsAttributes
   sharedVolumes: SharedVolume[]
   secrets: { name: string; value: string }[]
 } & TaskSettings
 
 /** A fresh creation form: everything empty but the default base image. */
 export function newProjectFormValue(): LiteFormValue {
-  return { ...toProjectFormValue({ image: DEFAULT_IMAGE }), sharedVolumes: [], ...DEFAULT_TASK_SETTINGS }
+  return { ...toProjectFormValue({ image: DEFAULT_IMAGE }), sharedVolumes: [], portsAttributes: {}, ...DEFAULT_TASK_SETTINGS }
 }
 
 /** An existing project, as the form edits it. */
@@ -104,12 +111,14 @@ export function fromProject(p: Project): LiteFormValue {
       dockerInDocker: p.dind,
     }),
     sharedVolumes: p.sharedVolumes ?? [],
+    portsAttributes: p.portsAttributes ?? {},
     agentAppIds: p.agentAppIds ?? [],
     taskAgentModels: p.taskAgentModels ?? {},
     taskAgentInstructions: p.taskAgentInstructions ?? "",
     taskValidateCommand: p.taskValidateCommand ?? "",
     taskCancelCommand: p.taskCancelCommand ?? "",
     taskReviewMode: p.taskReviewMode === "stop" ? "stop" : "keep",
+    taskReviewParkAfterMinutes: p.taskReviewParkAfterMinutes ?? 0,
   }
 }
 
@@ -136,6 +145,8 @@ export function fromExport({ project: p }: ProjectExport): LiteFormValue {
     }),
     // A spec exported before shared volumes existed simply doesn't have the key.
     sharedVolumes: p.sharedVolumes ?? [],
+    // Lite's extras beside the spec (see `ProjectExtras`): absent from a Cloud file, so empty.
+    portsAttributes: p.portsAttributes ?? {},
     // The spec has no harness list (it is this instance's apps): the new project's default. Its
     // CLI-era fields (`taskAgentCommand`…) are left behind — agent apps replaced them (RFC 0048).
     ...DEFAULT_TASK_SETTINGS,
@@ -147,6 +158,7 @@ export function fromExport({ project: p }: ProjectExport): LiteFormValue {
     taskValidateCommand: p.taskValidateCommand ?? "",
     taskCancelCommand: p.taskCancelCommand ?? "",
     taskReviewMode: p.taskReviewMode === "stop" ? "stop" : "keep",
+    taskReviewParkAfterMinutes: p.taskReviewParkAfterMinutes ?? 0,
   }
 }
 
@@ -226,6 +238,8 @@ export function toProjectPayload(value: LiteFormValue): ProjectPayload {
     // The package's port field drops anything unparseable but keeps large
     // numbers; the API caps at 65535, so the bound is enforced here too.
     forwardPorts: value.forwardPorts.filter((n) => Number.isInteger(n) && n > 0 && n < 65536),
+    // Only the declared ports, without empty fields (the API keeps it to them anyway).
+    portsAttributes: cleanPortsAttributes(value.forwardPorts, value.portsAttributes),
     sharedVolumes: value.sharedVolumes
       .filter(isDeclaredVolume)
       .map((v) => ({ name: v.name.trim(), mountPath: v.mountPath.trim() })),
@@ -239,6 +253,7 @@ export function toProjectPayload(value: LiteFormValue): ProjectPayload {
     taskValidateCommand: value.taskValidateCommand,
     taskCancelCommand: value.taskCancelCommand,
     taskReviewMode: value.taskReviewMode,
+    taskReviewParkAfterMinutes: value.taskReviewParkAfterMinutes,
   }
 }
 

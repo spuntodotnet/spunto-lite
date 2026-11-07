@@ -1,5 +1,7 @@
 import type { AgentCatalog } from "@spunto/build/agent-runners"
 import type { BuildStep } from "@spunto/build/steps"
+import type { PortsAttributes } from "./ports"
+export type { PortsAttributes }
 export type { BuildStep }
 
 // Client-facing types (kept separate from db/schema.ts so client bundles never
@@ -69,6 +71,8 @@ export type Project = {
   postStartCommand: string | null
   repositories: Repository[]
   forwardPorts: number[]
+  /** A label and a path per port (lib/ports.ts). */
+  portsAttributes: PortsAttributes
   sharedVolumes: SharedVolume[]
   /** The agent apps this project's tasks may run under, the first being the default (RFC 0048). */
   agentAppIds: string[]
@@ -78,6 +82,8 @@ export type Project = {
   taskValidateCommand: string | null
   taskCancelCommand: string | null
   taskReviewMode: string
+  /** With `stop`: minutes in review before the machine is parked, 0 = at once. */
+  taskReviewParkAfterMinutes: number
   /** The default model per agent app. */
   taskAgentModels: Record<string, string>
   taskAgentInstructions: string | null

@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { EXTENSION_ID_HINT, isExtensionId } from "./extensions"
+import { PortsAttributesSchema } from "./ports"
 import {
   SHARED_VOLUME_NAME_HINT,
   SHARED_VOLUME_NAME_RE,
@@ -92,6 +93,8 @@ export const TaskSettingsSchema = z.object({
   taskValidateCommand: z.string().max(10_000).nullable().optional(),
   taskCancelCommand: z.string().max(10_000).nullable().optional(),
   taskReviewMode: z.enum(["keep", "stop"]).optional(),
+  /** With `stop`: minutes in review, machine awake, before it is parked — 0 = at once, at most a day. */
+  taskReviewParkAfterMinutes: z.number().int().min(0).max(24 * 60).optional(),
   /** The default model per agent app, `{ claude: "claude-opus-5-5" }`. Replaces the whole map. */
   taskAgentModels: z.record(z.string(), z.string().trim().max(200)).optional(),
   taskAgentInstructions: z.string().max(10_000).nullable().optional(),
@@ -114,6 +117,8 @@ export const CreateProjectSchema = z.object({
   postStartCommand: z.string().optional(),
   repositories: z.array(RepositorySchema).default([]),
   forwardPorts: z.array(z.number().int().min(1).max(65535)).default([]),
+  /** A label and a path per port (lib/ports.ts). Not versioned: nothing of it goes into the image. */
+  portsAttributes: PortsAttributesSchema.optional(),
   sharedVolumes: SharedVolumesSchema.default([]),
   secrets: z.array(SecretInputSchema).optional(),
   /**
@@ -144,6 +149,8 @@ export const UpdateProjectSchema = z.object({
   postStartCommand: z.string().optional(),
   repositories: z.array(RepositorySchema).optional(),
   forwardPorts: z.array(z.number().int().min(1).max(65535)).optional(),
+  /** Replaces the whole map. Applied without a version, like the task settings. */
+  portsAttributes: PortsAttributesSchema.optional(),
   sharedVolumes: SharedVolumesSchema.optional(),
   secrets: z.array(SecretInputSchema).optional(),
   /** Replaces the whole list. Part of the image: a change mints a version, like features. */

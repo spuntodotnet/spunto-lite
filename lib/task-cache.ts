@@ -23,6 +23,8 @@ export interface Task extends TaskItem {
   pendingSince: string | null
   /** The machine as the task sees it (docs/taches.md § « La machine d'une tâche »); null once the task is over. */
   machine?: "starting" | "awake" | "parked" | "lost" | null
+  /** When review mode `stop` parks its machine on its own (a delayed park), cancelled by Keep awake (docs/taches.md § « Garer plus tard »). */
+  parkAt?: string | null
   /** Only on `GET /api/tasks/:id`. */
   canResume?: boolean
 }

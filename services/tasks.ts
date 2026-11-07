@@ -257,9 +257,14 @@ export function serializeTask(row: Task) {
   delete out.eventsSeq
   delete out.eventsCommandId
   const worker = row.workerId ? getWorkerRow(row.workerId) : null
+  const machine = deriveTaskMachine(row, worker)
   return {
     ...(out as Omit<Task, "lastRefreshedAt" | "eventsOffset" | "eventsSeq" | "eventsCommandId">),
-    machine: deriveTaskMachine(row, worker),
+    machine,
+    // A delayed park means something only while the task is in review with its machine up: a
+    // deadline left on a row that moved on (an Accept landing, the container stopped by hand) is
+    // never a countdown to show — and the floor would not act on it either (`parkDueTasks`).
+    parkAt: row.state === "in-review" && machine === "awake" ? row.parkAt : null,
   }
 }
 
@@ -318,6 +323,7 @@ export function createTask(projectId: string, input: CreateTaskInput): Task {
     error: null,
     pendingAction: null,
     pendingSince: null,
+    parkAt: null,
     lastRefreshedAt: null,
     lastActivityAt: now,
     eventsCommandId: null,
@@ -942,13 +948,29 @@ function sessionState(
   return { state: events.hasHandedBack(row.id) ? "in-review" : "running" }
 }
 
-/** Review mode `stop` parks the machine as the task enters review; `keep` leaves it up. Idempotent. */
+/**
+ * Review mode `stop` parks the machine as the task enters review — at once, or
+ * `taskReviewParkAfterMinutes` from now (« Garer plus tard », Cloud 275d6fed); `keep` leaves it up.
+ * Idempotent.
+ *
+ * A delayed park is a deadline on the task (`parkAt`), not a timer: Cloud queues a `task.settle`
+ * job with a later `run_at`, Lite has no job table and its process restarts with the computer, so
+ * the row carries it and the background floor parks what came due (`parkDueTasks`). Entering
+ * review again — after a reply — writes a fresh one over whatever was left.
+ */
 async function settleTask(taskId: string): Promise<void> {
   try {
     const task = getRawTask(taskId)
     if (!task?.workerId || task.state !== "in-review") return
     const project = getProjectRow(task.projectId)
     if (project?.taskReviewMode !== "stop") return
+    const minutes = project.taskReviewParkAfterMinutes ?? 0
+    if (minutes > 0) {
+      const parkAt = new Date(Date.now() + minutes * 60_000)
+      db.update(tasks).set({ parkAt }).where(and(eq(tasks.id, taskId), eq(tasks.state, "in-review"))).run()
+      console.log(`[task:${taskId}] entering review — parking worker ${task.workerId} at ${parkAt.toISOString()} unless someone keeps it awake`)
+      return
+    }
     await withPoolLock(task.workerId, async () => {
       const worker = await getWorkerLive(task.workerId!)
       if (!worker || worker.state !== "ready" || getRawTask(taskId)?.state !== "in-review") return
@@ -1033,6 +1055,48 @@ export async function refreshDueTasks(now = Date.now()): Promise<number> {
 }
 
 /**
+ * Park the machines whose delayed park came due (`parkAt`, see `settleTask`). Called by the floor's
+ * tick, every 10 s, so a deadline is honoured to within a tick — and at boot, a deadline that
+ * passed while Lite was down is honoured on the first one.
+ *
+ * The deadline is taken (cleared, compare-and-swap on its value) before the machine is stopped, so
+ * two ticks never park twice; a task that moved on meanwhile is left alone, like Cloud's job finding
+ * the task back at work. One difference: while an Accept or a Drop is in flight the deadline is
+ * **kept** for a later tick — each is about to wake the machine, and an Accept that fails leaves the
+ * task in review, where the park still has to happen. (A reply clears it: it is a new turn.)
+ */
+export async function parkDueTasks(now = Date.now()): Promise<number> {
+  const due = db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.state, "in-review"), isNotNull(tasks.parkAt)))
+    .all()
+    .filter((t) => t.parkAt!.getTime() <= now && !t.pendingAction)
+  let parked = 0
+  for (const t of due) {
+    const { changes } = db
+      .update(tasks)
+      .set({ parkAt: null })
+      .where(and(eq(tasks.id, t.id), eq(tasks.state, "in-review"), eq(tasks.parkAt, t.parkAt!), sql`${tasks.pendingAction} IS NULL`))
+      .run()
+    if (changes === 0 || !t.workerId) continue
+    try {
+      await withPoolLock(t.workerId, async () => {
+        const worker = await getWorkerLive(t.workerId!)
+        const fresh = getRawTask(t.id)
+        if (!worker || worker.state !== "ready" || fresh?.state !== "in-review" || fresh.pendingAction) return
+        console.log(`[task:${t.id}] scheduled park — stopping worker ${t.workerId} (state kept on disk)`)
+        await stopWorker(t.workerId!)
+        parked++
+      })
+    } catch (err) {
+      console.warn(`[task:${t.id}] scheduled park failed: ${err}`)
+    }
+  }
+  return parked
+}
+
+/**
  * What a restart interrupted. Lite's jobs live in this process, so one that was mid-flight when
  * it stopped will never finish — and its task would say "Accepting…" or "queued" for ever. Since
  * Lite runs on computers that restart all the time, what can simply go on does:
@@ -1079,7 +1143,10 @@ function resumeInterruptedRuns(taskIds: string[]): void {
 export function startTaskScheduler(intervalMs = SCHEDULER_TICK_MS): void {
   if (schedulerTimer) return
   resumeInterruptedRuns(recoverInterruptedTasks())
-  const tick = () => void refreshDueTasks().catch((err) => console.error("[tasks] background refresh tick failed:", err))
+  const tick = () => {
+    void refreshDueTasks().catch((err) => console.error("[tasks] background refresh tick failed:", err))
+    void parkDueTasks().catch((err) => console.error("[tasks] scheduled parks tick failed:", err))
+  }
   schedulerTimer = setInterval(tick, intervalMs)
   schedulerTimer.unref?.()
   tick()
@@ -1216,10 +1283,29 @@ export async function parkTask(taskId: string): Promise<Task> {
   const worker = task.workerId ? await getWorkerLive(task.workerId) : null
   const machine = deriveTaskMachine(task, worker)
   if (machine !== "awake") throw new TaskActionError(`The task's machine is ${machine ?? "gone"}, not awake`, 409)
+  // Parked now: the countdown to parking it later has nothing left to do.
+  clearScheduledPark(taskId)
   await withPoolLock(task.workerId!, async () => {
     console.log(`[task:${taskId}] parked by hand — stopping worker ${task.workerId}`)
     await stopWorker(task.workerId!)
   })
+  return getRawTask(taskId) ?? task
+}
+
+/** Drop the delayed park still waiting on this task, if any. Returns whether there was one. */
+function clearScheduledPark(taskId: string): boolean {
+  return db.update(tasks).set({ parkAt: null }).where(and(eq(tasks.id, taskId), isNotNull(tasks.parkAt))).run().changes > 0
+}
+
+/**
+ * Keep awake: cancel the park review mode `stop` scheduled for this task (Cloud 275d6fed) — its
+ * machine stays up for the rest of this review, as with `keep`. Parking it is then the Park
+ * button's job; a reply that takes it back to work schedules a fresh park at the next review.
+ */
+export async function keepTaskAwake(taskId: string): Promise<Task> {
+  const task = await requireTask(taskId, ["in-review"])
+  if (!clearScheduledPark(taskId)) throw new TaskActionError("No park is scheduled for this task", 409)
+  console.log(`[task:${taskId}] scheduled park cancelled — keeping worker ${task.workerId} awake`)
   return getRawTask(taskId) ?? task
 }
 
@@ -1272,13 +1358,14 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
   const allowed: TaskState[] = isInteractive(protocol) ? ["running", "in-review"] : ["in-review"]
   const task = await requireTask(taskId, allowed)
   if (!task.workerId) throw new TaskActionError("This task has no worker to continue in", 409)
-
   const live = isInteractive(protocol) ? await isSessionAlive(task) : null
   if (live) {
     const stored = attachments.storeFiles(task.id, live.id, "user", files)
     const paths = await attachments.materialize(task.workerId, task.id, attachments.attachmentsByIds(task.id, stored.map((f) => f.id)))
     recordUserTurn(task.id, live.id, protocol, prompt, stored)
     await commands.writeTaskStdin(live, userTurnLine(protocol, `${prompt}${attachments.attachmentPreamble(paths)}`))
+    // Somebody answered: the countdown to a park is off. The next review starts its own.
+    clearScheduledPark(taskId)
     if (task.state !== "running") {
       db.update(tasks).set({ state: "running", error: null, completedAt: null, lastActivityAt: new Date() }).where(eq(tasks.id, taskId)).run()
     }
@@ -1293,6 +1380,7 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
   const blocked = project ? taskAgentAppBlocker(task, project) : null
   if (blocked) throw new TaskActionError(blocked, 409)
   const claimed = claimPending(taskId, "replying")
+  clearScheduledPark(taskId)
   const stored = attachments.storeFiles(taskId, null, "user", files)
   void runJob(
     taskId,

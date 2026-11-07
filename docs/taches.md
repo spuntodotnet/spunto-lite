@@ -163,6 +163,37 @@ Sous la section Machine du cockpit : **Park the machine** / **Wake the machine**
 seulement ; Park est refusé pendant un Accept, un Drop ou une réponse en vol, qui vont chacun la
 rallumer). Le mode de relecture `stop`, c'est le Park automatique.
 
+**Les ports de la machine** (Cloud c429724d) : ceux que le projet déclare (`forwardPorts`), avec
+le **label** et le **chemin** que le formulaire leur donne (`portsAttributes`, page *Runtime*),
+plus tout ce qui écoute dans le worker. Vert et lien (chemin compris) quand quelque chose écoute,
+grisé sans lien sinon — y compris machine garée, pour voir ce que l'app servira. Servis par
+`GET /api/workers/:id/machine-ports`, qui ne demande rien au worker s'il n'est pas `ready`.
+
+### Garer plus tard
+
+Garer à la seconde où la session rend la main coûte cher quand on itère vite : chaque réponse
+rallume la machine. `taskReviewParkAfterMinutes` (*Worker during review → Park it → Park after N
+minutes*, `0` par défaut = tout de suite, au plus 1 440) laisse la machine **debout N minutes** en
+revue (Cloud 275d6fed) :
+
+- l'échéance est **écrite sur la tâche** (`tasks.park_at`) à l'entrée en revue. Cloud en fait un
+  job `task.settle` au `run_at` futur ; Lite n'a pas de table de jobs et son process redémarre avec
+  l'ordinateur, donc c'est la ligne qui la porte, et le plancher de fond (toutes les 10 s,
+  `parkDueTasks`) gare ce qui est échu. Un redémarrage de Lite ne perd rien ; une échéance passée
+  pendant qu'il était arrêté est honorée au premier tick ;
+- la tâche l'expose en **`parkAt`** (null hors `in-review` ou machine pas `awake`), et le panneau
+  Machine en fait un compte à rebours avec **Keep awake** (`POST /api/tasks/:id/keep-awake`, 409
+  s'il n'y a rien de programmé), qui l'efface : la machine reste debout pour cette revue, Park la
+  gare toujours à la main ;
+- **répondre l'annule** aussi, et la revue suivante en programme une neuve ; Park à la main
+  l'efface ;
+- à l'échéance, rien ne se passe si la tâche n'est plus `in-review`. Pendant un Accept ou un Drop
+  en vol, l'échéance est **gardée** pour un tick suivant (Cloud, lui, la consomme) : un Accept qui
+  échoue laisse la tâche en revue, où le parquage a toujours lieu d'être.
+
+Pas dans le spec d'export `@spunto/build` (0.25), comme les labels des ports : Lite les écrit à
+côté, sous les noms de Cloud, et les relit lui-même (`ProjectExtras`, `lib/project-export.ts`).
+
 **Un seul chemin de réveil** pour une réponse, Accept, Drop et Wake : un worker arrêté — ou tombé
 tout seul — est redémarré, un conteneur disparu est rebuildé sur le même volume ; seul un worker
 dont le *setup* a échoué est refusé (le relancer échouerait pareil). Le checkout **n'est pas
@@ -261,6 +292,7 @@ reste à vérifier là-bas, selon ce que sa lecture de commande répond pour un 
 | `taskValidateCommand` | Accept clôt la tâche | lancée par Accept dans le worker ; exit 0 ⇒ `done` |
 | `taskCancelCommand` | rien de plus que tuer la session | nettoyage lancé par Drop |
 | `taskReviewMode` | `keep` | `stop` : le conteneur est garé en revue (Park automatique), réveillé par Accept/Drop/une réponse/Wake |
+| `taskReviewParkAfterMinutes` | `0` | avec `stop` : minutes en revue, machine debout, avant le parquage (§ « Garer plus tard ») |
 | `taskAgentInstructions` | rien | ajouté à la consigne de chaque tâche du projet |
 
 Ils se règlent dans le formulaire du projet, page **Agents** (section *Delegated work*, à côté des
@@ -293,6 +325,8 @@ POST   /api/tasks/:taskId/validate              — Accept → 202
 POST   /api/tasks/:taskId/cancel                — Drop → 202
 POST   /api/tasks/:taskId/park                  — gare la machine d'une tâche en revue (409 sinon, ou pendant une action en vol)
 POST   /api/tasks/:taskId/wake                  — rallume la machine garée d'une tâche en revue
+POST   /api/tasks/:taskId/keep-awake            — annule le parquage programmé (`parkAt`) d'une tâche en revue (409 sinon)
+GET    /api/workers/:id/machine-ports           — les ports d'un worker : déclarés (label, chemin) et à l'écoute
 GET    /api/tasks/:taskId/attachments/:id       — les octets d'une pièce jointe (PNG/JPEG/WebP/GIF inline, le reste en téléchargement)
 GET    /api/agent-apps                          — les apps d'agent et leur catalogue (modèles, paramètres)
 ```
@@ -311,7 +345,8 @@ GET    /api/agent-apps                          — les apps d'agent et leur cat
 | `lib/agent-apps.ts` | les apps d'agent : `effectiveFeatures`, `resolveTaskAgentApp`, `resolveAgentOptions`, `taskHarness`, `LEGACY_CLI` |
 | `app/(app)/agents/page.tsx` | le poste de pilotage |
 | `components/task-cockpit.tsx` | une conversation — les données ; tout ce qui dessine vient du design system |
-| `components/task-machine-controls.tsx` | Park / Wake sous la section Machine du cockpit |
+| `components/task-machine-controls.tsx` | Park / Wake / Keep awake (et le compte à rebours) sous la section Machine du cockpit |
+| `lib/ports.ts`, `hooks/use-machine-ports.ts` | les ports nommés : validation, fusion déclarés/à l'écoute, liens avec chemin |
 | `components/task-panel.tsx`, `components/new-task-button.tsx`, `components/task-settings-card.tsx` | la section du projet, la délégation, les réglages |
 | `lib/task-cache.ts`, `hooks/use-task-actions.ts` | les trois caches d'une tâche gardés d'accord, et les actions |
 | `e2e/tests/tasks.spec.ts` | l'API sans Docker (validation, refus, formes) — tourne en CI |
