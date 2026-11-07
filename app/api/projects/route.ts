@@ -1,4 +1,4 @@
-import { listProjects, createProject, ProjectAgentAppsError } from "@/services/projects"
+import { listProjectsWithStats, createProject, ProjectAgentAppsError } from "@/services/projects"
 import { CreateProjectSchema } from "@/lib/validation"
 import { badRequest, json, parseBody } from "@/lib/http"
 
@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
 export async function GET() {
-  return json(listProjects())
+  return json(listProjectsWithStats())
 }
 
 export async function POST(req: Request) {

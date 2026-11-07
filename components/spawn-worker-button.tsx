@@ -24,7 +24,19 @@ import { api } from "@/lib/api"
  * an existing branch — a PR under review, a release branch — instead of having to
  * check it out by hand once inside.
  */
-export function SpawnWorkerButton({ projectId, variant = "default" }: { projectId: string; variant?: "default" | "outline" }) {
+export function SpawnWorkerButton({
+  projectId,
+  variant = "default",
+  compact = false,
+  onSpawned,
+}: {
+  projectId: string
+  variant?: "default" | "outline"
+  /** A row's shortcut (the Projects table): a small "Workspace" button instead of "New workspace". */
+  compact?: boolean
+  /** Called with the new workspace once the API accepted it — the Projects table opens its page. */
+  onSpawned?: (worker: { id: string }) => void
+}) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState("")
@@ -36,8 +48,10 @@ export function SpawnWorkerButton({ projectId, variant = "default" }: { projectI
         name: name.trim() || undefined,
         branch: branch.trim() || undefined,
       }),
-    onSuccess: () => {
+    onSuccess: (worker) => {
       qc.invalidateQueries({ queryKey: ["workers", projectId] })
+      qc.invalidateQueries({ queryKey: ["projects"] })
+      onSpawned?.(worker as { id: string })
       toast.success(branch.trim() ? `Workspace spawning on ${branch.trim()}…` : "Workspace spawning…")
       setOpen(false)
       setName("")
@@ -48,9 +62,21 @@ export function SpawnWorkerButton({ projectId, variant = "default" }: { projectI
 
   return (
     <>
-      <Button size="sm" variant={variant} className="gap-1.5 shrink-0" onClick={() => setOpen(true)}>
-        <Zap className="h-3.5 w-3.5" /> New workspace
-      </Button>
+      {compact ? (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 gap-1 px-2 text-xs"
+          title="Spawn a workspace of this project"
+          onClick={() => setOpen(true)}
+        >
+          <Zap className="h-3.5 w-3.5" /> Workspace
+        </Button>
+      ) : (
+        <Button size="sm" variant={variant} className="gap-1.5 shrink-0" onClick={() => setOpen(true)}>
+          <Zap className="h-3.5 w-3.5" /> New workspace
+        </Button>
+      )}
       <Dialog open={open} onOpenChange={(o) => !spawn.isPending && setOpen(o)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
