@@ -86,7 +86,7 @@ function MiniChart({
         {latest && <span className="ml-auto font-mono text-xs tabular-nums text-foreground/80">{latest}</span>}
       </div>
       <ResponsiveContainer width="100%" height={70}>
-        <AreaChart data={data} margin={{ top: 2, right: 4, bottom: 0, left: -20 }}>
+        <AreaChart data={data} margin={{ top: 2, right: 4, bottom: 0, left: -8 }}>
           <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" opacity={0.5} vertical={false} />
           <XAxis dataKey="t" tickFormatter={(t: string) => tick(t, range)} tick={axisTick} tickLine={false} axisLine={false} minTickGap={40} />
           <YAxis
