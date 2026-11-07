@@ -1,0 +1,20 @@
+---
+import { render } from "astro:content"
+import Docs from "../../../layouts/Docs.astro"
+import { docsFor, slugOf } from "../../../lib/docs"
+
+export async function getStaticPaths() {
+  const pages = await docsFor("fr")
+  return pages.map((doc) => {
+    const slug = slugOf(doc)
+    return { params: { slug: slug === "introduction" ? undefined : slug }, props: { doc } }
+  })
+}
+
+const { doc } = Astro.props
+const { Content, headings } = await render(doc)
+---
+
+<Docs locale="fr" doc={doc} headings={headings}>
+  <Content />
+</Docs>

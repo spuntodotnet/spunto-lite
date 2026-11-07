@@ -1,0 +1,117 @@
+---
+import Base from "./Base.astro"
+import { UI, REPO_URL, type Locale } from "../lib/i18n"
+import { GROUPS, docsFor, hrefOf, slugOf, type Doc } from "../lib/docs"
+import type { MarkdownHeading } from "astro"
+
+interface Props {
+  locale: Locale
+  doc: Doc
+  headings: MarkdownHeading[]
+}
+
+const { locale, doc, headings } = Astro.props
+const t = UI[locale]
+const pages = await docsFor(locale)
+const slug = slugOf(doc)
+const index = pages.findIndex((p) => p.id === doc.id)
+const prev = pages[index - 1]
+const next = pages[index + 1]
+const toc = headings.filter((h) => h.depth === 2 || h.depth === 3)
+const editUrl = `${REPO_URL}/edit/main/site/src/content/docs/${doc.id}.md`
+---
+
+<Base wide locale={locale} title={`${doc.data.title} — ${locale === "fr" ? "Doc Spunto Lite" : "Spunto Lite docs"}`} description={doc.data.description}>
+  <div class="mx-auto max-w-7xl px-5 pt-16 md:px-10">
+    <div class="grid gap-10 lg:grid-cols-[15rem_minmax(0,1fr)] xl:grid-cols-[15rem_minmax(0,1fr)_13rem]">
+      {/* ── Sidebar ─────────────────────────────────────────── */}
+      <aside class="lg:sticky lg:top-16 lg:h-[calc(100vh-4rem)] lg:overflow-y-auto lg:py-10">
+        <details class="group lg:hidden mt-6 rounded-md border border-border" >
+          <summary class="cursor-pointer list-none px-4 py-3 text-sm font-medium">
+            {t.menu} <span class="text-muted-foreground">· {doc.data.title}</span>
+          </summary>
+          <div class="border-t border-border px-4 py-3">
+            
+            <nav>
+              {GROUPS.map((g) => (
+                <div class="mb-4">
+                  <p class="mb-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{t.groups[g]}</p>
+                  {pages.filter((p) => p.data.group === g).map((p) => (
+                    <a href={hrefOf(locale, slugOf(p))} class:list={["block py-1 text-sm", p.id === doc.id ? "text-primary font-medium" : "text-foreground/80"]}>{p.data.title}</a>
+                  ))}
+                </div>
+              ))}
+            </nav>
+          </div>
+        </details>
+        <nav class="hidden lg:block">
+          {GROUPS.map((g) => (
+            <div class="mb-7">
+              <p class="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{t.groups[g]}</p>
+              <ul class="border-l border-border">
+                {pages.filter((p) => p.data.group === g).map((p) => (
+                  <li>
+                    <a
+                      href={hrefOf(locale, slugOf(p))}
+                      aria-current={p.id === doc.id ? "page" : undefined}
+                      class:list={[
+                        "-ml-px block border-l py-1.5 pl-4 text-sm transition-colors",
+                        p.id === doc.id
+                          ? "border-primary font-medium text-primary"
+                          : "border-transparent text-muted-foreground hover:border-foreground/30 hover:text-foreground",
+                      ]}
+                    >{p.data.title}</a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </nav>
+      </aside>
+
+      {/* ── Page ────────────────────────────────────────────── */}
+      <main class="min-w-0 pb-24 pt-6 lg:pt-10">
+        <p class="font-mono text-[11px] uppercase tracking-[0.2em] text-primary">{t.groups[doc.data.group]}</p>
+        <article class="prose mt-3 max-w-[72ch]">
+          <h1>{doc.data.title}</h1>
+          <p class="!mt-4 text-lg !text-muted-foreground">{doc.data.description}</p>
+          <slot />
+        </article>
+
+        <div class="mt-16 max-w-[72ch] border-t border-border pt-6">
+          <div class="grid gap-3 sm:grid-cols-2">
+            {prev ? (
+              <a href={hrefOf(locale, slugOf(prev))} class="rounded-md border border-border p-4 transition-colors hover:border-primary/40">
+                <p class="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">← {t.previous}</p>
+                <p class="mt-1 text-sm font-medium">{prev.data.title}</p>
+              </a>
+            ) : <span />}
+            {next && (
+              <a href={hrefOf(locale, slugOf(next))} class="rounded-md border border-border p-4 text-right transition-colors hover:border-primary/40">
+                <p class="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">{t.next} →</p>
+                <p class="mt-1 text-sm font-medium">{next.data.title}</p>
+              </a>
+            )}
+          </div>
+          <a href={editUrl} class="mt-6 inline-block text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">{t.edit}</a>
+        </div>
+      </main>
+
+      {/* ── On this page ────────────────────────────────────── */}
+      <aside class="hidden xl:block xl:sticky xl:top-16 xl:h-[calc(100vh-4rem)] xl:overflow-y-auto xl:py-10">
+        {toc.length > 0 && (
+          <>
+            <p class="mb-3 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">{t.onThisPage}</p>
+            <ul class="space-y-1.5 text-[13px]">
+              {toc.map((h) => (
+                <li class:list={[h.depth === 3 && "pl-3"]}>
+                  <a href={`#${h.slug}`} class="text-muted-foreground transition-colors hover:text-foreground">{h.text}</a>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </aside>
+    </div>
+  </div>
+</Base>

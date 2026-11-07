@@ -1,0 +1,60 @@
+---
+import "../styles/global.css"
+import SiteNav from "../components/SiteNav.astro"
+import SiteFooter from "../components/SiteFooter.astro"
+import { switchLocale, type Locale } from "../lib/i18n"
+
+interface Props {
+  title: string
+  description: string
+  locale: Locale
+  /** The nav goes over the dark product band on the home page. */
+  overDark?: boolean
+  /** The docs use a wider grid than the home page; the nav follows it. */
+  wide?: boolean
+}
+
+const { title, description, locale, overDark = false, wide = false } = Astro.props
+const path = Astro.url.pathname.replace(/\/$/, "") || "/"
+const canonical = new URL(path, Astro.site)
+const alternates = {
+  en: new URL(switchLocale(path, "en"), Astro.site),
+  fr: new URL(switchLocale(path, "fr"), Astro.site),
+}
+const ogImage = new URL("/og.png", Astro.site)
+---
+
+<!doctype html>
+<html lang={locale} data-product="lite">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="alternate" hreflang="en" href={alternates.en} />
+    <link rel="alternate" hreflang="fr" href={alternates.fr} />
+    <link rel="alternate" hreflang="x-default" href={alternates.en} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Spunto Lite" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#1b2b4a" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <slot name="head" />
+    <script is:inline>
+      // Light by default; the toggle's choice wins, before first paint.
+      if (localStorage.getItem("theme") === "dark") document.documentElement.classList.add("dark")
+    </script>
+  </head>
+  <body class="min-h-screen overflow-x-clip bg-background font-sans text-foreground antialiased">
+    <SiteNav locale={locale} overDark={overDark} wide={wide} />
+    <slot />
+    <SiteFooter locale={locale} />
+  </body>
+</html>

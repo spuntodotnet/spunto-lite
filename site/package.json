@@ -1,0 +1,23 @@
+{
+  "name": "spunto-lite-site",
+  "private": true,
+  "type": "module",
+  "description": "lite.spunto.net — Spunto Lite's own site: the product page and the user documentation",
+  "scripts": {
+    "dev": "astro dev --host 0.0.0.0",
+    "build": "astro build",
+    "preview": "astro preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "@astrojs/react": "^7.1.4",
+    "@astrojs/sitemap": "^3.7.4",
+    "@base-ui/react": "^1.9.0",
+    "@spunto/design-system": "^0.72.0",
+    "@tailwindcss/vite": "^4.3.5",
+    "astro": "^7.4.7",
+    "lucide-react": "^1.70.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "tailwindcss": "^4.3.5"
+  }
+}
