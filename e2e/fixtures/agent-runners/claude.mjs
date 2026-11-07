@@ -4,7 +4,9 @@
 // stdout, like the real runner since `@spunto/build` 0.23: our vocabulary, one event per line, each
 // with the harness message it stands for as `source`. Under SPUNTO_AGENT_STREAM=1 it also prints its
 // replies piecemeal first (`message.delta`), the way the real runner forwards partial messages. It
-// stays alive between turns, honours an interrupt, commits and pushes for real, and names the
+// stays alive between turns, honours an interrupt, commits and pushes for real — on a branch of its
+// own, cut the first time it finds itself on the base, since Lite no longer cuts one (RFC 0056) —
+// and names the
 // conversation when asked. Told "mcp", it lists the tools of every MCP server it was given
 // (SPUNTO_AGENT_MCP), through Lite's gateway, the way the real runner's SDK would reach them.
 //
@@ -51,14 +53,17 @@ function handle(text) {
   }
   const file = `TASK-${process.env.SPUNTO_TASK_ID}-${turn}.md`
   fs.writeFileSync(file, `# turn ${turn}\n\n${text.split("\n---")[0]}\n`)
-  const cmd = `git add -A && git commit -qm "turn ${turn}" && git push -q origin HEAD && echo pushed`
+  // What a real agent does when the work is worth keeping: a branch it names, left as it is on the
+  // turns that follow (a task recycled from another keeps whatever it is on, unless that is the base).
+  const branch = `fake/${process.env.SPUNTO_TASK_ID}`
+  const cmd = `(test "$(git branch --show-current)" != main || git checkout -q -b ${branch}) && git add -A && git commit -qm "turn ${turn}" && git push -q -u origin HEAD && echo pushed`
   say(`On it — turn **${turn}**.`)
   out({ type: "tool.call", callId: `t${turn}`, name: "Bash", input: JSON.stringify({ command: cmd }) })
   let result = ""
   let isError = false
   try { result = execSync(cmd, { encoding: "utf8" }) } catch (e) { result = String(e.stderr || e.message); isError = true }
   out({ type: "tool.result", callId: `t${turn}`, isError, output: result })
-  finish(`Committed \`${file}\` on ${process.env.SPUNTO_TASK_BRANCH}.`)
+  finish(`Committed \`${file}\` on ${execSync("git branch --show-current", { encoding: "utf8" }).trim()}.`)
 }
 
 async function listMcpTools() {

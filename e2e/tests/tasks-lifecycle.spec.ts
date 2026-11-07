@@ -86,7 +86,9 @@ test.describe("task lifecycle on a real worker", () => {
         postCreateCommand: POST_CREATE,
         agentAppIds: ["claude"],
         // No SPUNTO_TASK_BRANCH any more (RFC 0056): the checkout says which branch the agent is on.
-        taskValidateCommand: 'test -z "${SPUNTO_TASK_BRANCH:-}" && git log --oneline -1 "$(git branch --show-current)" && echo accepted',
+        // It also leaves an untracked file behind, for the next task's reset to throw away.
+        taskValidateCommand:
+          'test -z "${SPUNTO_TASK_BRANCH:-}" && git log --oneline -1 "$(git branch --show-current)" && echo leftover > LEFTOVER.md && echo accepted',
       },
     })
     expect(res.status(), await res.text()).toBe(201)
@@ -169,17 +171,17 @@ test.describe("task lifecycle on a real worker", () => {
     expect(t.title).toBe("Second")
 
     // Recycled: the checkout was put back as a fresh clone would be before the session opened on
-    // it — the first task's note, left untracked, said and thrown away.
+    // it — what the first task's Accept left untracked, said and thrown away.
     const ran = await (await request.get(`/api/tasks/${created.id}/commands`)).json()
     expect(ran.map((c: { label: string }) => c.label).slice(0, 2)).toEqual(["Workspace reset", "Agent session"])
     expect(ran[0].stdout).toContain("discarding leftovers from the previous task")
     expect(ran[0].stdout).toContain("On main at")
-    const diff = await (await request.get(`/api/tasks/${created.id}/diff`)).json()
-    expect(diff.available).toBe(true)
-    expect(diff.branch).toBe("main")
-    const paths = diff.repos[0].files.map((f: { path: string }) => f.path)
-    expect(paths).toContain(`TASK-${created.id}-1.md`)
-    expect(paths.some((p: string) => p.startsWith("TASK-") && !p.includes(created.id))).toBe(false)
+    expect(ran[0].stdout).toContain("LEFTOVER.md")
+    // On the base again, the agent cut its own branch off it (the fake does, like a real one would).
+    // Said in its reply rather than read off the diff: in review mode `stop` the worker may already
+    // be parked, and a parked worker has no diff to give.
+    const said = (await events(request, created.id)).events.filter((e) => e.type === "message" && e.payload.role === "assistant")
+    expect(String(said.at(-1)?.payload.text)).toBe(`Committed \`TASK-${created.id}-1.md\` on fake/${created.id}.`)
 
     // Review mode `stop` parks the worker.
     await expect.poll(async () => (await (await request.get(`/api/workers/${t.workerId}`)).json()).state, { timeout: 60_000 }).toBe("stopped")
