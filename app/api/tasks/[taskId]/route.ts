@@ -1,6 +1,6 @@
-import { deleteTask, getTask, renameTask, serializeTaskDetail } from "@/services/tasks"
+import { deleteTask, getTask, updateTask, serializeTaskDetail } from "@/services/tasks"
 import { json, notFound, parseBody } from "@/lib/http"
-import { RenameTaskSchema } from "@/lib/validation"
+import { UpdateTaskSchema } from "@/lib/validation"
 import { taskError } from "@/lib/task-routes"
 
 export const dynamic = "force-dynamic"
@@ -15,13 +15,22 @@ export async function GET(_req: Request, { params }: Params) {
   return task ? json(serializeTaskDetail(task)) : notFound("Task not found")
 }
 
-/** Rename, in any state: `{ title }`. Nothing else is renamed (a task has no branch of its own). */
+/**
+ * `{ title?, links?, metadata? }`, in any state: rename (nothing else is renamed — a task has no
+ * branch of its own), replace the links as a whole, merge the metadata key by key — a string sets a
+ * key, `null` or `""` removes it, an absent key is left alone (docs/taches.md § « Liens et
+ * métadonnées »).
+ */
 export async function PATCH(req: Request, { params }: Params) {
   const { taskId } = await params
-  const parsed = await parseBody(req, RenameTaskSchema)
+  const parsed = await parseBody(req, UpdateTaskSchema)
   if ("response" in parsed) return parsed.response
-  const task = await renameTask(taskId, parsed.data.title)
-  return task ? json(serializeTaskDetail(task)) : notFound("Task not found")
+  try {
+    const task = await updateTask(taskId, parsed.data)
+    return task ? json(serializeTaskDetail(task)) : notFound("Task not found")
+  } catch (err) {
+    return taskError(err)
+  }
 }
 
 /** Forget a finished task and its history. A live one has to be dropped first (409). */

@@ -18,8 +18,8 @@ du dépôt Cloud ; cette page dit **ce qui est pareil, ce qui diffère dans Lite
 - **Page projet** → section *Tasks* au-dessus des workspaces, bouton **New task** dans l'en-tête,
   Accept / Drop sur la ligne.
 - **Une conversation à son URL** : `/projects/:id/tasks/:taskId` — onglets *Session*, *Diff* et
-  *Terminal*, la boîte de réponse sous les deux premiers, la colonne de faits à droite (usage de la session, machine,
-  prompt, ce qui a tourné ; la branche, pour une tâche d'avant 2026-11).
+  *Terminal*, la boîte de réponse sous les deux premiers, la colonne de détails à droite
+  (§ [La colonne de détails](#la-colonne-de-détails)).
 - **Terminal** : un shell dans la machine de la tâche, sur le checkout tel que l'agent l'a laissé. Ce sont les mêmes sessions
   dtach persistantes que la page worker (onglets, reprise après fermeture) — un shell ouvert ici s'y
   retrouve, et la session de l'agent n'en fait jamais partie. L'onglet n'existe que si la tâche a une
@@ -270,6 +270,82 @@ reset ») et passe ; les fichiers de la tâche précédente restent dans `/works
 (base inconnue du remote, remote injoignable) fait échouer la tâche avec un message qui dit quoi
 faire, avant toute session.
 
+## La colonne de détails
+
+Tout ce qui est un *fait sur* la tâche plutôt qu'un moment de sa session, dans `TaskDetails` du
+design system — l'ordre est le sien, Lite fournit les données (`components/task-cockpit.tsx`) :
+
+1. **En tête** : « Delegated … · ran … », l'erreur s'il y en a une, puis les **liens** posés par
+   celui qui a délégué (§ [Liens et métadonnées](#liens-et-métadonnées)), la **branche** (copiable)
+   et la **base** — seulement si elle a été donnée : `baseBranch: null`, c'est la branche par
+   défaut du dépôt, et le dire sur chaque tâche ne disait rien (Cloud 4d5dfe2b). Pas d'avatar de
+   « qui a délégué » : Lite n'a qu'un utilisateur.
+2. **Machine**, en premier et **toujours ouvert** : c'est sur lui qu'on agit (la page du worker,
+   un port, Park / Wake). Ni lieu, ni CPU, ni « Open the editor » (dépréciés en 0.72) : le nom du
+   worker mène à sa page, qui a l'IDE.
+3. **Session** (nos chiffres : contexte, tokens, coût, tours), puis juste dessous **Claude Code** :
+   ce que le harnais dit de sa session, lu dans ses propres lignes (`task_events.source`) — les
+   jauges du quota du plan (fenêtres 5 h et semaine, remise à zéro, dépassement) depuis le
+   `rate_limit_event`, les serveurs MCP et leur état, les skills et agents, le nombre d'outils, le
+   mode de permission, la version, l'id de session (copiable) depuis `system/init`, et depuis la
+   ligne `result` le coût par modèle quand il y en a plusieurs, la réflexion, les sous-agents, les
+   permissions refusées, les recherches web. Un champ absent est une ligne absente. Codex n'écrit
+   rien de tout ça : pas de bloc pour lui (`lib/claude-tile.ts`, porté de Cloud 8fa27672).
+4. **Pull requests** : les PR (GitHub, GitLab `!n`, Bitbucket) reconnues parmi les liens partagés,
+   une par PR. **Le lien seulement** : Lite ne parle à aucune forge (clone et push passent par la
+   clé SSH), donc ni état, ni checks, ni revue comme les dessine l'app GitHub de Cloud.
+5. **Shared links** / **Shared files** — § [Ce qui a circulé dans la conversation](#ce-qui-a-circulé-dans-la-conversation).
+6. **Prompt**, **What ran**, **Metadata**.
+7. **Monitoring**, le dernier : où tourne le worker (« This computer · Docker »), CPU et mémoire
+   en direct tant que la tâche tient une machine allumée, et leur **historique** sur 1 h, 6 h,
+   24 h ou 7 j (moyenne et pic de CPU, mémoire sous sa limite).
+
+Chaque bloc sauf Machine part **replié** et reste comme on le laisse, dans toutes les
+conversations (`localStorage` du navigateur, clé `spunto:task-details:open`, Cloud 05aee040).
+
+**L'historique, sans backend de télémétrie.** Cloud relit les battements de ses sandboxes dans
+OpenObserve ; Lite échantillonne lui-même `docker stats` toutes les 30 s pour chaque worker
+`ready`, dans SQLite (`worker_samples`), et oublie ce qui a plus de 7 jours (une purge par heure)
+— environ 2 900 lignes par jour et par worker allumé. Moyenné par tranche (1 min, 5 min, 15 min,
+1 h) à la lecture. C'est l'historique **du worker** : une machine recyclée du pool montre aussi
+ce qu'elle a fait pour les tâches d'avant (`services/worker-metrics.ts`).
+
+**« In review » se dessine avec le point de la machine** (Cloud 924761e6) : partout où l'état
+d'une tâche est dessiné (listes, en-tête du cockpit), l'icône d'une tâche en revue est le point du
+worker — vert qui pulse allumé, gris arrêté (garé), jaune au démarrage, rouge perdu. Lite n'a pas
+de pause mémoire : jamais de bleu. Le libellé « In review » ne change pas.
+
+## Ce qui a circulé dans la conversation
+
+`GET /api/tasks/:id/shared` rassemble chaque lien http(s) écrit dans un message — humain ou agent,
+hors sortie d'outil et blocs de code clôturés —, dédupliqué sur l'URL, le plus récemment écrit
+d'abord (un lien redit remonte), avec son texte s'il était un lien markdown, qui l'a écrit le
+premier et combien de fois ; et chaque pièce jointe de la conversation, sans les octets. Dérivé
+des événements à la lecture, jamais stocké (`lib/task-shared.ts`, porté de Cloud d7ae6d70).
+`GET /api/tasks/:id/tiles` en tire les blocs *Claude Code* et *Pull requests*.
+
+## Liens et métadonnées
+
+Ce que **celui qui délègue** dit de la tâche — à la création (`POST`) ou après (`PATCH`) —, et
+que Lite n'écrit jamais (Cloud 66528861). Le cas d'origine : une automatisation de backlog qui
+crée une tâche quand une carte passe en `ready` ; la carte savait quelle tâche elle avait lancée,
+la tâche ne savait pas d'où elle venait. Deux champs, deux lecteurs :
+
+- **`links`** — `[{ label, url }]`, pour un **humain** : dessinés en tête des détails, la première
+  chose qu'on cherche en arrivant d'une liste. `http(s)` seulement, 10 au plus. Un `PATCH` les
+  remplace en bloc.
+- **`metadata`** — paires `clé → texte`, pour une **machine** : 50 clés de 1–40 caractères
+  `A–Z a–z 0–9 _ . -`, valeurs ≤ 500. Montrées repliées, jamais interprétées. Un `PATCH` les
+  **fusionne** clé par clé : une chaîne pose, `null` ou `""` retire, une clé absente ne bouge pas.
+
+**Retrouver une tâche** : `?metadata[clé]=valeur` (répétable, toutes les paires doivent y être)
+sur `GET /api/tasks` et `GET /api/projects/:id/tasks` ; une clé impossible est un `400`. **La
+session les reçoit** en `SPUNTO_TASK_METADATA` / `SPUNTO_TASK_LINKS` (JSON, posées seulement s'il
+y en a) : un agent retrouve sa carte sans qu'on la recopie dans le prompt.
+
+Cloud les expose aussi par son serveur MCP ; Lite n'en a pas (`mcp/` est le pont navigateur des
+tests d'UI, [`api-partagee.md`](api-partagee.md)) : l'API HTTP est le seul chemin.
+
 ## Un ordinateur qui redémarre
 
 Lite tourne sur des portables et des postes qu'on redémarre souvent ; ce n'est pas une panne :
@@ -329,7 +405,9 @@ Lite tourne sur des portables et des postes qu'on redémarre souvent ; ce n'est 
 | Apps d'agent | installées par l'org (Integrations), désinstallation refusée tant qu'un projet s'en sert | toujours offertes, sans installation |
 | Mémoire du compositeur | dernier harnais/modèle/paramètres du membre par projet | aucune : le défaut du projet |
 | Diff indisponible | `no-machine`, `machine-stopped`, `node-unreachable`, `unsupported` | les deux premiers seulement : un seul démon Docker |
-| Pull request | plus de panneau « PR de la branche » (`7f1b709d`) : une PR partagée dans la conversation passe par le bloc embed de l'app GitHub | absente — Lite ne parle à aucune forge |
+| Pull request | plus de panneau « PR de la branche » (`7f1b709d`) : une PR partagée dans la conversation passe par le bloc embed de l'app GitHub (état, checks, revue) | reconnue parmi les liens de la conversation, le lien seulement — Lite ne parle à aucune forge |
+| Historique CPU / mémoire | battements des sandboxes, relus dans OpenObserve | `docker stats` échantillonné par Lite toutes les 30 s, dans SQLite, 7 jours |
+| Bloc du harnais (Claude Code) | dessiné par l'app `claude` (`embed.taskTile`) | dessiné par Lite, mêmes lignes, même forme — pas d'intégrations |
 
 **La session, elle, survit à un redémarrage de Lite** : c'est un process dans le worker, pas
 dans le plan de contrôle. Le redémarrage ne perd que ce qui vivait en mémoire — une allocation en
@@ -375,17 +453,18 @@ création comme à l'édition.
 Variables fournies aux commandes : `SPUNTO_TASK_ID`, `SPUNTO_TASK_TITLE`,
 `SPUNTO_TASK_BASE_BRANCH`, `SPUNTO_TASK_STATE`, `SPUNTO_TASK_MODEL` (si résolu),
 `SPUNTO_TASK_BRANCH` (seulement pour une tâche d'avant la RFC 0056 — sinon
-`$(git branch --show-current)`), plus les secrets du projet **tels qu'ils sont maintenant**
+`$(git branch --show-current)`), `SPUNTO_TASK_METADATA` et `SPUNTO_TASK_LINKS` (JSON, si la
+tâche en porte), plus les secrets du projet **tels qu'ils sont maintenant**
 (l'environnement du conteneur date de son spawn).
 
 ## Routes
 
 ```
-GET    /api/tasks                               — toutes les tâches (?state=&q=&projectId=&limit=&offset=), compteurs par état hors filtre d'état
-GET    /api/projects/:id/tasks                  — celles d'un projet
-POST   /api/projects/:id/tasks                  — délègue { prompt, title?, baseBranch?, model?, agentAppId?, agentOptions?, files? } → 201, queued
+GET    /api/tasks                               — toutes les tâches (?state=&q=&projectId=&metadata[clé]=&limit=&offset=), compteurs par état hors filtre d'état
+GET    /api/projects/:id/tasks                  — celles d'un projet (?metadata[clé]=)
+POST   /api/projects/:id/tasks                  — délègue { prompt, title?, baseBranch?, model?, agentAppId?, agentOptions?, files?, links?, metadata? } → 201, queued
 GET    /api/tasks/:taskId                       — détail, re-dérivé, + canResume
-PATCH  /api/tasks/:taskId                       — renomme { title } (rien d'autre ne bouge)
+PATCH  /api/tasks/:taskId                       — { title?, links?, metadata? } : renomme (rien d'autre ne bouge), remplace les liens, fusionne les métadonnées
 DELETE /api/tasks/:taskId                       — oublie une tâche finie (409 si vivante)
 GET    /api/tasks/:taskId/commands              — ce que la plateforme a lancé, plus ancien d'abord
 GET    /api/tasks/:taskId/events                — la session (?since= | ?tail=true | ?before=, &limit=, &source=true) + usage + draft
@@ -398,6 +477,9 @@ POST   /api/tasks/:taskId/cancel                — Drop → 202
 POST   /api/tasks/:taskId/park                  — gare la machine d'une tâche en revue (409 sinon, ou pendant une action en vol)
 POST   /api/tasks/:taskId/wake                  — rallume la machine garée d'une tâche en revue
 GET    /api/tasks/:taskId/attachments/:id       — les octets d'une pièce jointe (PNG/JPEG/WebP/GIF inline, le reste en téléchargement)
+GET    /api/tasks/:taskId/shared                — les liens et fichiers de la conversation { links, files }
+GET    /api/tasks/:taskId/tiles                 — les blocs Claude Code et Pull requests (TaskAppTile[])
+GET    /api/workers/:id/metrics                 — l'historique CPU / mémoire d'un worker (?range=1h|6h|24h|7d)
 GET    /api/agent-apps                          — les apps d'agent et leur catalogue (modèles, paramètres)
 ```
 
@@ -405,12 +487,14 @@ GET    /api/agent-apps                          — les apps d'agent et leur cat
 
 | Fichier | Rôle |
 |---|---|
-| `db/schema.ts` | tables `tasks`, `task_commands`, `task_events`, `task_attachments`, colonnes `projects.task_*` |
+| `db/schema.ts` | tables `tasks`, `task_commands`, `task_events`, `task_attachments`, `worker_samples`, colonnes `projects.task_*` |
 | `services/tasks.ts` | création, allocation, remise à plat d'une machine recyclée, session, dérivation, plancher de fond, Accept/Drop/réponse/interruption |
 | `services/task-commands.ts` | ce qui a tourné pour une tâche, et sa réconciliation avec le worker |
 | `services/task-events.ts` | ingestion par curseur, titre de session, usage, brouillon en mémoire |
 | `services/task-diff.ts`, `lib/task-diff.ts` | le diff lu avec git dans le worker (scripts et parseurs repris de Cloud) |
 | `services/task-attachments.ts`, `lib/task-attachments.ts` | pièces jointes dans les deux sens |
+| `services/task-shared.ts`, `lib/task-shared.ts`, `lib/claude-tile.ts` | ce qui a circulé (liens, fichiers), les PR parmi les liens, le bloc Claude Code |
+| `services/worker-metrics.ts`, `components/worker-metrics-history.tsx` | l'échantillonnage CPU / mémoire des workers et son graphique |
 | `lib/worker-commands.ts` | commandes foreground/background dans un worker (port de l'agent de nœud Cloud) |
 | `lib/agent-apps.ts` | les apps d'agent : `effectiveFeatures`, `resolveTaskAgentApp`, `resolveAgentOptions`, `taskHarness`, `LEGACY_CLI` |
 | `app/(app)/agents/page.tsx` | le poste de pilotage |

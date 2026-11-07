@@ -167,6 +167,45 @@ test.describe("tasks API", () => {
     await request.delete(`/api/projects/${p.id}`)
   })
 
+  test("links and metadata from whoever delegates: stored, merged, filtered on", async ({ request }) => {
+    const p = await project(request)
+    const card = `card-${Date.now()}`
+    const res = await request.post(`/api/projects/${p.id}/tasks`, {
+      data: {
+        prompt: "Fix the login",
+        links: [{ label: "SPU-142", url: "https://cms.example.com/cards/142" }],
+        metadata: { cardId: card, source: "backlog" },
+      },
+    })
+    expect(res.status(), await res.text()).toBe(201)
+    const task = await res.json()
+    expect(task).toMatchObject({ links: [{ label: "SPU-142", url: "https://cms.example.com/cards/142" }], metadata: { cardId: card, source: "backlog" } })
+
+    // Found again by what it carries — every pair has to match.
+    const found = await (await request.get(`/api/tasks?metadata[cardId]=${card}`)).json()
+    expect(found.tasks.map((t: { id: string }) => t.id)).toEqual([task.id])
+    expect((await (await request.get(`/api/tasks?metadata[cardId]=${card}&metadata[source]=other`)).json()).tasks).toEqual([])
+    const inProject = await (await request.get(`/api/projects/${p.id}/tasks?metadata[source]=backlog`)).json()
+    expect(inProject.map((t: { id: string }) => t.id)).toEqual([task.id])
+    expect((await request.get(`/api/tasks?metadata[bad key]=x`)).status()).toBe(400)
+
+    // PATCH merges metadata key by key and replaces links as a whole.
+    const patched = await (await request.patch(`/api/tasks/${task.id}`, { data: { metadata: { source: null, pr: "7" }, links: [] } })).json()
+    expect(patched).toMatchObject({ metadata: { cardId: card, pr: "7" }, links: [], title: task.title })
+    expect(patched.metadata).not.toHaveProperty("source")
+
+    // Refusals: a non-http link, a key that cannot exist, nothing to change.
+    expect((await request.patch(`/api/tasks/${task.id}`, { data: { links: [{ label: "x", url: "javascript:alert(1)" }] } })).status()).toBe(400)
+    expect((await request.patch(`/api/tasks/${task.id}`, { data: { metadata: { "a b": "x" } } })).status()).toBe(400)
+    expect((await request.patch(`/api/tasks/${task.id}`, { data: {} })).status()).toBe(400)
+
+    // What circulated: the opening prompt is a message, with no link in it.
+    const shared = await (await request.get(`/api/tasks/${task.id}/shared`)).json()
+    expect(shared).toEqual({ links: [], files: [] })
+    expect(await (await request.get(`/api/tasks/${task.id}/tiles`)).json()).toEqual([])
+    await request.delete(`/api/projects/${p.id}`)
+  })
+
   test("the agent apps and their catalogs", async ({ request }) => {
     const apps = await (await request.get("/api/agent-apps")).json()
     expect(apps.map((a: { id: string }) => a.id)).toEqual(["claude", "codex", "mistral"])

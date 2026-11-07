@@ -14,7 +14,7 @@ import { newId } from "../lib/id"
 import { shellQuote } from "../lib/shell"
 import { internalUrl } from "../lib/agent"
 import { AgentAppChoiceError, protocolOf, resolveAgentOptions, resolveTaskAgentApp, taskAgentAppBlocker, taskHarness, type Harness } from "../lib/agent-apps"
-import type { CreateTaskInput } from "../lib/validation"
+import { MAX_TASK_METADATA_KEYS, type CreateTaskInput, type UpdateTaskInput } from "../lib/validation"
 import { getProjectRow } from "./projects"
 import { resolveSecretsForSpawn } from "./secrets"
 import { getWorkerLive, getWorkerRow, rebuildWorker, spawnWorker, startWorker, stopWorker, setWorkerTags } from "./workers"
@@ -352,6 +352,8 @@ export function createTask(projectId: string, input: CreateTaskInput): Task {
     createdAt: now,
     startedAt: null,
     completedAt: null,
+    links: input.links ?? [],
+    metadata: input.metadata ?? {},
   }
   db.insert(tasks).values(row).run()
   // Stored now so they travel with the job: the worker they go into does not exist yet.
@@ -379,7 +381,7 @@ async function runJob(taskId: string, kind: string, work: () => Promise<void>, o
   }
 }
 
-function getRawTask(id: string): Task | undefined {
+export function getRawTask(id: string): Task | undefined {
   return db.select().from(tasks).where(eq(tasks.id, id)).get()
 }
 
@@ -729,6 +731,10 @@ function taskCommandEnv(row: Task, sessionStatus?: string): Record<string, strin
     ...(row.model ? { SPUNTO_TASK_MODEL: row.model } : {}),
     SPUNTO_TASK_STATE: row.state,
     ...(sessionStatus ? { SPUNTO_TASK_SESSION_STATUS: sessionStatus } : {}),
+    // What the caller attached (docs/taches.md § « Liens et métadonnées »), as JSON — only when
+    // there is some, so a task without any reads exactly as before.
+    ...(Object.keys(row.metadata ?? {}).length ? { SPUNTO_TASK_METADATA: JSON.stringify(row.metadata) } : {}),
+    ...(row.links?.length ? { SPUNTO_TASK_LINKS: JSON.stringify(row.links) } : {}),
   }
 }
 
@@ -760,7 +766,24 @@ function sessionEnv(row: Task, harness: Harness): Record<string, string> {
 
 // ─── Read paths: derive, don't poll ───────────────────────────────────────────
 
-export type TaskQuery = { states?: TaskState[]; query?: string; projectId?: string; limit?: number; offset?: number }
+export type TaskQuery = {
+  states?: TaskState[]
+  query?: string
+  projectId?: string
+  /** Only the tasks carrying every one of these pairs — an integration finding the task it created. */
+  metadata?: Record<string, string>
+  limit?: number
+  offset?: number
+}
+
+/**
+ * `metadata` holds every pair — Cloud's `metadata @> {…}` (a GIN index there), one `json_extract`
+ * per pair here. Keys were checked against `TASK_METADATA_KEY` by the route; the path still quotes
+ * the key, since `.` and `-` are legal in one.
+ */
+function metadataContains(pairs: Record<string, string>) {
+  return and(...Object.entries(pairs).map(([key, value]) => sql`json_extract(${tasks.metadata}, ${`$."${key}"`}) = ${value}`))
+}
 
 /**
  * Every task of the install, filtered and paged — what the agent cockpit reads. Only the returned
@@ -772,6 +795,7 @@ export async function listAllTasks(q: TaskQuery = {}) {
   const offset = Math.max(0, q.offset ?? 0)
   const filters = []
   if (q.projectId) filters.push(eq(tasks.projectId, q.projectId))
+  if (q.metadata && Object.keys(q.metadata).length > 0) filters.push(metadataContains(q.metadata))
   // `LIKE` is case-insensitive for ASCII in SQLite — what a search box needs. `%`/`_` are escaped.
   if (q.query?.trim()) {
     const pattern = `%${q.query.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`
@@ -808,11 +832,12 @@ export async function listAllTasks(q: TaskQuery = {}) {
   return { tasks: page, total, counts }
 }
 
-export async function listProjectTasks(projectId: string, limit = 100): Promise<Task[]> {
+export async function listProjectTasks(projectId: string, limit = 100, metadata?: Record<string, string>): Promise<Task[]> {
+  const byMetadata = !!metadata && Object.keys(metadata).length > 0
   const rows = db
     .select()
     .from(tasks)
-    .where(eq(tasks.projectId, projectId))
+    .where(byMetadata ? and(eq(tasks.projectId, projectId), metadataContains(metadata!)) : eq(tasks.projectId, projectId))
     .orderBy(desc(tasks.lastActivityAt), desc(tasks.createdAt))
     .limit(Math.min(200, Math.max(1, limit)))
     .all()
@@ -1297,9 +1322,40 @@ export async function wakeTask(taskId: string): Promise<Task> {
  * follows: a task has no branch of its own (RFC 0056), and an older one keeps the one it had.
  */
 export async function renameTask(taskId: string, title: string): Promise<Task | undefined> {
-  const { changes } = db.update(tasks).set({ title, autoTitle: false }).where(eq(tasks.id, taskId)).run()
-  if (changes === 0) return undefined
+  return updateTask(taskId, { title })
+}
+
+/**
+ * `PATCH` a task: its name (see `renameTask`), and what its caller says about it — links replaced
+ * as a whole, metadata merged key by key (a null or empty value removes the key). Any state, like a
+ * rename: a card pointing at a finished task is still worth pointing at. Merged here rather than
+ * in SQL so the key ceiling is checked on the result, before anything is written.
+ */
+export async function updateTask(taskId: string, input: UpdateTaskInput): Promise<Task | undefined> {
+  const current = getRawTask(taskId)
+  if (!current) return undefined
+  const set: Partial<Task> = {}
+  if (input.title !== undefined) Object.assign(set, { title: input.title, autoTitle: false })
+  if (input.links !== undefined) set.links = input.links
+  if (input.metadata !== undefined) {
+    const merged = mergeTaskMetadata(current.metadata ?? {}, input.metadata)
+    if (Object.keys(merged).length > MAX_TASK_METADATA_KEYS) {
+      throw new TaskActionError(`A task carries at most ${MAX_TASK_METADATA_KEYS} metadata keys`, 400)
+    }
+    set.metadata = merged
+  }
+  db.update(tasks).set(set).where(eq(tasks.id, taskId)).run()
   return getTask(taskId)
+}
+
+/** A metadata patch applied to what a task carries: a string sets, null or "" removes. Pure. */
+export function mergeTaskMetadata(current: Record<string, string>, patch: Record<string, string | null>): Record<string, string> {
+  const next = { ...current }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null || value === "") delete next[key]
+    else next[key] = value
+  }
+  return next
 }
 
 async function isSessionAlive(task: Task): Promise<TaskCommand | null> {

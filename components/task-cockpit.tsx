@@ -13,8 +13,10 @@ import {
   TaskDiffPanel,
   TaskEventStream,
   TaskMachine,
+  TaskMonitoring,
   TaskTerminalPanel,
   type PendingMessage,
+  type TaskAppTile,
   type TaskCockpitView,
   type TaskCommand,
   type TaskDiff,
@@ -23,6 +25,7 @@ import {
   type TaskEvent,
   type TaskFilePatch,
   type TaskSessionUsageData,
+  type TaskSharedData,
 } from "@spunto/design-system/tasks"
 import type { WorkerStats } from "@spunto/design-system/workers"
 import { api } from "@/lib/api"
@@ -34,6 +37,7 @@ import { useTaskActions } from "@/hooks/use-task-actions"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { TerminalSessions } from "@/components/terminal-sessions"
 import { TaskMachineControls } from "@/components/task-machine-controls"
+import { WorkerMetricsHistory } from "@/components/worker-metrics-history"
 
 /**
  * One conversation with an agent, filling whatever box it is given.
@@ -170,6 +174,26 @@ function useTaskDiff(taskId: string, { open, live }: { open: boolean; live: bool
 }
 
 /**
+ * What the conversation passed around (links, files) and the blocks drawn from it (Claude Code's
+ * view of its session, the pull requests among the links) — derived from the stored events, so
+ * re-read on the stream's own rhythm: every 10 s while the task can still move, once after.
+ */
+function useTaskShared(taskId: string, live: boolean) {
+  const refetchInterval = live ? 10_000 : false
+  const { data: shared = null } = useQuery({
+    queryKey: ["task-shared", taskId],
+    queryFn: () => api.get<TaskSharedData>(`/api/tasks/${taskId}/shared`),
+    refetchInterval,
+  })
+  const { data: tiles = null } = useQuery({
+    queryKey: ["task-tiles", taskId],
+    queryFn: () => api.get<TaskAppTile[]>(`/api/tasks/${taskId}/tiles`),
+    refetchInterval,
+  })
+  return { shared, tiles }
+}
+
+/**
  * The machine behind the task. A Lite worker has no separate Docker state, so the package's
  * `dockerState` is read off its state: a container exists and is not stopped.
  */
@@ -222,7 +246,7 @@ function useTaskMachine(task: Task | undefined) {
 function usePublishTask(task: Task | undefined) {
   const queryClient = useQueryClient()
   const signature = task
-    ? [task.state, task.pendingAction, task.pendingSince, task.lastActivityAt, task.title, task.error, task.workerId].join("|")
+    ? [task.state, task.pendingAction, task.pendingSince, task.lastActivityAt, task.title, task.error, task.workerId, task.machine].join("|")
     : null
   const published = useRef<string | null>(null)
   useEffect(() => {
@@ -262,6 +286,7 @@ export function TaskCockpit({
   const live = task?.state === "queued" || task?.state === "running" || task?.state === "in-review"
   const stream = useTaskEvents(taskId, !!live)
   const machine = useTaskMachine(task)
+  const conversation = useTaskShared(taskId, !!live)
   const [view, setView] = useState<TaskCockpitView>("session")
   const diff = useTaskDiff(taskId, { open: view === "diff", live: !!live })
   const actions = useTaskActions(taskId, task)
@@ -278,7 +303,6 @@ export function TaskCockpit({
   useEffect(() => () => previews.current.forEach((url) => URL.revokeObjectURL(url)), [])
 
   const worker = machine.worker
-  const editorHref = worker && machine.running ? workerBaseUrl(worker.id) : undefined
   const Cockpit = isMobile ? TaskCockpitMobile : TaskCockpitDesktop
   const attachmentUrl = (attachmentId: string) => `/api/tasks/${taskId}/attachments/${attachmentId}`
 
@@ -378,25 +402,38 @@ export function TaskCockpit({
             variant={isMobile ? "sheet" : "sidebar"}
             task={task}
             usage={stream.usage}
+            shared={conversation.shared}
+            appTiles={conversation.tiles}
+            attachmentUrl={attachmentUrl}
             commands={commands}
             protocol={stream.protocol}
             onDrop={isMobile ? actions.drop : undefined}
             pendingAction={actions.pendingAction}
             machine={
               <div className="space-y-3">
+                {/* No `node`, `stats` or `editorHref` any more (deprecated in 0.72): where it runs and how
+                    it is doing are Monitoring's, and the editor is one click away on the worker's page. */}
                 <TaskMachine
                   task={task}
                   worker={worker}
-                  node={{ name: "local · Docker", online: true }}
-                  stats={machine.stats}
                   ports={machine.ports}
                   workerHref={worker ? `/projects/${task.projectId}/workers/${worker.id}` : undefined}
-                  editorHref={editorHref}
                   portHref={worker ? (port) => workerBaseUrl(worker.id, port) : undefined}
                   render={{ link: nextLink }}
                 />
                 <TaskMachineControls task={task} />
               </div>
+            }
+            // Last, folded: CPU and memory, live while the task holds a running machine, and their
+            // history — what Lite sampled of this worker, also across the tasks it served before.
+            monitoring={
+              worker && (
+                <TaskMonitoring
+                  node={{ name: "This computer · Docker", online: true }}
+                  stats={machine.stats}
+                  history={<WorkerMetricsHistory workerId={worker.id} />}
+                />
+              )
             }
           />
         )
