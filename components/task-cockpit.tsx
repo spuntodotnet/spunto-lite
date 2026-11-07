@@ -38,6 +38,7 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { TerminalSessions } from "@/components/terminal-sessions"
 import { TaskMachineControls } from "@/components/task-machine-controls"
 import { WorkerMetricsHistory } from "@/components/worker-metrics-history"
+import { useMachinePorts } from "@/hooks/use-machine-ports"
 
 /**
  * One conversation with an agent, filling whatever box it is given.
@@ -214,12 +215,8 @@ function useTaskMachine(task: Task | undefined) {
     enabled: !!workerId && running && live,
     refetchInterval: 3_000,
   })
-  const { data: ports = [] } = useQuery({
-    queryKey: ["worker-ports", workerId],
-    queryFn: () => api.get<number[]>(`/api/workers/${workerId}/ports`),
-    enabled: !!workerId && running && live,
-    refetchInterval: 10_000,
-  })
+  // Labelled, and read parked too: the project's declared ports show greyed (hooks/use-machine-ports).
+  const { ports, portHref } = useMachinePorts(workerId, { enabled: !!worker && live, running })
   return {
     worker: worker
       ? {
@@ -233,8 +230,9 @@ function useTaskMachine(task: Task | undefined) {
         }
       : null,
     stats: running && live ? stats : null,
-    // The editor and SSH are the package's to filter; everything else is something the agent started.
-    ports: running && live ? ports.map((port) => ({ port })) : [],
+    // The editor and SSH are the package's to filter; the rest is declared, or something the agent started.
+    ports,
+    portHref,
     running,
   }
 }
@@ -418,7 +416,7 @@ export function TaskCockpit({
                   worker={worker}
                   ports={machine.ports}
                   workerHref={worker ? `/projects/${task.projectId}/workers/${worker.id}` : undefined}
-                  portHref={worker ? (port) => workerBaseUrl(worker.id, port) : undefined}
+                  portHref={worker ? machine.portHref : undefined}
                   render={{ link: nextLink }}
                 />
                 <TaskMachineControls task={task} />

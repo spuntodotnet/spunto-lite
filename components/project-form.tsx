@@ -44,6 +44,7 @@ import type {
 } from "@/lib/types"
 import { useAgentApps } from "@/components/new-task"
 import { ProjectTaskFields, taskSettingsSummary } from "@/components/project-task-fields"
+import { ProjectPortsAttributesFields } from "@/components/project-ports-fields"
 import { ProjectMcpServersSection, useProjectMcpServers } from "@/components/project-mcp-servers-section"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -52,11 +53,16 @@ import { Label } from "@/components/ui/label"
 /**
  * Sections Lite doesn't show. Anything absent from `sections` doesn't exist in
  * the form — but the value still carries it, and `toProjectPayload` still sends
- * it, so a project that already has forwarded ports or prewarmed images keeps
- * them through an edit. Hidden, not dropped: the API, the setup script and the
- * import/export format are untouched.
+ * it, so a project that already has prewarmed images keeps them through an
+ * edit. Hidden, not dropped: the API, the setup script and the import/export
+ * format are untouched.
+ *
+ * **Ports are back** (as in Spunto Cloud, aae05edf), for what they say rather
+ * than what they forward: every port that listens in a worker is reachable
+ * without being declared, but a declared one has a **label** and a landing
+ * path, and a task's Machine panel shows it greyed while nothing listens on it.
  */
-const HIDDEN_SECTIONS: ProjectFormSectionId[] = ["ports", "prewarm"]
+const HIDDEN_SECTIONS: ProjectFormSectionId[] = ["prewarm"]
 
 /**
  * Lite's own section (see `SHARED_VOLUMES_SECTION`). An id the package doesn't
@@ -73,18 +79,17 @@ const MCP: ProjectFormSectionId = "mcp-servers"
  * the other finds things in the same place: the package's pages, plus **Agents**
  * (delegated work, MCP servers) before Secrets.
  *
- * One difference, because Lite has something to put there: Cloud drops Runtime
- * (it hides ports, prewarm and docker-in-docker), Lite keeps it for
- * docker-in-docker and its shared volumes — both about what a running worker has
- * around it. Ports and prewarm are listed there too but hidden (see
- * `HIDDEN_SECTIONS`); a group drops whatever isn't shown.
+ * Runtime holds what a running worker has around it: its named ports (Cloud's
+ * Runtime page shows them alone), docker-in-docker and Lite's shared volumes.
+ * Prewarm is listed there too but hidden (see `HIDDEN_SECTIONS`); a group drops
+ * whatever isn't shown.
  */
 const GROUPS: ProjectFormGroup[] = DEFAULT_GROUPS.flatMap((group): ProjectFormGroup[] =>
   group.id === "runtime"
     ? [
         {
           ...group,
-          hint: "What a running worker has around it: Docker inside, and the volumes every worker of the project shares.",
+          hint: "What a running worker has around it: its named ports, Docker inside, and the volumes every worker of the project shares.",
           sections: [...group.sections, SHARED_VOLUMES],
         },
       ]
@@ -380,6 +385,14 @@ export function ProjectForm({ initial }: { initial?: Project }) {
         // a clone URL cloned with the mounted SSH key — and drops the repository picker and the
         // "connect an integration" prompt, which would both be offers Lite cannot honour.
         extras={{
+          // A label and a landing path per declared port (devcontainer `portsAttributes`).
+          ports: (
+            <ProjectPortsAttributesFields
+              ports={value.forwardPorts}
+              value={value.portsAttributes}
+              onChange={(portsAttributes) => handleChange({ ...value, portsAttributes })}
+            />
+          ),
           features: (
             <FeatureVersions
               selections={value.features}

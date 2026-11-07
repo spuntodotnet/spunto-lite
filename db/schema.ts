@@ -1,9 +1,10 @@
 import { sql } from "drizzle-orm"
 import { sqliteTable, text, integer, real, blob, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core"
 import type { SharedVolume } from "../lib/shared-volumes"
+import type { PortsAttributes } from "../lib/ports"
 import type { BuildStep } from "@spunto/build/steps"
 
-export type { SharedVolume }
+export type { SharedVolume, PortsAttributes }
 export type { BuildStep }
 
 // ─── Shared JSON-ish shapes ──────────────────────────────────────────────────
@@ -120,6 +121,10 @@ export const projects = sqliteTable("projects", {
   postStartCommand: text("post_start_command"),
   repositories: text("repositories", { mode: "json" }).$type<Repository[]>().notNull().default(sql`'[]'`),
   forwardPorts: text("forward_ports", { mode: "json" }).$type<number[]>().notNull().default(sql`'[]'`),
+  // What each port is (devcontainer `portsAttributes`, keyed by port): a `label` shown instead of
+  // the bare number, and a `path` a click lands on (lib/ports.ts). Not part of a version: nothing
+  // of it goes into the image, so naming a port must not mark every worker out of date.
+  portsAttributes: text("ports_attributes", { mode: "json" }).$type<PortsAttributes>().notNull().default(sql`'{}'`),
   // Volumes mounted in *every* worker of the project (on top of its private
   // /workspace) — a dependency cache, a dataset, build artifacts. They outlive
   // the workers and are only destroyed with the project (see lib/shared-volumes.ts).
@@ -152,6 +157,11 @@ export const projects = sqliteTable("projects", {
   taskCancelCommand: text("task_cancel_command"),
   /** `keep` leaves the worker running during review, `stop` parks it. */
   taskReviewMode: text("task_review_mode").notNull().default("keep"),
+  /**
+   * With `stop`: how many minutes a task sits in review, its machine awake, before it is parked —
+   * 0 = at once (docs/taches.md § « Garer plus tard »). Ignored with `keep`.
+   */
+  taskReviewParkAfterMinutes: integer("task_review_park_after_minutes").notNull().default(0),
   /** Deprecated: the single default model before agent apps, moved into `taskAgentModels`. */
   taskAgentModel: text("task_agent_model"),
   /** The default model of a task, per agent app (`{ claude: "claude-opus-5-5" }`). */
@@ -339,6 +349,14 @@ export const tasks = sqliteTable(
      */
     pendingAction: text("pending_action"),
     pendingSince: integer("pending_since", { mode: "timestamp_ms" }),
+    /**
+     * When review mode `stop` parks this task's machine on its own — a delayed park
+     * (`taskReviewParkAfterMinutes`). Cloud keeps it as a `task.settle` job with a later `run_at`;
+     * Lite has no job table, so the deadline is written here and the background floor parks what
+     * came due: a restart of Lite loses nothing, and a deadline passed while it was down is
+     * honoured at boot. Cleared by Keep awake, a reply, a Park by hand, and the park itself.
+     */
+    parkAt: integer("park_at", { mode: "timestamp_ms" }),
     /** When the state was last derived — the background floor's clock. Not a fact about the work. */
     lastRefreshedAt: integer("last_refreshed_at", { mode: "timestamp_ms" }),
     /** When the task last *moved*. What every list is sorted on. */
