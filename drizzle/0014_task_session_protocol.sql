@@ -1,0 +1,1 @@
+ALTER TABLE `tasks` ADD `session_protocol` text;

@@ -19,6 +19,7 @@ import {
   type TaskCommand,
   type TaskDiff,
   type TaskDiffFile,
+  type TaskDraft,
   type TaskEvent,
   type TaskFilePatch,
   type TaskSessionUsageData,
@@ -54,7 +55,16 @@ type EventsPage = {
   hasMore: boolean
   usage: TaskSessionUsageData | null
   events: TaskEvent[]
+  /** What the agent is writing right now (partial messages, never stored) — see the route. */
+  draft?: TaskDraft | null
 }
+
+/**
+ * The poll while the agent is writing (Cloud ebadc730). A word or two per tick at 2 s reads as a
+ * stutter; this is the cadence at which the draft, revealed smoothly by the stream, reads as typing
+ * — and only for as long as there is a draft, so a quiet session still costs one read every 2 s.
+ */
+const DRAFT_POLL_MS = 700
 
 const fetchEvents = (taskId: string, query: string) => api.get<EventsPage>(`/api/tasks/${taskId}/events?${query}`)
 
@@ -90,10 +100,11 @@ function useTaskEvents(taskId: string, live: boolean) {
         accumulated.current = [...accumulated.current, ...page.events]
       }
       cursor.current = Math.max(cursor.current, page.lastSeq)
-      return { protocol: page.protocol, usage: page.usage, events: accumulated.current }
+      return { protocol: page.protocol, usage: page.usage, events: accumulated.current, draft: page.draft ?? null }
     },
-    // The part that is supposed to feel alive; nothing left to arrive once the task is terminal.
-    refetchInterval: live ? 2_000 : false,
+    // The part that is supposed to feel alive — faster still while words are arriving; nothing
+    // left to arrive once the task is terminal.
+    refetchInterval: (query) => (!live ? false : query.state.data?.draft ? DRAFT_POLL_MS : 2_000),
     staleTime: 0,
   })
 
@@ -108,7 +119,7 @@ function useTaskEvents(taskId: string, live: boolean) {
       oldestSeq.current = page.firstSeq ?? oldestSeq.current
       // An empty page that still claims more would be a request loop, not a paginator.
       setHasMore(page.hasMore && page.events.length > 0)
-      queryClient.setQueryData(queryKey, (old: { protocol: string; usage: TaskSessionUsageData | null; events: TaskEvent[] } | undefined) =>
+      queryClient.setQueryData(queryKey, (old: { protocol: string; usage: TaskSessionUsageData | null; events: TaskEvent[]; draft: TaskDraft | null } | undefined) =>
         old ? { ...old, events: accumulated.current } : old,
       )
     } catch {
@@ -123,6 +134,7 @@ function useTaskEvents(taskId: string, live: boolean) {
     events: data?.events ?? [],
     protocol: data?.protocol ?? "none",
     usage: data?.usage ?? null,
+    draft: data?.draft ?? null,
     hasMore,
     loadingOlder,
     olderError,
@@ -298,6 +310,7 @@ export function TaskCockpit({
           olderError={stream.olderError}
           onLoadOlder={stream.loadOlder}
           pending={actions.replyFailed ? null : pending}
+          draft={stream.draft}
           // No session yet is not an empty stream, it is a machine being built.
           emptyState={task && !task.startedAt ? <TaskBoot task={task} worker={worker} commands={commands} /> : undefined}
         />

@@ -86,7 +86,7 @@ test.describe("tasks API", () => {
     expect(codex).toMatchObject({ agentAppId: "codex", model: "gpt-5.5", agentOptions: { webSearch: "live" } })
 
     const events = await (await request.get(`/api/tasks/${codex.id}/events?tail=true`)).json()
-    expect(events.protocol).toBe("codex-runner")
+    expect(events.protocol).toBe("agent-v1")
     await request.delete(`/api/projects/${p.id}`)
   })
 
@@ -158,7 +158,7 @@ test.describe("tasks API", () => {
     expect(renamed).toMatchObject({ title: "Safari login", autoTitle: false, branch: null })
 
     const events = await (await request.get(`/api/tasks/${task.id}/events?tail=true`)).json()
-    expect(events).toMatchObject({ protocol: "claude-runner", hasMore: false })
+    expect(events).toMatchObject({ protocol: "agent-v1", hasMore: false, draft: null })
     const diff = await (await request.get(`/api/tasks/${task.id}/diff`)).json()
     expect(diff).toMatchObject({ available: false, reason: "no-machine" })
 
@@ -169,7 +169,7 @@ test.describe("tasks API", () => {
 
   test("the agent apps and their catalogs", async ({ request }) => {
     const apps = await (await request.get("/api/agent-apps")).json()
-    expect(apps.map((a: { id: string }) => a.id)).toEqual(["claude", "codex"])
+    expect(apps.map((a: { id: string }) => a.id)).toEqual(["claude", "codex", "mistral"])
     expect(apps[0]).toMatchObject({ name: "Claude Code", credentials: ["ANTHROPIC_API_KEY"] })
     expect(apps[0].catalog.models.some((m: { default?: boolean }) => m.default)).toBe(true)
     expect(apps[0].catalog.params.map((p: { id: string }) => p.id)).toContain("effort")
