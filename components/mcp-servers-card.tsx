@@ -49,7 +49,7 @@ export function McpServersCard() {
           <Plug className="size-4" /> MCP servers
         </CardTitle>
         <CardDescription>
-          Tools your task sessions can call, under Claude Code as under Codex. Declared once by URL; Lite holds the
+          Tools your task sessions can call, under Claude Code, Codex or Mistral Vibe. Declared once by URL; Lite holds the
           credentials and relays the calls — the worker never sees them. Each project picks its own on its edit page.
         </CardDescription>
       </CardHeader>
