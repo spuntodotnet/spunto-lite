@@ -55,9 +55,9 @@ test.describe("project form → stored project", () => {
     await openPage(page, "Lifecycle")
     await page.locator("#post-create").fill("npm ci")
     await page.locator("#post-start").fill("npm run dev")
-    // Ports and prewarm images are deliberately not in `sections` — the form has
-    // no field for them at all, on any page.
-    await expect(page.locator('input[name="forwardPorts"]')).toHaveCount(0)
+    // Prewarm images are deliberately not in `sections` — the form has no field for
+    // them at all, on any page. Ports are back, on the Runtime page.
+    await expect(page.locator('input[name="forwardPorts"]')).toHaveCount(1)
     await expect(page.locator('textarea[name="prewarmImages"]')).toHaveCount(0)
     await openPage(page, "Runtime")
     await page.getByRole("switch").click()
@@ -197,16 +197,22 @@ test.describe("project form → stored project", () => {
     }
 
     // The width that matters is the *form's*, not the window's — Lite's app shell
-    // has a fixed 224px sidebar and a padded page, and it's already what pushes
-    // every screen past a 320px window (true of /projects, which has no form on
-    // it at all). So the chrome is measured once and added back, and each pass
-    // then really does hand the form 320…768 px.
-    const { formWidth: reference } = await setWidth(1200)
-    const chrome = 1200 - reference
+    // has a sidebar and a padded page around it. The sidebar is the package's, and
+    // it folds away under `md`, so the chrome is not one constant: each pass grows
+    // or shrinks the window until the form really is 320…768 px.
+    const formAt = async (width: number) => {
+      let windowWidth = width + 48
+      let measured = await setWidth(windowWidth)
+      for (let i = 0; i < 4 && measured.formWidth !== width; i++) {
+        windowWidth += width - measured.formWidth
+        measured = await setWidth(windowWidth)
+      }
+      return measured
+    }
 
     try {
       for (const width of [320, 375, 414, 640, 768]) {
-        const { formWidth, overflow } = await setWidth(width + chrome)
+        const { formWidth, overflow } = await formAt(width)
         expect(formWidth, "form width under test").toBe(width)
         // The container-query claim: the form reads its own width, so nothing
         // inside it ever sticks out of it.
@@ -265,9 +271,9 @@ test.describe("project form → stored project", () => {
     await expect(page.getByLabel("Branch", { exact: true }).first()).toHaveValue("main")
     await openPage(page, "Lifecycle")
     await expect(page.locator("#post-create")).toHaveValue("go mod download")
-    // This project has ports and prewarmed images, and the form shows neither.
-    // They must still come back out of a save untouched — hidden, not dropped.
-    await expect(page.locator('input[name="forwardPorts"]')).toHaveCount(0)
+    // This project has ports and prewarmed images; the form shows its ports (Runtime)
+    // but not its images. Both must come back out of a save untouched.
+    await expect(page.locator('input[name="forwardPorts"]')).toHaveCount(1)
     await expect(page.locator('textarea[name="prewarmImages"]')).toHaveCount(0)
 
     await openPage(page, "General")
@@ -325,7 +331,7 @@ test.describe("project form → stored project", () => {
     await openPage(page, "Agents")
     await page.getByRole("button", { name: "Codex" }).click()
     await page.getByPlaceholder("Run `npm test` before pushing.").fill("Run go test ./...")
-    await page.getByText("Stop it").click()
+    await page.getByText("Park it", { exact: true }).click()
 
     await openPage(page, "Secrets")
     await page.getByRole("button", { name: "Remove OLD_TOKEN" }).click()

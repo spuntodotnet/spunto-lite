@@ -21,9 +21,10 @@ async function expectPrefilled(page: Page, name: string) {
   await expect(page.locator("#project-name")).toHaveValue(name)
   await expect(page.locator("#project-description")).toHaveValue("imported spec")
   await expect(page.getByRole("main").getByText(IMAGE.split("/").pop()!).first()).toBeVisible()
-  // Ports and prewarm images have no field in Lite's form. The imported values
-  // still travel — the creation test below asserts them on the stored project.
-  await expect(page.locator('input[name="forwardPorts"]')).toHaveCount(0)
+  // Ports have their field again (Runtime page, with a label per port); prewarm
+  // images still have none. The imported values travel either way — the creation
+  // test below asserts them on the stored project.
+  await expect(page.locator('input[name="forwardPorts"]')).toHaveCount(1)
   await expect(page.locator('textarea[name="prewarmImages"]')).toHaveCount(0)
   await expect(page.locator("#post-create")).toHaveValue("npm ci")
   await expect(page.locator("#post-start")).toHaveValue("npm run dev")
