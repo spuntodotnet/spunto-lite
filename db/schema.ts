@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm"
-import { sqliteTable, text, integer, blob, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, real, blob, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core"
 import type { SharedVolume } from "../lib/shared-volumes"
 import type { BuildStep } from "@spunto/build/steps"
 
@@ -275,6 +275,14 @@ export const projectImageBuilds = sqliteTable("project_image_builds", {
 
 // ─── Delegated work (docs/tasks.md) ──────────────────────────────────────────
 
+/** One of `tasks.links` — a page about the task elsewhere, drawn on it as `label` → `url`. */
+export type TaskLink = {
+  /** What to call it: « SPU-142 », « Issue #88 ». */
+  label: string
+  /** `http(s)` only — it is rendered as a link. */
+  url: string
+}
+
 /**
  * A task: a prompt handed to an agent, a worker it runs in, a branch it works on, and something
  * to review at the end. Its `state` is *derived* from the agent session (a background command in
@@ -329,6 +337,14 @@ export const tasks = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     startedAt: integer("started_at", { mode: "timestamp_ms" }),
     completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    // ---- What the caller says about the task (docs/taches.md § « Liens et métadonnées ») ----
+    //
+    // Written by whoever delegates the work — at creation or by `PATCH` — and never by Lite. Two
+    // columns because they have two readers: `links` are for a human (drawn at the top of the
+    // details, « where this came from »: a backlog card, an issue), `metadata` for a machine
+    // (string pairs nobody interprets, which a list can be filtered on — `?metadata[cardId]=…`).
+    links: text("links", { mode: "json" }).$type<TaskLink[]>().notNull().default(sql`'[]'`),
+    metadata: text("metadata", { mode: "json" }).$type<Record<string, string>>().notNull().default(sql`'{}'`),
   },
   (t) => [index("tasks_project_activity_idx").on(t.projectId, t.lastActivityAt), index("tasks_state_idx").on(t.state)],
 )
@@ -400,6 +416,25 @@ export const taskAttachments = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [uniqueIndex("task_attachments_task_sha_idx").on(t.taskId, t.sha256)],
+)
+
+/**
+ * A worker's CPU and memory over time — what the Monitoring block of a task draws as History
+ * (Cloud reads its sandboxes' heartbeat samples back from OpenObserve; Lite has no telemetry
+ * backend, so it samples `docker stats` itself, services/worker-metrics.ts). One row per running
+ * worker per tick, kept 7 days: the longest range the chart offers. No foreign key on purpose —
+ * a deleted worker's samples go with the next prune, not in the delete's transaction.
+ */
+export const workerSamples = sqliteTable(
+  "worker_samples",
+  {
+    workerId: text("worker_id").notNull(),
+    ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
+    cpuPercent: real("cpu_percent").notNull(),
+    memUsedMb: real("mem_used_mb").notNull(),
+    memTotalMb: real("mem_total_mb").notNull(),
+  },
+  (t) => [index("worker_samples_worker_ts_idx").on(t.workerId, t.ts), index("worker_samples_ts_idx").on(t.ts)],
 )
 
 /** Single-row settings table (id is always "singleton"). */

@@ -270,7 +270,36 @@ export const TaskFileInputSchema = z.object({
   data: z.string().min(1),
 })
 
+/**
+ * What a caller says about a task (docs/taches.md § « Liens et métadonnées ») — set at creation,
+ * changed by `PATCH`, never written by Lite. Bounded as in Cloud (which bounds them the way Stripe
+ * bounds its own `metadata`): enough to point at the thing a task came from, not a document store.
+ */
+export const MAX_TASK_LINKS = 10
+export const MAX_TASK_METADATA_KEYS = 50
+/** A metadata key — also what a `?metadata[key]=` filter must look like. */
+export const TASK_METADATA_KEY = /^[A-Za-z0-9_.-]{1,40}$/
+const METADATA_KEY_MESSAGE = "Keys are 1–40 characters of A–Z, a–z, 0–9, `_`, `.`, `-`"
+
+export const TaskLinkSchema = z.object({
+  label: z.string().trim().min(1).max(100),
+  url: z
+    .string()
+    .trim()
+    .max(2048)
+    .url()
+    .refine((u) => /^https?:\/\//i.test(u), "Only http(s) links"),
+})
+
+export const TaskMetadataSchema = z
+  .record(z.string().regex(TASK_METADATA_KEY, METADATA_KEY_MESSAGE), z.string().max(500))
+  .refine((m) => Object.keys(m).length <= MAX_TASK_METADATA_KEYS, `At most ${MAX_TASK_METADATA_KEYS} keys`)
+
 export const CreateTaskSchema = z.object({
+  /** Pages about the work elsewhere — the card or issue it comes from — drawn on the task. */
+  links: z.array(TaskLinkSchema).max(MAX_TASK_LINKS).optional(),
+  /** String pairs for machines, not interpreted; the session reads them as `SPUNTO_TASK_METADATA`. */
+  metadata: TaskMetadataSchema.optional(),
   /** Optional: without one the task starts under the prompt's first line, then takes the session's own name. */
   title: z.string().trim().min(1).max(200).optional(),
   prompt: z.string().trim().min(1).max(50_000),
@@ -288,6 +317,18 @@ export const TaskMessageSchema = z.object({
   files: z.array(TaskFileInputSchema).max(10).optional(),
 })
 
-export const RenameTaskSchema = z.object({ title: z.string().trim().min(1).max(200) })
+/**
+ * `PATCH /api/tasks/:id`: rename (final — the session no longer renames it; the branch keeps its
+ * name), replace the links as a whole, merge the metadata key by key (`null` or `""` removes one).
+ */
+export const UpdateTaskSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200).optional(),
+    links: z.array(TaskLinkSchema).max(MAX_TASK_LINKS).optional(),
+    metadata: z.record(z.string().regex(TASK_METADATA_KEY, METADATA_KEY_MESSAGE), z.string().max(500).nullable()).optional(),
+  })
+  .refine((b) => b.title !== undefined || b.links !== undefined || b.metadata !== undefined, "Nothing to change: give `title`, `links` or `metadata`")
+
+export type UpdateTaskInput = z.infer<typeof UpdateTaskSchema>
 
 export type CreateTaskInput = z.infer<typeof CreateTaskSchema>
