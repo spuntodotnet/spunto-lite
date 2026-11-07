@@ -13,6 +13,7 @@ import { AGENT_CONNECT_PATH, handleAgentAsset, handleAgentUpgrade } from "./lib/
 // Registers the agent's hooks (hello → worker, project plan, project state) in this module graph.
 import "./services/workers"
 import { startTaskScheduler } from "./services/tasks"
+import { startWorkerMetricsSampler } from "./services/worker-metrics"
 import { startSshAgentProxy } from "./lib/ssh-agent"
 import { joinSharedNetworkAsLite } from "./lib/docker"
 
@@ -58,6 +59,9 @@ async function main() {
   // Delegated work (docs/tasks.md): says what a restart interrupted, then keeps running tasks
   // derived when nobody has the dashboard open — what parks a `stop` worker and frees the pool.
   startTaskScheduler()
+  // CPU and memory of every running worker, every 30 s, kept 7 days: the History of a task's
+  // Monitoring block (services/worker-metrics.ts). Lite has no telemetry backend to ask instead.
+  startWorkerMetricsSampler()
   // The agent socket every worker mounts — what a passphrase-protected key signs through.
   startSshAgentProxy()
   // Where agent workers dial us back (lib/agent.ts). A recreated Lite container (an update) is no

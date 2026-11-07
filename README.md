@@ -75,6 +75,16 @@ HTTPS with a local mkcert certificate. See
   rebuilds it instead of leaving your workers on the old one. What the two Spuntos share
   today and what they still duplicate — project creation, worker listing, the status
   vocabularies — is written down in [`docs/api-partagee.md`](docs/api-partagee.md).
+- **The IDE is Spunto's**: `spunto-pack` (1.1+, recipe 3) renames code-server's files to
+  *Spunto* and builds in two themes, *Spunto Light* (seeded as the default
+  `workbench.colorTheme`, without overwriting a `settings.json` the worker already has) and
+  *Spunto Dark*; code-server is started with `--app-name Spunto`,
+  `--disable-getting-started-override` and `--disable-update-check` — each only if the image's
+  code-server knows it. All of it comes from `@spunto/build`'s scripts, nothing Lite-side.
+- **The dashboard's colour is yours**: Settings → *Appearance* swaps Lite's own ink blue and
+  sky for another product pair (Spunto Cloud's seven) or one of the design system's 50
+  `data-palette`s. Stored in the settings row and written onto `<html>` by the root layout on
+  the server, so no page paints in the default first (`lib/appearance.ts`).
 - **A persistent terminal on dtach**, not a multiplexer. Closing the tab does not kill
   the build: the worker's agent attaches to a session that outlives it. dtach only
   does persistence and forwards every byte, so the *browser* keeps the mouse, the
@@ -103,7 +113,12 @@ HTTPS with a local mkcert certificate. See
   (`GET /api/projects/:id/export`), *Import* on the dashboard (or in the
   new-project form) pre-fills the creation form from such a file. Secret
   **values** are never exported — only their names, so the form can lay out the
-  rows to fill in.
+  rows to fill in. Port labels and a delayed park travel too, beside the shared
+  spec (which has no field for them yet), under Spunto Cloud's names.
+- **Named ports**: every port that listens in a worker is reachable without being
+  declared, but a port declared in the project form (*Runtime → Ports*) gets a
+  **label** and a **landing path**. A task's Machine panel lists them green while
+  something listens and greyed while nothing does — parked machine included.
 - **Extension registry is configurable**: the extension picker searches
   [Open VSX](https://open-vsx.org) by default. Set `EXTENSIONS_GALLERY` on the
   control plane — the same JSON blob code-server takes — and the picker, the
@@ -132,15 +147,16 @@ HTTPS with a local mkcert certificate. See
 ## Agents
 
 Delegate work to a coding agent the way Spunto Cloud does: **New task** on a project (or
-**Agents** in the sidebar), write what you want, and a worker from the project's pool gets its own
-branch and an agent session — **Claude Code** or **Codex**, picked per task. You watch it work live, answer it or interrupt it, read the diff
+**Agents** in the sidebar), write what you want, and a worker from the project's pool gets an
+agent session — **Claude Code**, **Codex** or **Mistral Vibe**, picked per task. No repository required, and no
+branch cut for it: the agent makes one if it needs one, and names it. You watch it work live (its reply appears as it is written), answer it or interrupt it, read the diff
 from the machine itself, open a shell on it from the **Terminal** tab, then **Accept** or **Drop**. Every conversation of every project is on
 the **Agents** page, grouped by what needs you.
 
 Harnesses are **agent apps**, as in Spunto Cloud: a project switches on the ones its tasks may
 use (a new project starts with Claude Code), each puts its official SDK in the project's image,
 and each task picks one — with that app's models and its own parameters (effort, reasoning…).
-All it needs is the app's key as a secret (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). The
+All it needs is the app's key as a secret (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `MISTRAL_API_KEY`). The
 harnesses, the default models, what Accept and Drop run and whether the worker stays up during
 review are the project's *Delegated work* settings. The screens come from `@spunto/design-system/tasks` and the session parsing from
 `@spunto/build/agent-stream`, shared with Spunto Cloud. Details, and what differs from the Cloud

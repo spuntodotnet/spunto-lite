@@ -1,5 +1,7 @@
 import { z } from "zod"
 import { EXTENSION_ID_HINT, isExtensionId } from "./extensions"
+import { PortsAttributesSchema } from "./ports"
+import { isDashboardColor } from "./appearance"
 import {
   SHARED_VOLUME_NAME_HINT,
   SHARED_VOLUME_NAME_RE,
@@ -92,6 +94,8 @@ export const TaskSettingsSchema = z.object({
   taskValidateCommand: z.string().max(10_000).nullable().optional(),
   taskCancelCommand: z.string().max(10_000).nullable().optional(),
   taskReviewMode: z.enum(["keep", "stop"]).optional(),
+  /** With `stop`: minutes in review, machine awake, before it is parked — 0 = at once, at most a day. */
+  taskReviewParkAfterMinutes: z.number().int().min(0).max(24 * 60).optional(),
   /** The default model per agent app, `{ claude: "claude-opus-5-5" }`. Replaces the whole map. */
   taskAgentModels: z.record(z.string(), z.string().trim().max(200)).optional(),
   taskAgentInstructions: z.string().max(10_000).nullable().optional(),
@@ -114,6 +118,8 @@ export const CreateProjectSchema = z.object({
   postStartCommand: z.string().optional(),
   repositories: z.array(RepositorySchema).default([]),
   forwardPorts: z.array(z.number().int().min(1).max(65535)).default([]),
+  /** A label and a path per port (lib/ports.ts). Not versioned: nothing of it goes into the image. */
+  portsAttributes: PortsAttributesSchema.optional(),
   sharedVolumes: SharedVolumesSchema.default([]),
   secrets: z.array(SecretInputSchema).optional(),
   /**
@@ -144,6 +150,8 @@ export const UpdateProjectSchema = z.object({
   postStartCommand: z.string().optional(),
   repositories: z.array(RepositorySchema).optional(),
   forwardPorts: z.array(z.number().int().min(1).max(65535)).optional(),
+  /** Replaces the whole map. Applied without a version, like the task settings. */
+  portsAttributes: PortsAttributesSchema.optional(),
   sharedVolumes: SharedVolumesSchema.optional(),
   secrets: z.array(SecretInputSchema).optional(),
   /** Replaces the whole list. Part of the image: a change mints a version, like features. */
@@ -243,6 +251,8 @@ export const SettingsSchema = z.object({
     .optional(),
   // Plaintext SA key: string to set, null to clear, absent to leave unchanged.
   gcpRegistryKey: z.string().nullable().optional(),
+  /** Settings → Appearance (lib/appearance.ts): a colour name or a palette id; null = Lite's blue. */
+  dashboardColor: z.string().refine(isDashboardColor, "Unknown dashboard colour").nullable().optional(),
 })
 
 export type CreateProjectInput = z.infer<typeof CreateProjectSchema>
@@ -270,7 +280,36 @@ export const TaskFileInputSchema = z.object({
   data: z.string().min(1),
 })
 
+/**
+ * What a caller says about a task (docs/taches.md § « Liens et métadonnées ») — set at creation,
+ * changed by `PATCH`, never written by Lite. Bounded as in Cloud (which bounds them the way Stripe
+ * bounds its own `metadata`): enough to point at the thing a task came from, not a document store.
+ */
+export const MAX_TASK_LINKS = 10
+export const MAX_TASK_METADATA_KEYS = 50
+/** A metadata key — also what a `?metadata[key]=` filter must look like. */
+export const TASK_METADATA_KEY = /^[A-Za-z0-9_.-]{1,40}$/
+const METADATA_KEY_MESSAGE = "Keys are 1–40 characters of A–Z, a–z, 0–9, `_`, `.`, `-`"
+
+export const TaskLinkSchema = z.object({
+  label: z.string().trim().min(1).max(100),
+  url: z
+    .string()
+    .trim()
+    .max(2048)
+    .url()
+    .refine((u) => /^https?:\/\//i.test(u), "Only http(s) links"),
+})
+
+export const TaskMetadataSchema = z
+  .record(z.string().regex(TASK_METADATA_KEY, METADATA_KEY_MESSAGE), z.string().max(500))
+  .refine((m) => Object.keys(m).length <= MAX_TASK_METADATA_KEYS, `At most ${MAX_TASK_METADATA_KEYS} keys`)
+
 export const CreateTaskSchema = z.object({
+  /** Pages about the work elsewhere — the card or issue it comes from — drawn on the task. */
+  links: z.array(TaskLinkSchema).max(MAX_TASK_LINKS).optional(),
+  /** String pairs for machines, not interpreted; the session reads them as `SPUNTO_TASK_METADATA`. */
+  metadata: TaskMetadataSchema.optional(),
   /** Optional: without one the task starts under the prompt's first line, then takes the session's own name. */
   title: z.string().trim().min(1).max(200).optional(),
   prompt: z.string().trim().min(1).max(50_000),
@@ -288,6 +327,18 @@ export const TaskMessageSchema = z.object({
   files: z.array(TaskFileInputSchema).max(10).optional(),
 })
 
-export const RenameTaskSchema = z.object({ title: z.string().trim().min(1).max(200) })
+/**
+ * `PATCH /api/tasks/:id`: rename (final — the session no longer renames it; the branch keeps its
+ * name), replace the links as a whole, merge the metadata key by key (`null` or `""` removes one).
+ */
+export const UpdateTaskSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200).optional(),
+    links: z.array(TaskLinkSchema).max(MAX_TASK_LINKS).optional(),
+    metadata: z.record(z.string().regex(TASK_METADATA_KEY, METADATA_KEY_MESSAGE), z.string().max(500).nullable()).optional(),
+  })
+  .refine((b) => b.title !== undefined || b.links !== undefined || b.metadata !== undefined, "Nothing to change: give `title`, `links` or `metadata`")
+
+export type UpdateTaskInput = z.infer<typeof UpdateTaskSchema>
 
 export type CreateTaskInput = z.infer<typeof CreateTaskSchema>

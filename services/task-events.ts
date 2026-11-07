@@ -1,23 +1,23 @@
 import { and, asc, desc, eq, gt, lt, sql } from "drizzle-orm"
 import {
   cleanTitle,
+  foldDraft,
   parseLines,
   parseSessionTitle,
   readsTitleOutOfBand,
-  resolveContextWindow,
   sessionTitleProbe,
   splitCompleteLines,
   summarizeUsage,
+  type AgentDraft,
   type AgentProtocol,
-  type ModelCredential,
   type SessionUsage,
   type SourcedEvent,
 } from "@spunto/build/agent-stream"
+import { readContractObject } from "@spunto/build/agent-contract"
 import { db } from "../db/index"
 import { projects, taskEvents, tasks, workers, type Task, type TaskEvent } from "../db/schema"
 import { MAX_READ_BYTES, readCommandOutput, runCommand } from "../lib/worker-commands"
 import { mayCarryFile, referenceAttachment, scanFileBlocks } from "../lib/task-attachments"
-import { resolveSecretsForSpawn } from "./secrets"
 import * as attachments from "./task-attachments"
 import { protocolOf } from "../lib/agent-apps"
 
@@ -42,8 +42,49 @@ const MAX_CHUNKS_PER_PASS = 6
 const MAX_LINE_BYTES = 12 * 1024 * 1024
 const MAX_SOURCE_CHARS = 64 * 1024
 
-/** How a task's stream is read: its agent app's dialect, or — before agent apps — its project's. */
-export function taskProtocol(task: Pick<Task, "projectId" | "agentAppId">): AgentProtocol {
+/**
+ * What the agent is writing right now, per task — folded from its partial messages (`foldDraft`)
+ * as ingestion goes past them, and **only in memory** (Cloud ebadc730).
+ *
+ * Deliberately not a column: it changes on every read while a message is being written, and the
+ * finished message replaces it within seconds. Losing it — Lite restarting — costs a few seconds of
+ * preview, never a word of the session: the finished `message` event is stored as always.
+ */
+type DraftEntry = { commandId: string; draft: AgentDraft; updatedAt: number }
+// On `globalThis`, like lib/agent.ts: the background floor ingests from server.ts's module graph
+// (tsx), the routes from Next's — same process, two graphs, and the draft must be the one both fold.
+const DRAFTS = Symbol.for("spunto-lite.task-drafts")
+const drafts: Map<string, DraftEntry> = ((globalThis as typeof globalThis & { [DRAFTS]?: Map<string, DraftEntry> })[DRAFTS] ??= new Map())
+
+/**
+ * A draft nobody finished in this long is a session that died mid-sentence (no finished message,
+ * no end of turn ever followed). Dropped rather than shown forever as "writing…".
+ */
+const DRAFT_TTL_MS = 5 * 60_000
+
+function updateDraft(taskId: string, commandId: string, dialect: AgentProtocol, lines: string[]): void {
+  const prev = drafts.get(taskId)
+  const next = foldDraft(dialect, lines, prev?.commandId === commandId ? prev.draft : null)
+  if (!next) drafts.delete(taskId)
+  else if (next !== prev?.draft) drafts.set(taskId, { commandId, draft: next, updatedAt: Date.now() })
+}
+
+/** The text the task's session is writing right now, or null. Call after `ingestTaskEvents`. */
+export function taskDraft(task: { id: string; commandId: string | null }): (AgentDraft & { updatedAt: string }) | null {
+  const entry = drafts.get(task.id)
+  if (!entry) return null
+  if (entry.commandId !== task.commandId || Date.now() - entry.updatedAt > DRAFT_TTL_MS) {
+    drafts.delete(task.id)
+    return null
+  }
+  return { ...entry.draft, updatedAt: new Date(entry.updatedAt).toISOString() }
+}
+
+/**
+ * How a task's stream is read: the dialect its current session started on (`sessionProtocol`), or
+ * — a session from before that column — its agent app's previous one, or its project's.
+ */
+export function taskProtocol(task: Pick<Task, "projectId" | "agentAppId" | "sessionProtocol" | "commandId">): AgentProtocol {
   const p = db.select({ taskAgentProtocol: projects.taskAgentProtocol }).from(projects).where(eq(projects.id, task.projectId)).get()
   return protocolOf(task, p)
 }
@@ -104,6 +145,9 @@ export async function ingestTaskEvents(task: Task, protocol?: AgentProtocol): Pr
     const events = parseWithFiles(task.id, commandId, dialect, lines)
     // Claimed *before* inserting: losing the race means another reader owns these rows.
     if (!advanceCursor(task.id, fromCommandId, commandId, rowOffset, offset + consumed, seq, seq + events.length)) break
+    // Right after the claim: this reader alone owns these bytes, so it is the one that folds them,
+    // and in order.
+    updateDraft(task.id, commandId, dialect, lines)
 
     if (events.length > 0) {
       for (const event of events) {
@@ -111,7 +155,6 @@ export async function ingestTaskEvents(task: Task, protocol?: AgentProtocol): Pr
         const title = cleanTitle(event.payload.title)
         if (title) named = { title, source: event.source }
       }
-      await measureContextWindow(task, events).catch((err) => console.warn(`[task:${task.id}] could not measure the context window: ${err}`))
       const now = new Date()
       db.insert(taskEvents)
         .values(
@@ -188,6 +231,7 @@ function renameFromSession(taskId: string, title: string): boolean {
 
 /** Parse a chunk line by line, taking inline files out of each line first (RFC 0022). */
 function parseWithFiles(taskId: string, commandId: string, dialect: AgentProtocol, lines: string[]): SourcedEvent[] {
+  if (dialect === "agent-v1") return parseContractWithFiles(taskId, commandId, lines)
   const out: SourcedEvent[] = []
   for (const line of lines) {
     let captured: Captured = { line, files: [] }
@@ -198,6 +242,61 @@ function parseWithFiles(taskId: string, commandId: string, dialect: AgentProtoco
     }
     const events = parseLines(dialect, [captured.line], Infinity)
     if (captured.files.length > 0) attachFiles(events, captured.files)
+    out.push(...events)
+  }
+  return out
+}
+
+/**
+ * The same, for a session speaking the Spunto agent contract (`agent-v1`) — Cloud's
+ * `parseContractWithFiles` (cf96aa07). The files are in each line's `source`: the harness's own
+ * message, which the runner keeps whole next to the event it read it into.
+ *
+ * One message can be several lines (a reply and its usage; two tool results), and the runner puts
+ * the same `source` on each. So consecutive lines with an identical source are one **group**: its
+ * files are stored once, each paired with its call across the whole group, and every line of it
+ * keeps the source with the bytes swapped for the stored ids. A group cut by the end of a read is
+ * the one case that stores a file twice — two rows for one picture, never a lost one.
+ */
+function parseContractWithFiles(taskId: string, commandId: string, lines: string[]): SourcedEvent[] {
+  type Item = { line: string; obj: Record<string, unknown> | null; key: string | null }
+  const items: Item[] = lines.map((line) => {
+    if (!mayCarryFile(line)) return { line, obj: null, key: null }
+    try {
+      const parsed = JSON.parse(line.trim())
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { line, obj: null, key: null }
+      const obj = parsed as Record<string, unknown>
+      return { line, obj, key: obj.source === undefined ? null : JSON.stringify(obj.source) }
+    } catch {
+      return { line, obj: null, key: null }
+    }
+  })
+
+  const out: SourcedEvent[] = []
+  for (let i = 0; i < items.length; ) {
+    const first = items[i]!
+    if (!first.obj) {
+      out.push(...parseLines("agent-v1", [first.line], Infinity))
+      i++
+      continue
+    }
+    let end = i + 1
+    while (end < items.length && first.key !== null && items[end]!.obj && items[end]!.key === first.key) end++
+    const group = items.slice(i, end)
+    i = end
+
+    let files: CapturedFile[] = []
+    try {
+      files = captureParsed(taskId, commandId, first.obj)
+    } catch (err) {
+      console.warn(`[task:${taskId}] could not store a file from the stream: ${err}`)
+    }
+    const events = group.flatMap((item) => {
+      // The bytes are stored once: every line of the group points at the same, referenced, source.
+      if (item !== first && first.key !== null) item.obj!.source = first.obj!.source
+      return readContractObject(item.obj!, item.line.trim())
+    })
+    if (files.length > 0) attachFiles(events, files)
     out.push(...events)
   }
   return out
@@ -214,8 +313,14 @@ function captureFiles(taskId: string, commandId: string, line: string): Captured
   } catch {
     return { line, files: [] }
   }
+  const files = captureParsed(taskId, commandId, parsed)
+  return files.length === 0 ? { line, files: [] } : { line: JSON.stringify(parsed), files }
+}
+
+/** Store every inline file of a parsed line and swap each blob for its id, in place. */
+function captureParsed(taskId: string, commandId: string, parsed: unknown): CapturedFile[] {
   const sites = scanFileBlocks(parsed)
-  if (sites.length === 0) return { line, files: [] }
+  if (sites.length === 0) return []
   const files: CapturedFile[] = []
   for (const site of sites) {
     const [stored] = attachments.storeFiles(taskId, commandId, "agent", [
@@ -225,7 +330,7 @@ function captureFiles(taskId: string, commandId: string, line: string): Captured
     referenceAttachment(site, stored.id)
     files.push({ file: stored, callId: site.callId })
   }
-  return files.length === 0 ? { line, files: [] } : { line: JSON.stringify(parsed), files }
+  return files
 }
 
 /** Put each file on the event it belongs to: the tool result it answered, else the line's first event. */
@@ -407,36 +512,6 @@ function lastTurnEnd(taskId: string): { seq: number } | null {
     .limit(1)
     .get()
   return row?.type === "session.ended" ? { seq: row.seq } : null
-}
-
-/**
- * Ask the Models API for the window a session opened with, when the task has an Anthropic
- * credential among its secrets — once per `session.started`, and written on the stored event.
- * Best-effort: the catalogue in `@spunto/build/agent-stream` answers otherwise.
- */
-async function measureContextWindow(task: Task, events: SourcedEvent[]): Promise<void> {
-  const started = events.filter((e) => e.type === "session.started" && typeof e.payload.model === "string")
-  if (started.length === 0) return
-  const credential = anthropicCredential(task.projectId)
-  if (!credential) return
-  for (const event of started) {
-    const measured = await resolveContextWindow(event.payload.model as string, credential)
-    if (measured !== null) event.payload.contextWindow = measured
-  }
-}
-
-function anthropicCredential(projectId: string): ModelCredential | null {
-  let secrets: Record<string, string> = {}
-  try {
-    secrets = resolveSecretsForSpawn(projectId)
-  } catch {
-    return null
-  }
-  const apiKey = secrets.ANTHROPIC_API_KEY?.trim()
-  if (apiKey) return { kind: "api-key", value: apiKey }
-  const token = secrets.CLAUDE_CODE_OAUTH_TOKEN?.trim() || secrets.ANTHROPIC_AUTH_TOKEN?.trim()
-  if (token) return { kind: "oauth", value: token }
-  return null
 }
 
 /**

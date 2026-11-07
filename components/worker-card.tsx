@@ -234,7 +234,7 @@ function workerMenu(
 
   return [
     // Only a live worker serves code-server.
-    running && { label: "Open in VS Code", icon: Code2, href: workerBaseUrl(worker.id), target: "_blank" },
+    running && { label: "Open IDE", icon: Code2, href: workerBaseUrl(worker.id), target: "_blank" },
     "separator",
     down
       ? { label: "Start", icon: Play, onClick: () => m.start.mutate(), loading: m.start.isPending }

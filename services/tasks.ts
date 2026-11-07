@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
-import { MCP_ENV } from "@spunto/build/agent-runners"
+import { MCP_ENV, STREAM_ENV } from "@spunto/build/agent-runners"
 import {
   applyProtocol,
   interruptLine,
@@ -14,7 +14,7 @@ import { newId } from "../lib/id"
 import { shellQuote } from "../lib/shell"
 import { internalUrl } from "../lib/agent"
 import { AgentAppChoiceError, protocolOf, resolveAgentOptions, resolveTaskAgentApp, taskAgentAppBlocker, taskHarness, type Harness } from "../lib/agent-apps"
-import type { CreateTaskInput } from "../lib/validation"
+import { MAX_TASK_METADATA_KEYS, type CreateTaskInput, type UpdateTaskInput } from "../lib/validation"
 import { getProjectRow } from "./projects"
 import { resolveSecretsForSpawn } from "./secrets"
 import { getWorkerLive, getWorkerRow, rebuildWorker, spawnWorker, startWorker, stopWorker, setWorkerTags } from "./workers"
@@ -25,12 +25,13 @@ import type { InlineFile, StoredFile } from "./task-attachments"
 import { mintMcpGatewayToken, taskMcpServers } from "./mcp-servers"
 
 /**
- * Delegated work (docs/tasks.md): a prompt handed to an agent, in a worker of the project, on a
- * branch of its own, with something to review at the end.
+ * Delegated work (docs/taches.md): a prompt handed to an agent, in a worker of the project, with
+ * something to review at the end. No branch of the platform's (RFC 0056): the agent makes one if
+ * it wants one, and names it.
  *
  * Ported from Spunto Cloud's `tasks.service.ts`, and the same in everything that shows: the five
- * states, how they are derived, the pool, the branch setup, the session and its stream, Accept /
- * Drop / reply / interrupt. What differs is plumbing:
+ * states, how they are derived, the pool, the session and its stream, Accept / Drop / reply /
+ * interrupt. What differs is plumbing:
  *
  *  - **no durable job table.** Cloud runs `task.run`, `task.validate`… as jobs that survive a
  *    redeploy. Lite runs them in-process, fire-and-forget like a worker spawn — and writes the
@@ -71,19 +72,6 @@ const lastLiveIngest = new Map<string, number>()
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
-/** `task/<title-slug>-<short id>` — unique by the suffix, readable by the slug, always a valid ref. */
-export function taskBranchName(title: string, taskId: string): string {
-  const slug = title
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48)
-    .replace(/-+$/g, "")
-  return `task/${slug || "task"}-${taskId.slice(0, 6)}`
-}
-
 const PLACEHOLDER_TITLE_CHARS = 72
 
 /** A name for a task nobody named: the prompt's first line worth reading, cut at a word. */
@@ -104,49 +92,72 @@ export function taskWorkerName(taskId: string): string {
   return `task-${taskId.slice(0, 6)}`
 }
 
+/** The label of a recycled worker's reset — one recorded command per repository. */
+export const WORKSPACE_RESET_LABEL = "Workspace reset"
+
 /**
- * Put a repository on the task's branch, from its base (or the remote's default). On a recycled
- * machine, first throw away what the previous task left — printed before it is discarded — with
- * `clean -fd` and never `-x`: ignored files (`node_modules`, caches) are what recycling is for.
+ * Put a **recycled** worker's checkout back where a fresh clone would have left it, before the
+ * next task's session opens on it: on its starting branch, at the remote's tip, with what the
+ * previous task left behind thrown away. Lite's own step, with no Cloud equivalent — a Cloud
+ * task gets a sandbox of its own and never inherits one.
+ *
+ * Not a branch of the platform's (RFC 0056): the branch checked out is the one the clone would
+ * have checked out — `start` is the task's base branch, else the repository's configured one —
+ * and the agent creates its own from there, if it wants one. `checkout -B` re-points that local
+ * branch at `origin/<start>`: a commit the previous agent made on it and never pushed is exactly
+ * a leftover. Its own branches stay in the repository, unreachable from the checkout and harmless.
+ *
+ * Three details, each paid for by a real run:
+ *  - what is discarded is **printed first**, so "What ran" says what was lost;
+ *  - `clean -fd`, never `-x`: ignored files (`node_modules`, caches) are what recycling is for;
+ *  - resolving "no start asked for" asks the remote when `refs/remotes/origin/HEAD` is absent (a
+ *    --single-branch clone, a remote added by hand), and `|| true` is load-bearing — under
+ *    `set -e -o pipefail` a failing pipeline in a command substitution ends the script in exactly
+ *    the case each fallback is written for. Last resort: the branch already checked out.
+ *
+ * No repository at `cwd` (a project without one — a task needs none) is not a failure: there is
+ * nothing to reset, and the step says so. The previous task's files in `/workspace` stay.
  */
-export function branchSetupScript(branch: string, baseBranch: string | null, recycled = false): string {
-  const base = baseBranch
-    ? `base=${shellQuote(baseBranch)}`
+export function workspaceResetScript(start: string | null): string {
+  const base = start
+    ? `base=${shellQuote(start)}`
     : `base=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' || true)
 if [ -z "$base" ]; then
   base=$(git ls-remote --symref origin HEAD 2>/dev/null | awk '$1=="ref:"{sub("refs/heads/","",$2); print $2; exit}' || true)
 fi
 base=\${base:-$(git rev-parse --abbrev-ref HEAD)}`
-  const clean = recycled
-    ? `dirty=$(git status --porcelain 2>/dev/null || true)
+  // An if/else rather than an early `exit 0`: the command runs under `bash -lc`, and `exit` in a
+  // login shell runs `~/.bash_logout` — whose last test fails on Ubuntu images and turns the
+  // step's exit status to 1 (found on a real run).
+  return `set -euo pipefail
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "No git repository in $PWD — nothing to reset; what the previous task left here stays."
+else
+${base}
+dirty=$(git status --porcelain 2>/dev/null || true)
+was=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
 if [ -n "$dirty" ]; then
-  echo "Recycled worker — discarding leftovers from the previous task:"
+  echo "Recycled worker — discarding leftovers from the previous task (on $was):"
   printf '%s\\n' "$dirty"
 fi
 git reset --hard --quiet
 git clean -fd --quiet
-`
-    : ""
-  return `set -euo pipefail
-${base}
-${clean}git fetch origin "$base" --quiet
-git checkout -B ${shellQuote(branch)} "origin/$base"
-git rev-parse --abbrev-ref HEAD`
+git fetch origin "$base" --quiet
+git checkout --quiet -B "$base" "origin/$base"
+echo "On $base at $(git rev-parse --short HEAD), as a fresh clone would be."
+fi`
 }
 
-/** Why the branch could not be created, in terms of what the reader can do about it. */
-export function branchSetupError(branch: string, cwd: string, gitOutput: string): string {
+/** Why a recycled worker's checkout could not be reset, in terms of what the reader can do about it. */
+export function workspaceResetError(start: string | null, cwd: string, gitOutput: string): string {
   const tail = gitOutput.slice(-500)
-  if (/not a git repository/i.test(gitOutput)) {
-    return `No git repository at ${cwd}, so there is nothing to branch. A task works on a branch of the project's repository — add one to the project (Edit → Repositories) and try again. (git said: ${tail})`
-  }
-  if (/couldn't find remote ref|not found in upstream|no such ref/i.test(gitOutput)) {
-    return `The base branch of this task does not exist on the remote, so "${branch}" could not be created from it. Pick an existing base branch. (git said: ${tail})`
+  if (/couldn't find remote ref|not found in upstream|no such ref|invalid reference/i.test(gitOutput)) {
+    return `The base branch of this task${start ? ` ("${start}")` : ""} does not exist on the remote of ${cwd}. Pick an existing base branch. (git said: ${tail})`
   }
   if (/could not read from remote|permission denied|authentication failed/i.test(gitOutput)) {
-    return `The repository could not be reached to create "${branch}" — the worker has no credentials for it. Check the SSH key in Settings. (git said: ${tail})`
+    return `The repository in ${cwd} could not be reached to start this task from its remote — the worker has no credentials for it. Check the SSH key in Settings. (git said: ${tail})`
   }
-  return `Could not create branch "${branch}" in ${cwd}: ${tail}`
+  return `Could not reset the recycled worker's checkout in ${cwd} for this task: ${tail}`
 }
 
 
@@ -169,17 +180,28 @@ export function sessionCommand(taskId: string, prompt: string, agentCommand: str
   return `cat <<'${delimiter}' | ${bin}\n${prompt}\n${delimiter}\n`
 }
 
-/** What "done" means, when the project has not said anything more. */
-export const DEFAULT_AGENT_INSTRUCTIONS = "When the work is done: commit on this branch and push it."
+/**
+ * The standing instruction every delegated agent gets (Lite has no org to write its own).
+ *
+ * A fact, not a git procedure (RFC 0056): Lite creates no branch and asks for none — whether the
+ * work goes on a branch, and what it is called, is the agent's call. What the agent cannot know
+ * from inside the container is what becomes of it: Cloud deletes the sandbox, Lite hands the
+ * worker to the next task and resets its checkout (`workspaceResetScript`) — anything that never
+ * left is gone either way.
+ */
+export const DEFAULT_AGENT_INSTRUCTIONS =
+  "This worker goes to another task once this one is accepted or dropped, and its checkout is reset then: anything worth keeping has to leave it before then (for code: commit it on a branch you name, and push it)."
 
 /**
  * The opening turn: the user's prompt, then the facts the agent cannot deduce from the container
- * (its branch, where it came from), the standing instruction, the project's own, and where the
- * attached files landed. Follow-ups carry none of it — the session already has it.
+ * (where the session runs, what the checkout started from — no branch among them: Lite creates
+ * none), the standing instruction, the project's own, and where the attached files landed.
+ * Follow-ups carry none of it — the session already has it.
  */
 export function sessionPrompt(input: {
   prompt: string
-  branch: string
+  /** Where the session starts — the project's first repository, else `/workspace`. */
+  cwd: string
   baseBranch: string | null
   projectInstructions?: string | null
   attachments?: string[]
@@ -188,8 +210,8 @@ export function sessionPrompt(input: {
     input.prompt,
     "",
     "---",
-    `Spunto context: you are running in a disposable worker, on branch \`${input.branch}\`` +
-      `${input.baseBranch ? ` (created from \`${input.baseBranch}\`)` : ""}, already checked out.`,
+    `Spunto context: you are running in a disposable worker, in \`${input.cwd}\`` +
+      `${input.baseBranch ? `, starting from \`${input.baseBranch}\`` : ""}.`,
     DEFAULT_AGENT_INSTRUCTIONS,
     ...(input.projectInstructions?.trim() ? [input.projectInstructions.trim()] : []),
     attachments.attachmentPreamble(input.attachments ?? []),
@@ -257,9 +279,14 @@ export function serializeTask(row: Task) {
   delete out.eventsSeq
   delete out.eventsCommandId
   const worker = row.workerId ? getWorkerRow(row.workerId) : null
+  const machine = deriveTaskMachine(row, worker)
   return {
     ...(out as Omit<Task, "lastRefreshedAt" | "eventsOffset" | "eventsSeq" | "eventsCommandId">),
-    machine: deriveTaskMachine(row, worker),
+    machine,
+    // A delayed park means something only while the task is in review with its machine up: a
+    // deadline left on a row that moved on (an Accept landing, the container stopped by hand) is
+    // never a countdown to show — and the floor would not act on it either (`parkDueTasks`).
+    parkAt: row.state === "in-review" && machine === "awake" ? row.parkAt : null,
   }
 }
 
@@ -305,8 +332,11 @@ export function createTask(projectId: string, input: CreateTaskInput): Task {
     title,
     autoTitle: !given,
     prompt: input.prompt,
-    baseBranch: input.baseBranch?.trim() || null,
-    branch: taskBranchName(title, id),
+    // What the worker is cloned from — or, recycled, reset to. Not a branch of the task's own.
+    // Without a repository nothing is cloned, so a base branch would be a promise nobody keeps.
+    baseBranch: project.repositories.length > 0 ? input.baseBranch?.trim() || null : null,
+    // RFC 0056: Lite creates no branch. Whether there is one, and its name, is the agent's call.
+    branch: null,
     // Resolved once, here: a follow-up resumes the same session, and switching models — or
     // harnesses — mid-way because the project's default moved would be a surprise, not a setting.
     model,
@@ -314,10 +344,12 @@ export function createTask(projectId: string, input: CreateTaskInput): Task {
     agentOptions: Object.keys(agentOptions).length ? agentOptions : null,
     workerId: null,
     commandId: null,
+    sessionProtocol: null,
     state: "queued",
     error: null,
     pendingAction: null,
     pendingSince: null,
+    parkAt: null,
     lastRefreshedAt: null,
     lastActivityAt: now,
     eventsCommandId: null,
@@ -326,6 +358,8 @@ export function createTask(projectId: string, input: CreateTaskInput): Task {
     createdAt: now,
     startedAt: null,
     completedAt: null,
+    links: input.links ?? [],
+    metadata: input.metadata ?? {},
   }
   db.insert(tasks).values(row).run()
   // Stored now so they travel with the job: the worker they go into does not exist yet.
@@ -353,7 +387,7 @@ async function runJob(taskId: string, kind: string, work: () => Promise<void>, o
   }
 }
 
-function getRawTask(id: string): Task | undefined {
+export function getRawTask(id: string): Task | undefined {
   return db.select().from(tasks).where(eq(tasks.id, id)).get()
 }
 
@@ -377,7 +411,13 @@ function repoPaths(project: Project): string[] {
   return paths.length > 0 ? paths : ["/workspace"]
 }
 
-// ─── The run: allocate, branch, launch ────────────────────────────────────────
+/** Each repository's checkout and the branch a fresh clone of it starts on (null = the remote's default). */
+function repoCheckouts(project: Project, baseBranch: string | null): { cwd: string; start: string | null }[] {
+  const repos = project.repositories.map((r) => ({ cwd: `/workspace/${r.workspacePath}`, start: baseBranch || r.branch?.trim() || null }))
+  return repos.length > 0 ? repos : [{ cwd: "/workspace", start: null }]
+}
+
+// ─── The run: allocate, launch ────────────────────────────────────────────────
 
 async function runTask(taskId: string, fileIds: string[]): Promise<void> {
   const task = getRawTask(taskId)
@@ -398,7 +438,7 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
     if (!worker) throw new Error(`The worker this task was being prepared on (${workerId}) no longer exists — delegate it again.`)
     recycled = worker.createdAt.getTime() < task.createdAt.getTime()
     // The restart may have landed between the launch and the line that records it: the session
-    // then runs already, and starting a second one on the same branch is the one thing not to do.
+    // then runs already, and starting a second one in the same worker is the one thing not to do.
     const launched = commands.findTaskCommand(task.id, "Agent session")
     if (launched) {
       db.update(tasks)
@@ -418,26 +458,37 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
   // Dropped while its machine was being built: nothing more to do, and nothing to start.
   if (getRawTask(taskId)?.state !== "queued") return
 
-  const paths = repoPaths(project)
-  for (const cwd of paths) {
-    const result = await commands.runTaskCommand(task.id, workerId, {
-      command: branchSetupScript(task.branch, task.baseBranch, recycled),
-      cwd,
-      timeoutMs: 120_000,
-      label: paths.length > 1 ? `Branch setup (${cwd})` : "Branch setup",
-    })
-    if (result.status !== "succeeded") {
-      throw new Error(branchSetupError(task.branch, cwd, (result.stderr || result.stdout || "").trim()))
+  // No git for the task itself (RFC 0056): a fresh worker opens on the checkout as its setup
+  // cloned it, and the agent branches if, and as, it sees fit. A project without a repository
+  // simply works in `/workspace`. Only a *recycled* worker is touched — put back where a fresh
+  // clone would be, so the next task never starts on the previous one's branch or leftovers.
+  if (recycled) {
+    const checkouts = repoCheckouts(project, task.baseBranch)
+    for (const { cwd, start } of checkouts) {
+      const result = await commands.runTaskCommand(task.id, workerId, {
+        command: workspaceResetScript(start),
+        cwd,
+        timeoutMs: 120_000,
+        label: checkouts.length > 1 ? `${WORKSPACE_RESET_LABEL} (${cwd})` : WORKSPACE_RESET_LABEL,
+      })
+      if (result.status !== "succeeded") {
+        throw new Error(workspaceResetError(start, cwd, (result.stderr || result.stdout || "").trim()))
+      }
     }
   }
+  const cwd = repoPaths(project)[0]
 
-  const harness = taskHarness(task, project)
+  const harness = await taskHarness(task, project)
   const protocol = harness.protocol
+  // The dialect is written before the launch, not with the command id: a restart between the two
+  // adopts the session (`findTaskCommand` above) and must read it in the dialect it was started in.
+  // A task launched by a Lite from before the contract has none, and is read in its app's previous one.
+  db.update(tasks).set({ sessionProtocol: protocol }).where(and(eq(tasks.id, task.id), eq(tasks.state, "queued"))).run()
   const files = attachments.attachmentsByIds(task.id, fileIds)
   const attachmentPaths = await attachments.materialize(workerId, task.id, files)
   const prompt = sessionPrompt({
     prompt: task.prompt,
-    branch: task.branch,
+    cwd,
     baseBranch: task.baseBranch,
     projectInstructions: project.taskAgentInstructions,
     attachments: attachmentPaths,
@@ -451,7 +502,7 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
     task.prompt,
     {
       command: sessionCommand(task.id, prompt, harness.command, protocol, task.model),
-      cwd: paths[0],
+      cwd,
       env: sessionEnv(task, harness),
       timeoutMs: SESSION_TIMEOUT_MS,
       label: "Agent session",
@@ -468,7 +519,7 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
     .run()
   if (changes === 0) await commands.cancelTaskCommand(session).catch(() => {})
   else {
-    console.log(`[task:${task.id}] agent session ${session.id} started on ${task.branch}`)
+    console.log(`[task:${task.id}] agent session ${session.id} started in ${cwd}`)
     await askSessionTitle(task, session, protocol, task.prompt)
   }
 }
@@ -548,8 +599,8 @@ function isOutdated(worker: Pick<Worker, "projectVersion">, project: Pick<Projec
 
 /**
  * "Free" = tagged `task`, and held by no task that is queued, running **or in review**: a task
- * owns its machine until it is terminal, or the next `checkout -B` would wipe what is being
- * reviewed. The holders are refreshed first — allocation needs the truth, not the last read.
+ * owns its machine until it is terminal, or the next task's reset (`workspaceResetScript`) would
+ * wipe what is being reviewed. The holders are refreshed first — allocation needs the truth, not the last read.
  *
  * Up to date first, then awake before parked: each step down costs more before the session can
  * start (nothing, a restart, a rebuild). A machine built from an older config is rebuilt before
@@ -679,17 +730,23 @@ function taskCommandEnv(row: Task, sessionStatus?: string): Record<string, strin
     // Last: the platform's variables are part of the contract, a same-named secret must not lie.
     SPUNTO_TASK_ID: row.id,
     SPUNTO_TASK_TITLE: row.title,
-    SPUNTO_TASK_BRANCH: row.branch,
+    // Only for a task Lite still branched (before RFC 0056); the agent names its own now —
+    // a command reads it with `git branch --show-current`.
+    ...(row.branch ? { SPUNTO_TASK_BRANCH: row.branch } : {}),
     SPUNTO_TASK_BASE_BRANCH: row.baseBranch ?? "",
     ...(row.model ? { SPUNTO_TASK_MODEL: row.model } : {}),
     SPUNTO_TASK_STATE: row.state,
     ...(sessionStatus ? { SPUNTO_TASK_SESSION_STATUS: sessionStatus } : {}),
+    // What the caller attached (docs/taches.md § « Liens et métadonnées »), as JSON — only when
+    // there is some, so a task without any reads exactly as before.
+    ...(Object.keys(row.metadata ?? {}).length ? { SPUNTO_TASK_METADATA: JSON.stringify(row.metadata) } : {}),
+    ...(row.links?.length ? { SPUNTO_TASK_LINKS: JSON.stringify(row.links) } : {}),
   }
 }
 
 /**
  * What a session's process gets on top of `taskCommandEnv`: its harness's (the runner's text and
- * the task's parameters) and, when the project has MCP servers on, where to reach them (RFC 0049).
+ * the task's parameters), the token streaming switch and, when the project has MCP servers on, where to reach them (RFC 0049).
  * The runner resolves each server's `path` on `SPUNTO_API_URL` and calls it with
  * `SPUNTO_WORKER_TOKEN` — here a token minted for this task, which only the gateway accepts: the
  * machine never holds a vendor's token. Resolved at every session start, so a server connected
@@ -707,12 +764,32 @@ function sessionEnv(row: Task, harness: Harness): Record<string, string> {
       console.warn(`[task:${row.id}] could not resolve MCP servers: ${err}`)
     }
   }
-  return { ...taskCommandEnv(row), ...harness.env, ...mcp }
+  // Every session streams the tokens of its messages (Cloud 0b31082b, no flag any more): a runner
+  // then prints `message.delta` lines, folded into the draft the timeline shows while the agent
+  // writes (`taskDraft`). A CLI from before agent apps ignores it.
+  return { ...taskCommandEnv(row), ...harness.env, ...mcp, [STREAM_ENV]: "1" }
 }
 
 // ─── Read paths: derive, don't poll ───────────────────────────────────────────
 
-export type TaskQuery = { states?: TaskState[]; query?: string; projectId?: string; limit?: number; offset?: number }
+export type TaskQuery = {
+  states?: TaskState[]
+  query?: string
+  projectId?: string
+  /** Only the tasks carrying every one of these pairs — an integration finding the task it created. */
+  metadata?: Record<string, string>
+  limit?: number
+  offset?: number
+}
+
+/**
+ * `metadata` holds every pair — Cloud's `metadata @> {…}` (a GIN index there), one `json_extract`
+ * per pair here. Keys were checked against `TASK_METADATA_KEY` by the route; the path still quotes
+ * the key, since `.` and `-` are legal in one.
+ */
+function metadataContains(pairs: Record<string, string>) {
+  return and(...Object.entries(pairs).map(([key, value]) => sql`json_extract(${tasks.metadata}, ${`$."${key}"`}) = ${value}`))
+}
 
 /**
  * Every task of the install, filtered and paged — what the agent cockpit reads. Only the returned
@@ -724,6 +801,7 @@ export async function listAllTasks(q: TaskQuery = {}) {
   const offset = Math.max(0, q.offset ?? 0)
   const filters = []
   if (q.projectId) filters.push(eq(tasks.projectId, q.projectId))
+  if (q.metadata && Object.keys(q.metadata).length > 0) filters.push(metadataContains(q.metadata))
   // `LIKE` is case-insensitive for ASCII in SQLite — what a search box needs. `%`/`_` are escaped.
   if (q.query?.trim()) {
     const pattern = `%${q.query.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`
@@ -760,11 +838,12 @@ export async function listAllTasks(q: TaskQuery = {}) {
   return { tasks: page, total, counts }
 }
 
-export async function listProjectTasks(projectId: string, limit = 100): Promise<Task[]> {
+export async function listProjectTasks(projectId: string, limit = 100, metadata?: Record<string, string>): Promise<Task[]> {
+  const byMetadata = !!metadata && Object.keys(metadata).length > 0
   const rows = db
     .select()
     .from(tasks)
-    .where(eq(tasks.projectId, projectId))
+    .where(byMetadata ? and(eq(tasks.projectId, projectId), metadataContains(metadata!)) : eq(tasks.projectId, projectId))
     .orderBy(desc(tasks.lastActivityAt), desc(tasks.createdAt))
     .limit(Math.min(200, Math.max(1, limit)))
     .all()
@@ -942,13 +1021,29 @@ function sessionState(
   return { state: events.hasHandedBack(row.id) ? "in-review" : "running" }
 }
 
-/** Review mode `stop` parks the machine as the task enters review; `keep` leaves it up. Idempotent. */
+/**
+ * Review mode `stop` parks the machine as the task enters review — at once, or
+ * `taskReviewParkAfterMinutes` from now (« Garer plus tard », Cloud 275d6fed); `keep` leaves it up.
+ * Idempotent.
+ *
+ * A delayed park is a deadline on the task (`parkAt`), not a timer: Cloud queues a `task.settle`
+ * job with a later `run_at`, Lite has no job table and its process restarts with the computer, so
+ * the row carries it and the background floor parks what came due (`parkDueTasks`). Entering
+ * review again — after a reply — writes a fresh one over whatever was left.
+ */
 async function settleTask(taskId: string): Promise<void> {
   try {
     const task = getRawTask(taskId)
     if (!task?.workerId || task.state !== "in-review") return
     const project = getProjectRow(task.projectId)
     if (project?.taskReviewMode !== "stop") return
+    const minutes = project.taskReviewParkAfterMinutes ?? 0
+    if (minutes > 0) {
+      const parkAt = new Date(Date.now() + minutes * 60_000)
+      db.update(tasks).set({ parkAt }).where(and(eq(tasks.id, taskId), eq(tasks.state, "in-review"))).run()
+      console.log(`[task:${taskId}] entering review — parking worker ${task.workerId} at ${parkAt.toISOString()} unless someone keeps it awake`)
+      return
+    }
     await withPoolLock(task.workerId, async () => {
       const worker = await getWorkerLive(task.workerId!)
       if (!worker || worker.state !== "ready" || getRawTask(taskId)?.state !== "in-review") return
@@ -1033,11 +1128,53 @@ export async function refreshDueTasks(now = Date.now()): Promise<number> {
 }
 
 /**
+ * Park the machines whose delayed park came due (`parkAt`, see `settleTask`). Called by the floor's
+ * tick, every 10 s, so a deadline is honoured to within a tick — and at boot, a deadline that
+ * passed while Lite was down is honoured on the first one.
+ *
+ * The deadline is taken (cleared, compare-and-swap on its value) before the machine is stopped, so
+ * two ticks never park twice; a task that moved on meanwhile is left alone, like Cloud's job finding
+ * the task back at work. One difference: while an Accept or a Drop is in flight the deadline is
+ * **kept** for a later tick — each is about to wake the machine, and an Accept that fails leaves the
+ * task in review, where the park still has to happen. (A reply clears it: it is a new turn.)
+ */
+export async function parkDueTasks(now = Date.now()): Promise<number> {
+  const due = db
+    .select()
+    .from(tasks)
+    .where(and(eq(tasks.state, "in-review"), isNotNull(tasks.parkAt)))
+    .all()
+    .filter((t) => t.parkAt!.getTime() <= now && !t.pendingAction)
+  let parked = 0
+  for (const t of due) {
+    const { changes } = db
+      .update(tasks)
+      .set({ parkAt: null })
+      .where(and(eq(tasks.id, t.id), eq(tasks.state, "in-review"), eq(tasks.parkAt, t.parkAt!), sql`${tasks.pendingAction} IS NULL`))
+      .run()
+    if (changes === 0 || !t.workerId) continue
+    try {
+      await withPoolLock(t.workerId, async () => {
+        const worker = await getWorkerLive(t.workerId!)
+        const fresh = getRawTask(t.id)
+        if (!worker || worker.state !== "ready" || fresh?.state !== "in-review" || fresh.pendingAction) return
+        console.log(`[task:${t.id}] scheduled park — stopping worker ${t.workerId} (state kept on disk)`)
+        await stopWorker(t.workerId!)
+        parked++
+      })
+    } catch (err) {
+      console.warn(`[task:${t.id}] scheduled park failed: ${err}`)
+    }
+  }
+  return parked
+}
+
+/**
  * What a restart interrupted. Lite's jobs live in this process, so one that was mid-flight when
  * it stopped will never finish — and its task would say "Accepting…" or "queued" for ever. Since
  * Lite runs on computers that restart all the time, what can simply go on does:
  *
- *  - a task still `queued` lost its run (allocation, branch, launch) → **run again**
+ *  - a task still `queued` lost its run (allocation, reset, launch) → **run again**
  *    (`resumeInterruptedRuns`): every step is safe to replay, and the machine it already had is
  *    woken rather than another one taken;
  *  - a Drop in flight is finished (the reader asked for it to be over);
@@ -1079,7 +1216,10 @@ function resumeInterruptedRuns(taskIds: string[]): void {
 export function startTaskScheduler(intervalMs = SCHEDULER_TICK_MS): void {
   if (schedulerTimer) return
   resumeInterruptedRuns(recoverInterruptedTasks())
-  const tick = () => void refreshDueTasks().catch((err) => console.error("[tasks] background refresh tick failed:", err))
+  const tick = () => {
+    void refreshDueTasks().catch((err) => console.error("[tasks] background refresh tick failed:", err))
+    void parkDueTasks().catch((err) => console.error("[tasks] scheduled parks tick failed:", err))
+  }
   schedulerTimer = setInterval(tick, intervalMs)
   schedulerTimer.unref?.()
   tick()
@@ -1118,7 +1258,11 @@ function clearPending(taskId: string, action: TaskPendingAction): void {
     .run()
 }
 
-/** Run one of the project's commands in the task's own worker, woken first if it was parked. */
+/**
+ * Run one of the project's commands in the task's own worker, woken first if it was parked.
+ * Running it *there* is what lets it read the checkout — `git branch --show-current` names the
+ * branch the agent made, now that Lite makes none (`SPUNTO_TASK_BRANCH` only on older tasks).
+ */
 async function runTaskAction(task: Task, command: string, kind: "validate" | "cancel"): Promise<{ exitCode: number | null; output: string }> {
   if (!task.workerId) throw new Error(`Task ${task.id} has no worker to run its ${kind} command in`)
   await wakeWorker(task.workerId, kind === "validate" ? "accept" : "drop")
@@ -1216,10 +1360,29 @@ export async function parkTask(taskId: string): Promise<Task> {
   const worker = task.workerId ? await getWorkerLive(task.workerId) : null
   const machine = deriveTaskMachine(task, worker)
   if (machine !== "awake") throw new TaskActionError(`The task's machine is ${machine ?? "gone"}, not awake`, 409)
+  // Parked now: the countdown to parking it later has nothing left to do.
+  clearScheduledPark(taskId)
   await withPoolLock(task.workerId!, async () => {
     console.log(`[task:${taskId}] parked by hand — stopping worker ${task.workerId}`)
     await stopWorker(task.workerId!)
   })
+  return getRawTask(taskId) ?? task
+}
+
+/** Drop the delayed park still waiting on this task, if any. Returns whether there was one. */
+function clearScheduledPark(taskId: string): boolean {
+  return db.update(tasks).set({ parkAt: null }).where(and(eq(tasks.id, taskId), isNotNull(tasks.parkAt))).run().changes > 0
+}
+
+/**
+ * Keep awake: cancel the park review mode `stop` scheduled for this task (Cloud 275d6fed) — its
+ * machine stays up for the rest of this review, as with `keep`. Parking it is then the Park
+ * button's job; a reply that takes it back to work schedules a fresh park at the next review.
+ */
+export async function keepTaskAwake(taskId: string): Promise<Task> {
+  const task = await requireTask(taskId, ["in-review"])
+  if (!clearScheduledPark(taskId)) throw new TaskActionError("No park is scheduled for this task", 409)
+  console.log(`[task:${taskId}] scheduled park cancelled — keeping worker ${task.workerId} awake`)
   return getRawTask(taskId) ?? task
 }
 
@@ -1240,11 +1403,45 @@ export async function wakeTask(taskId: string): Promise<Task> {
   return getRawTask(taskId) ?? task
 }
 
-/** Name a task by hand, in any state. Final: the session no longer renames it. The branch stays. */
+/**
+ * Name a task by hand, in any state. Final: the session no longer renames it. Nothing else
+ * follows: a task has no branch of its own (RFC 0056), and an older one keeps the one it had.
+ */
 export async function renameTask(taskId: string, title: string): Promise<Task | undefined> {
-  const { changes } = db.update(tasks).set({ title, autoTitle: false }).where(eq(tasks.id, taskId)).run()
-  if (changes === 0) return undefined
+  return updateTask(taskId, { title })
+}
+
+/**
+ * `PATCH` a task: its name (see `renameTask`), and what its caller says about it — links replaced
+ * as a whole, metadata merged key by key (a null or empty value removes the key). Any state, like a
+ * rename: a card pointing at a finished task is still worth pointing at. Merged here rather than
+ * in SQL so the key ceiling is checked on the result, before anything is written.
+ */
+export async function updateTask(taskId: string, input: UpdateTaskInput): Promise<Task | undefined> {
+  const current = getRawTask(taskId)
+  if (!current) return undefined
+  const set: Partial<Task> = {}
+  if (input.title !== undefined) Object.assign(set, { title: input.title, autoTitle: false })
+  if (input.links !== undefined) set.links = input.links
+  if (input.metadata !== undefined) {
+    const merged = mergeTaskMetadata(current.metadata ?? {}, input.metadata)
+    if (Object.keys(merged).length > MAX_TASK_METADATA_KEYS) {
+      throw new TaskActionError(`A task carries at most ${MAX_TASK_METADATA_KEYS} metadata keys`, 400)
+    }
+    set.metadata = merged
+  }
+  db.update(tasks).set(set).where(eq(tasks.id, taskId)).run()
   return getTask(taskId)
+}
+
+/** A metadata patch applied to what a task carries: a string sets, null or "" removes. Pure. */
+export function mergeTaskMetadata(current: Record<string, string>, patch: Record<string, string | null>): Record<string, string> {
+  const next = { ...current }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null || value === "") delete next[key]
+    else next[key] = value
+  }
+  return next
 }
 
 async function isSessionAlive(task: Task): Promise<TaskCommand | null> {
@@ -1262,7 +1459,7 @@ async function isSessionAlive(task: Task): Promise<TaskCommand | null> {
 /**
  * Answer the agent. Interactive and still alive: one write into its stdin, no job, no resume —
  * the session holding the context gets it, even mid-turn. Otherwise a new turn resumes the
- * session on the same branch in the same worker (woken first if parked).
+ * session in the same worker (woken first if parked), on whatever the checkout holds.
  */
 export async function followUpTask(taskId: string, prompt: string, files: InlineFile[] = []): Promise<Task> {
   const current = getRawTask(taskId)
@@ -1272,13 +1469,14 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
   const allowed: TaskState[] = isInteractive(protocol) ? ["running", "in-review"] : ["in-review"]
   const task = await requireTask(taskId, allowed)
   if (!task.workerId) throw new TaskActionError("This task has no worker to continue in", 409)
-
   const live = isInteractive(protocol) ? await isSessionAlive(task) : null
   if (live) {
     const stored = attachments.storeFiles(task.id, live.id, "user", files)
     const paths = await attachments.materialize(task.workerId, task.id, attachments.attachmentsByIds(task.id, stored.map((f) => f.id)))
     recordUserTurn(task.id, live.id, protocol, prompt, stored)
     await commands.writeTaskStdin(live, userTurnLine(protocol, `${prompt}${attachments.attachmentPreamble(paths)}`))
+    // Somebody answered: the countdown to a park is off. The next review starts its own.
+    clearScheduledPark(taskId)
     if (task.state !== "running") {
       db.update(tasks).set({ state: "running", error: null, completedAt: null, lastActivityAt: new Date() }).where(eq(tasks.id, taskId)).run()
     }
@@ -1293,6 +1491,7 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
   const blocked = project ? taskAgentAppBlocker(task, project) : null
   if (blocked) throw new TaskActionError(blocked, 409)
   const claimed = claimPending(taskId, "replying")
+  clearScheduledPark(taskId)
   const stored = attachments.storeFiles(taskId, null, "user", files)
   void runJob(
     taskId,
@@ -1311,15 +1510,18 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
         // branches themselves, in a machine they held alone).
         const sessionId = events.latestSessionId(taskId) ?? ""
         const turn = `${prompt}${attachments.attachmentPreamble(paths)}`
-        const harness = taskHarness(row, proj)
+        const harness = await taskHarness(row, proj)
+        // The new session's dialect, not the finished one's: a task whose last session began on an
+        // app's previous dialect resumes on the contract (RFC 0048 § 9), and is read in it from here.
+        const sessionProtocol = harness.protocol
         const session = await startAgentSession(
           taskId,
           row.workerId,
-          protocol,
+          sessionProtocol,
           turn,
           prompt,
           {
-            command: sessionCommand(taskId, turn, harness.followUpCommand, protocol, row.model),
+            command: sessionCommand(taskId, turn, harness.followUpCommand, sessionProtocol, row.model),
             cwd: repoPaths(proj)[0],
             env: { ...sessionEnv(row, harness), SPUNTO_TASK_SESSION_ID: sessionId },
             timeoutMs: SESSION_TIMEOUT_MS,
@@ -1328,11 +1530,11 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
           stored,
         )
         db.update(tasks)
-          .set({ commandId: session.id, state: "running", error: null, completedAt: null, lastActivityAt: new Date() })
+          .set({ commandId: session.id, sessionProtocol, state: "running", error: null, completedAt: null, lastActivityAt: new Date() })
           .where(and(eq(tasks.id, taskId), eq(tasks.state, "in-review")))
           .run()
         // A task whose earlier session never got a name is asked again; once named, a no-op.
-        await askSessionTitle(getRawTask(taskId) ?? row, session, protocol, row.prompt)
+        await askSessionTitle(getRawTask(taskId) ?? row, session, sessionProtocol, row.prompt)
       } finally {
         clearPending(taskId, "replying")
       }

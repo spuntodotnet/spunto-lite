@@ -2,7 +2,9 @@ import { eq, desc } from "drizzle-orm"
 import { db } from "../db/index"
 import {
   projects,
+  projectImageBuilds,
   projectVersions,
+  tasks,
   workers,
   type Project,
   type ProjectFeature,
@@ -12,7 +14,8 @@ import { newId } from "../lib/id"
 import { removeWorker as removeWorkerContainer, removeProjectImages, removeProjectVolumes } from "../lib/docker"
 import { AVAILABLE_FEATURES } from "../lib/catalogs"
 import { TASK_SETTING_KEYS, type CreateProjectInput, type TaskSettingsInput, type UpdateProjectInput } from "../lib/validation"
-import { buildProjectSpec, type ProjectExport } from "../lib/project-export"
+import { buildProjectExport, type ProjectExport } from "../lib/project-export"
+import { cleanPortsAttributes } from "../lib/ports"
 import { setProjectSecret, listProjectSecrets } from "./secrets"
 import { agentAppIdsError, projectModelsError } from "../lib/agent-apps"
 
@@ -89,6 +92,82 @@ export function listProjects(): SerializedProject[] {
   return db.select().from(projects).orderBy(desc(projects.favorite), desc(projects.createdAt)).all().map(serializeProject)
 }
 
+/**
+ * What the Projects table shows of each project besides its spec (Cloud 2a2f15bc, where the list
+ * route counts sandboxes and tasks the same way): what it runs right now and how long ago it moved.
+ * Read from SQLite only — no Docker round trip, so the page stays instant; a worker's `state` is the
+ * last one observed, which every worker read keeps current.
+ */
+export type ProjectListStats = {
+  workerCount: number
+  /** Workers `ready` — a container up. */
+  runningWorkerCount: number
+  taskCount: number
+  /** Tasks `queued`, `running` or `in-review`: the work still in progress. */
+  activeTaskCount: number
+  /** The last thing that happened to it: created, edited (a version), built, a worker spawned, a task moving. */
+  lastActivityAt: string
+  /** The image of its current version: `building` · `ready` · `error`, or null when never built. */
+  buildState: string | null
+}
+
+export type ProjectListItem = SerializedProject & ProjectListStats
+
+/** `listProjects`, each with its `ProjectListStats` — the body of `GET /api/projects`. */
+export function listProjectsWithStats(): ProjectListItem[] {
+  const rows = listProjects()
+  const stats = new Map<string, ProjectListStats & { last: number }>()
+  for (const p of rows) {
+    stats.set(p.id, {
+      workerCount: 0,
+      runningWorkerCount: 0,
+      taskCount: 0,
+      activeTaskCount: 0,
+      lastActivityAt: "",
+      buildState: null,
+      last: p.createdAt.getTime(),
+    })
+  }
+  const touch = (projectId: string, at: Date | null | undefined) => {
+    const s = stats.get(projectId)
+    if (s && at && at.getTime() > s.last) s.last = at.getTime()
+  }
+  for (const w of db.select({ projectId: workers.projectId, state: workers.state, createdAt: workers.createdAt }).from(workers).all()) {
+    const s = stats.get(w.projectId)
+    if (!s) continue
+    s.workerCount++
+    if (w.state === "ready") s.runningWorkerCount++
+    touch(w.projectId, w.createdAt)
+  }
+  for (const t of db.select({ projectId: tasks.projectId, state: tasks.state, lastActivityAt: tasks.lastActivityAt }).from(tasks).all()) {
+    const s = stats.get(t.projectId)
+    if (!s) continue
+    s.taskCount++
+    if (t.state === "queued" || t.state === "running" || t.state === "in-review") s.activeTaskCount++
+    touch(t.projectId, t.lastActivityAt)
+  }
+  for (const v of db.select({ projectId: projectVersions.projectId, createdAt: projectVersions.createdAt }).from(projectVersions).all()) {
+    touch(v.projectId, v.createdAt)
+  }
+  // Newest first: the first build met for a project's current version is the one that says.
+  const current = new Map(rows.map((p) => [p.id, p.currentVersion]))
+  const builds = db
+    .select({ projectId: projectImageBuilds.projectId, version: projectImageBuilds.version, state: projectImageBuilds.state, createdAt: projectImageBuilds.createdAt })
+    .from(projectImageBuilds)
+    .orderBy(desc(projectImageBuilds.createdAt))
+    .all()
+  for (const b of builds) {
+    const s = stats.get(b.projectId)
+    if (!s) continue
+    touch(b.projectId, b.createdAt)
+    if (s.buildState === null && b.version === current.get(b.projectId)) s.buildState = b.state
+  }
+  return rows.map((p) => {
+    const { last, ...s } = stats.get(p.id)!
+    return { ...p, ...s, lastActivityAt: new Date(last).toISOString() }
+  })
+}
+
 export function getProjectRow(id: string): Project | undefined {
   return db.select().from(projects).where(eq(projects.id, id)).get()
 }
@@ -127,6 +206,7 @@ export function createProject(input: CreateProjectInput): SerializedProject {
     postStartCommand: input.postStartCommand ?? null,
     repositories: input.repositories,
     forwardPorts: input.forwardPorts,
+    portsAttributes: cleanPortsAttributes(input.forwardPorts, input.portsAttributes),
     sharedVolumes: input.sharedVolumes,
     agentAppIds,
     currentVersion: 1,
@@ -138,6 +218,7 @@ export function createProject(input: CreateProjectInput): SerializedProject {
     taskValidateCommand: null,
     taskCancelCommand: null,
     taskReviewMode: "keep",
+    taskReviewParkAfterMinutes: 0,
     taskAgentModel: null,
     taskAgentModels: {},
     taskAgentInstructions: null,
@@ -162,12 +243,15 @@ function taskSettingsColumns(input: TaskSettingsInput): Partial<Project> {
   for (const key of TASK_SETTING_KEYS) {
     const value = input[key]
     if (value === undefined) continue
-    if (key === "taskReviewMode") out[key] = value
+    if (key === "taskReviewMode" || key === "taskReviewParkAfterMinutes") out[key] = value
     else if (key === "taskAgentModels") out[key] = cleanModels(value as Record<string, string>)
     else out[key] = typeof value === "string" && value.trim() ? value.trim() : null
   }
   return out as Partial<Project>
 }
+
+/** Project fields applied beside the version history, like the task settings: not in the image. */
+const UNVERSIONED_KEYS = ["portsAttributes"]
 
 export function updateProject(id: string, input: UpdateProjectInput): SerializedProject | undefined {
   const existing = getProjectRow(id)
@@ -187,8 +271,17 @@ export function updateProject(id: string, input: UpdateProjectInput): Serialized
   // date). The harness list does go into the image (`agentAppIds`), and is versioned below.
   const taskSettings = taskSettingsColumns(input)
   if (Object.keys(taskSettings).length > 0) db.update(projects).set(taskSettings).where(eq(projects.id, id)).run()
+  // Same for what the ports are called: a label is not in the image. Kept to the ports the project
+  // declares once this patch lands — a port taken off the list takes its label with it.
+  if (input.portsAttributes || input.forwardPorts) {
+    const portsAttributes = cleanPortsAttributes(input.forwardPorts ?? existing.forwardPorts, input.portsAttributes ?? existing.portsAttributes)
+    db.update(projects).set({ portsAttributes }).where(eq(projects.id, id)).run()
+  }
   const buildKeys = Object.keys(input).filter(
-    (k) => !TASK_SETTING_KEYS.includes(k as keyof TaskSettingsInput) && (input as Record<string, unknown>)[k] !== undefined,
+    (k) =>
+      !TASK_SETTING_KEYS.includes(k as keyof TaskSettingsInput) &&
+      !UNVERSIONED_KEYS.includes(k) &&
+      (input as Record<string, unknown>)[k] !== undefined,
   )
   if (buildKeys.length === 0) return serializeProject(getProjectRow(id)!)
 
@@ -279,7 +372,7 @@ export async function deleteProject(id: string): Promise<boolean> {
 export function exportProject(id: string): ProjectExport | undefined {
   const p = getProjectRow(id)
   if (!p) return undefined
-  return buildProjectSpec({
+  return buildProjectExport({
     name: p.name,
     // `?? undefined` so unset fields are omitted from the JSON rather than
     // serialised as null — keeps the file directly re-postable to /api/projects.
@@ -311,6 +404,9 @@ export function exportProject(id: string): ProjectExport | undefined {
     taskReviewMode: p.taskReviewMode as ProjectExport["project"]["taskReviewMode"],
     taskAgentModels: Object.keys(p.taskAgentModels).length ? p.taskAgentModels : undefined,
     secretNames: listProjectSecrets(id).map((s) => s.name),
+    // Not (yet) fields of the shared spec — see `buildProjectExport`. Left out at their defaults.
+    portsAttributes: Object.keys(p.portsAttributes ?? {}).length ? p.portsAttributes : undefined,
+    taskReviewParkAfterMinutes: p.taskReviewParkAfterMinutes > 0 ? p.taskReviewParkAfterMinutes : undefined,
   })
 }
 

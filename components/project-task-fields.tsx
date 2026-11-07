@@ -20,8 +20,11 @@ import { Textarea } from "@/components/ui/textarea"
 
 const REVIEW_MODES = [
   { value: "keep" as const, label: "Keep it running", hint: "Instant to pick back up, at the cost of a live container while review lasts." },
-  { value: "stop" as const, label: "Stop it", hint: "Park the container, state kept on disk; Accept, Drop or a reply starts it again." },
+  { value: "stop" as const, label: "Park it", hint: "Stop the container once the session hands back — at once or after a delay —, state kept on disk; Accept, Drop or a reply starts it again." },
 ]
+
+/** The API's cap on `taskReviewParkAfterMinutes` (a day). */
+const MAX_PARK_AFTER_MINUTES = 24 * 60
 
 function Field({ label, hint, children }: { label: string; hint: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -60,7 +63,8 @@ export function taskSettingsSummary(v: TaskSettings, apps: AgentAppInfo[]): stri
     v.taskAgentInstructions.trim() && "instructions",
     v.taskValidateCommand.trim() && "accept",
     v.taskCancelCommand.trim() && "drop",
-    v.taskReviewMode === "stop" && "parked in review",
+    v.taskReviewMode === "stop" &&
+      (v.taskReviewParkAfterMinutes > 0 ? `parked after ${v.taskReviewParkAfterMinutes} min in review` : "parked in review"),
   ].filter(Boolean)
   return parts.join(", ")
 }
@@ -188,7 +192,7 @@ export function ProjectTaskFields({
         </Field>
       )}
 
-      <Field label="Agent instructions" hint="Told to every task of this project, after the standing instruction to commit and push its work. What only this repository needs said: which tests to run, what not to touch.">
+      <Field label="Agent instructions" hint="Told to every task of this project, after the standing reminder that its worker is reset once it is over — so anything worth keeping, code included, has to be pushed. What only this repository needs said: which tests to run, what not to touch.">
         <Textarea
           value={value.taskAgentInstructions}
           onChange={(e) => set({ taskAgentInstructions: e.target.value })}
@@ -199,15 +203,42 @@ export function ProjectTaskFields({
       </Field>
 
       <Field label="Accept command" hint={<>Run by <span className="font-medium">Accept</span>, in the task&apos;s worker. Exit 0 marks it done. Empty = Accept just closes the task.</>}>
-        <Input value={value.taskValidateCommand} onChange={(e) => set({ taskValidateCommand: e.target.value })} placeholder='git push origin "$SPUNTO_TASK_BRANCH"' className="font-mono" />
+        <Input value={value.taskValidateCommand} onChange={(e) => set({ taskValidateCommand: e.target.value })} placeholder='git push origin "$(git branch --show-current)"' className="font-mono" />
       </Field>
 
       <Field label="Drop command" hint="Cleanup run when a task is dropped, after its session is killed.">
-        <Input value={value.taskCancelCommand} onChange={(e) => set({ taskCancelCommand: e.target.value })} placeholder='git push origin --delete "$SPUNTO_TASK_BRANCH"' className="font-mono" />
+        <Input value={value.taskCancelCommand} onChange={(e) => set({ taskCancelCommand: e.target.value })} placeholder='git push origin --delete "$(git branch --show-current)"' className="font-mono" />
       </Field>
 
-      <Field label="Worker during review" hint="A task keeps its worker until it is done or failed either way — releasing it mid-review would wipe what you are reviewing.">
+      <Field label="Worker during review" hint="A task keeps its worker until it is done or failed either way — handing it to the next task mid-review would reset what you are reviewing.">
         <Choice name="taskReviewMode" options={REVIEW_MODES} value={value.taskReviewMode} onChange={(v) => set({ taskReviewMode: v })} />
+        {value.taskReviewMode === "stop" && (
+          <div className="flex flex-wrap items-center gap-2 pt-1 text-sm">
+            <label htmlFor="taskReviewParkAfterMinutes" className="text-xs text-muted-foreground">
+              Park after
+            </label>
+            <Input
+              id="taskReviewParkAfterMinutes"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={MAX_PARK_AFTER_MINUTES}
+              step={1}
+              value={value.taskReviewParkAfterMinutes}
+              onChange={(e) => {
+                const n = Math.round(Number(e.target.value))
+                set({ taskReviewParkAfterMinutes: Number.isFinite(n) ? Math.min(Math.max(n, 0), MAX_PARK_AFTER_MINUTES) : 0 })
+              }}
+              className="h-8 w-20 tabular-nums"
+            />
+            <span className="text-xs text-muted-foreground">minutes in review</span>
+            <p className="basis-full text-[11px] text-muted-foreground">
+              0 = as soon as the session hands back. With a delay, the task shows a countdown and a{" "}
+              <span className="font-medium">Keep awake</span> button; replying calls the park off, and the next review
+              starts a new countdown. The deadline is kept in the database: a restart of Spunto Lite does not lose it.
+            </p>
+          </div>
+        )}
       </Field>
     </div>
   )

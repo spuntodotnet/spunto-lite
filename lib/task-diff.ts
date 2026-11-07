@@ -75,12 +75,12 @@ const SOH = String.fromCharCode(1)
 const MARK = `${SOH}SPUNTO-DIFF${SOH}`
 
 /**
- * Resolving "no base branch was asked for", exactly as the branch setup does it.
+ * Resolving "no base branch was asked for": the remote's default branch.
  *
- * Copied in shape rather than shared as a string, because the two run at different times against
- * different repository states and the day one has to change is not the day the other does. The
- * subtleties (`refs/remotes/origin/HEAD` is often absent; `|| true` under `set -e`) are explained
- * in `branchSetupScript`.
+ * Copied in shape from `workspaceResetScript` (services/tasks.ts) rather than shared as a string,
+ * because the two run at different times against different repository states and the day one has
+ * to change is not the day the other does. The subtleties (`refs/remotes/origin/HEAD` is often
+ * absent; `|| true` under `pipefail`) are explained there.
  */
 function resolveBase(baseBranch: string | null): string {
   if (baseBranch) return `base=${shellQuote(baseBranch)}`
@@ -106,6 +106,10 @@ base=\${base:-main}`
  */
 export function diffSummaryScript(baseBranch: string | null): string {
   return `set -uo pipefail
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  printf '%s nogit\\n' '${MARK}'
+  exit 0
+fi
 ${resolveBase(baseBranch)}
 timeout 20 git fetch origin "$base" --quiet 2>/dev/null || true
 if git rev-parse --verify --quiet "origin/$base" >/dev/null; then
@@ -198,6 +202,11 @@ const STATUS_LETTERS: Record<string, DiffStatus> = {
  */
 export function parseDiffSummary(stdout: string, ctx: { cwd: string; name: string }): RepoDiff {
   const parsed = sections(stdout)
+  // No repository there — a project without one (RFC 0056: a task needs none). Not a failure, and
+  // not "nothing changed" either: there is simply no git to read.
+  if ("nogit" in parsed) {
+    return { cwd: ctx.cwd, name: ctx.name, base: "", mergeBase: null, head: null, branch: null, files: [], additions: 0, deletions: 0, error: `No git repository in ${ctx.cwd}, so there is no diff to show.` }
+  }
   const base = (parsed.base ?? "").split("\n")[0]?.trim() ?? ""
   // One ref per line, never one line of three: a missing merge base used to shift the other two
   // along and hand back a sha as a branch name. An empty line is a fact, and this keeps it.

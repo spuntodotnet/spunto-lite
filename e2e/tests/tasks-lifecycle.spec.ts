@@ -8,10 +8,10 @@ import { execFileSync } from "node:child_process"
 // "Tasks Sandbox"), and runs under the Claude Code app (RFC 0048): its feature is really baked into
 // the image (a private Node and the SDK under /opt/spunto/agents), and the session really runs a
 // runner file on that Node, written from the session's environment. Only the runner's *text* is a
-// stand-in — `fixtures/agent-runners/claude.mjs`, which speaks the runner contract on stdin and
-// Claude Code's stream-json on stdout, with no SDK and no API key. So the `claude-runner` dialect
-// runs for real: the FIFO stdin, `session.ended` as the hand-back, a live reply, an interrupt, the
-// title request, a resume.
+// stand-in — `fixtures/agent-runners/claude.mjs`, bundled like the real one, which speaks the runner
+// contract on stdin and the Spunto agent contract on stdout, with no SDK and no API key. So the
+// `agent-v1` dialect runs for real: the FIFO stdin, `session.ended` as the hand-back, a live reply,
+// an interrupt, the title request, a resume, and the draft of a message being written.
 //
 // Opt-in, like the other specs that spawn workers: E2E_DOCKER=1 — and Lite started with
 // AGENT_RUNNERS_DIR=e2e/fixtures/agent-runners.
@@ -37,6 +37,7 @@ type Task = {
   state: string
   title: string
   workerId: string | null
+  branch?: string | null
   pendingAction: string | null
   error: string | null
   machine?: string | null
@@ -84,7 +85,10 @@ test.describe("task lifecycle on a real worker", () => {
         image: "node:24",
         postCreateCommand: POST_CREATE,
         agentAppIds: ["claude"],
-        taskValidateCommand: 'git log --oneline -1 "$SPUNTO_TASK_BRANCH" && echo accepted',
+        // No SPUNTO_TASK_BRANCH any more (RFC 0056): the checkout says which branch the agent is on.
+        // It also leaves an untracked file behind, for the next task's reset to throw away.
+        taskValidateCommand:
+          'test -z "${SPUNTO_TASK_BRANCH:-}" && git log --oneline -1 "$(git branch --show-current)" && echo leftover > LEFTOVER.md && echo accepted',
       },
     })
     expect(res.status(), await res.text()).toBe(201)
@@ -148,8 +152,10 @@ test.describe("task lifecycle on a real worker", () => {
     expect(t.state).toBe("done")
     expect(t.pendingAction).toBeNull()
     const commands = await (await request.get(`/api/tasks/${created.id}/commands`)).json()
-    expect(commands.map((c: { label: string }) => c.label)).toEqual(["Branch setup", "Agent session", "Accept command"])
-    expect(commands[2].stdout).toContain("accepted")
+    // A fresh worker: nothing ran before the session — no branch, no reset (RFC 0056).
+    expect(commands.map((c: { label: string }) => c.label)).toEqual(["Agent session", "Accept command"])
+    expect(commands[1].stdout).toContain("accepted")
+    expect(t.branch).toBeNull()
     // Accepted, the machine goes back to the pool parked — not left running until the next task.
     await expect.poll(() => workerState(request, t.workerId!), { timeout: 60_000 }).toBe("stopped")
   })
@@ -163,6 +169,19 @@ test.describe("task lifecycle on a real worker", () => {
     expect(workers.has(t.workerId!)).toBe(true) // the same machine
     // A typed title is never replaced by the session's.
     expect(t.title).toBe("Second")
+
+    // Recycled: the checkout was put back as a fresh clone would be before the session opened on
+    // it — what the first task's Accept left untracked, said and thrown away.
+    const ran = await (await request.get(`/api/tasks/${created.id}/commands`)).json()
+    expect(ran.map((c: { label: string }) => c.label).slice(0, 2)).toEqual(["Workspace reset", "Agent session"])
+    expect(ran[0].stdout).toContain("discarding leftovers from the previous task")
+    expect(ran[0].stdout).toContain("On main at")
+    expect(ran[0].stdout).toContain("LEFTOVER.md")
+    // On the base again, the agent cut its own branch off it (the fake does, like a real one would).
+    // Said in its reply rather than read off the diff: in review mode `stop` the worker may already
+    // be parked, and a parked worker has no diff to give.
+    const said = (await events(request, created.id)).events.filter((e) => e.type === "message" && e.payload.role === "assistant")
+    expect(String(said.at(-1)?.payload.text)).toBe(`Committed \`TASK-${created.id}-1.md\` on fake/${created.id}.`)
 
     // Review mode `stop` parks the worker.
     await expect.poll(async () => (await (await request.get(`/api/workers/${t.workerId}`)).json()).state, { timeout: 60_000 }).toBe("stopped")

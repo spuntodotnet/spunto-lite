@@ -176,8 +176,8 @@ Le reste des statuts, plus brièvement :
    le couple déploiements/services. Les *tasks* ont quitté cette liste le 2026-09-28 : Lite les a
    (voir [`taches.md`](taches.md)), avec les écrans et le parseur partagés et les routes à plat.
    Ce qui se dupliquerait encore, c'est la logique serveur (`services/tasks.ts` est un port de
-   `tasks.service.ts`) : les fonctions pures — script de branche, titre provisoire, nom de
-   branche, `sessionCommand`, `deriveState`, les scripts et parseurs de diff, la détection des
+   `tasks.service.ts`) : les fonctions pures — titre provisoire,
+   `sessionCommand`, `deriveState`, les scripts et parseurs de diff, la détection des
    pièces jointes dans une ligne — passent la règle d'admission de `@spunto/build` et devraient y
    descendre avant que les deux copies ne dérivent. Les modèles d'exécution diffèrent par conception —
    c'est déjà la conclusion de `docs/shared-packages.md` côté Cloud sur le client Docker.

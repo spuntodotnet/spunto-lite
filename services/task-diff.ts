@@ -24,6 +24,11 @@ export type DiffUnavailable = "no-machine" | "machine-stopped"
 export type TaskDiff = {
   available: boolean
   reason: DiffUnavailable | null
+  /**
+   * The branch the checkout is on now, read in the worker — whichever the agent made (RFC 0056:
+   * Lite makes none). Falls back to the branch an older task was created on, when nothing could
+   * be read. A string, not null: it is the panel's header.
+   */
   branch: string
   baseBranch: string | null
   repos: RepoDiff[]
@@ -40,18 +45,30 @@ function reachable(task: Task): string | DiffUnavailable {
   return worker.containerId
 }
 
-/** Where the project's repositories live in a worker — the same paths the branch setup used. */
-export function repoDirs(projectId: string): { cwd: string; name: string }[] {
+type RepoDir = { cwd: string; name: string; branch: string | null }
+
+/**
+ * Where the project's repositories live in a worker — where its setup cloned them — and the
+ * branch each was cloned on when the project says (null = the remote's default).
+ */
+export function repoDirs(projectId: string): RepoDir[] {
   const project = db.select({ repositories: projects.repositories }).from(projects).where(eq(projects.id, projectId)).get()
   const dirs = (project?.repositories ?? [])
-    .map((r) => r.workspacePath)
-    .filter((p): p is string => typeof p === "string" && p.length > 0)
-    .map((p) => ({ cwd: `/workspace/${p}`, name: p }))
-  return dirs.length > 0 ? dirs : [{ cwd: "/workspace", name: "workspace" }]
+    .filter((r) => typeof r.workspacePath === "string" && r.workspacePath.length > 0)
+    .map((r) => ({ cwd: `/workspace/${r.workspacePath}`, name: r.workspacePath, branch: r.branch?.trim() || null }))
+  return dirs.length > 0 ? dirs : [{ cwd: "/workspace", name: "workspace", branch: null }]
+}
+
+/**
+ * What a repository is compared against: the task's base branch, else the one the repository was
+ * cloned on — the branch a fresh worker starts from, and a recycled one is reset to.
+ */
+function baseOf(task: Task, dir: RepoDir): string | null {
+  return task.baseBranch || dir.branch
 }
 
 export async function taskDiff(task: Task): Promise<TaskDiff> {
-  const empty = { branch: task.branch, baseBranch: task.baseBranch, repos: [] as RepoDiff[], additions: 0, deletions: 0, files: 0 }
+  const empty = { branch: task.branch ?? "", baseBranch: task.baseBranch, repos: [] as RepoDiff[], additions: 0, deletions: 0, files: 0 }
   const containerId = reachable(task)
   if (containerId === "no-machine" || containerId === "machine-stopped") return { available: false, reason: containerId, ...empty }
 
@@ -60,7 +77,7 @@ export async function taskDiff(task: Task): Promise<TaskDiff> {
     try {
       const result = await runCommand({
         containerId,
-        command: diffSummaryScript(task.baseBranch),
+        command: diffSummaryScript(baseOf(task, dir)),
         cwd: dir.cwd,
         timeoutMs: SUMMARY_TIMEOUT_MS,
         maxOutputBytes: MAX_SUMMARY_BYTES,
@@ -70,7 +87,7 @@ export async function taskDiff(task: Task): Promise<TaskDiff> {
         repos.push(failedRepo(dir, task, (result.stderr || "git said nothing").trim().slice(-400)))
         continue
       }
-      repos.push(parseDiffSummary(result.stdout, dir))
+      repos.push(parseDiffSummary(result.stdout, { cwd: dir.cwd, name: dir.name }))
     } catch (err) {
       repos.push(failedRepo(dir, task, String(err)))
     }
@@ -79,6 +96,7 @@ export async function taskDiff(task: Task): Promise<TaskDiff> {
     available: true,
     reason: null,
     ...empty,
+    branch: repos.find((r) => r.branch)?.branch ?? empty.branch,
     repos,
     additions: repos.reduce((sum, r) => sum + r.additions, 0),
     deletions: repos.reduce((sum, r) => sum + r.deletions, 0),
@@ -86,8 +104,8 @@ export async function taskDiff(task: Task): Promise<TaskDiff> {
   }
 }
 
-function failedRepo(dir: { cwd: string; name: string }, task: Task, detail: string): RepoDiff {
-  return { ...dir, base: task.baseBranch ?? "", mergeBase: null, head: null, branch: null, files: [], additions: 0, deletions: 0, error: detail }
+function failedRepo(dir: RepoDir, task: Task, detail: string): RepoDiff {
+  return { cwd: dir.cwd, name: dir.name, base: baseOf(task, dir) ?? "", mergeBase: null, head: null, branch: null, files: [], additions: 0, deletions: 0, error: detail }
 }
 
 export type TaskFilePatch = FilePatch & { repo: string; available: boolean; reason: DiffUnavailable | null }
@@ -107,7 +125,7 @@ export async function taskFilePatch(
   const dir = dirs.find((d) => d.name === params.repo) ?? dirs[0]
   const result = await runCommand({
     containerId,
-    command: filePatchScript(task.baseBranch, params.path, { untracked: params.untracked, oldPath: params.oldPath ?? null }),
+    command: filePatchScript(baseOf(task, dir), params.path, { untracked: params.untracked, oldPath: params.oldPath ?? null }),
     cwd: dir.cwd,
     timeoutMs: PATCH_TIMEOUT_MS,
     maxOutputBytes: MAX_PATCH_BYTES,

@@ -1,9 +1,10 @@
 import { sql } from "drizzle-orm"
-import { sqliteTable, text, integer, blob, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, real, blob, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core"
 import type { SharedVolume } from "../lib/shared-volumes"
+import type { PortsAttributes } from "../lib/ports"
 import type { BuildStep } from "@spunto/build/steps"
 
-export type { SharedVolume }
+export type { SharedVolume, PortsAttributes }
 export type { BuildStep }
 
 // ─── Shared JSON-ish shapes ──────────────────────────────────────────────────
@@ -120,6 +121,10 @@ export const projects = sqliteTable("projects", {
   postStartCommand: text("post_start_command"),
   repositories: text("repositories", { mode: "json" }).$type<Repository[]>().notNull().default(sql`'[]'`),
   forwardPorts: text("forward_ports", { mode: "json" }).$type<number[]>().notNull().default(sql`'[]'`),
+  // What each port is (devcontainer `portsAttributes`, keyed by port): a `label` shown instead of
+  // the bare number, and a `path` a click lands on (lib/ports.ts). Not part of a version: nothing
+  // of it goes into the image, so naming a port must not mark every worker out of date.
+  portsAttributes: text("ports_attributes", { mode: "json" }).$type<PortsAttributes>().notNull().default(sql`'{}'`),
   // Volumes mounted in *every* worker of the project (on top of its private
   // /workspace) — a dependency cache, a dataset, build artifacts. They outlive
   // the workers and are only destroyed with the project (see lib/shared-volumes.ts).
@@ -152,6 +157,11 @@ export const projects = sqliteTable("projects", {
   taskCancelCommand: text("task_cancel_command"),
   /** `keep` leaves the worker running during review, `stop` parks it. */
   taskReviewMode: text("task_review_mode").notNull().default("keep"),
+  /**
+   * With `stop`: how many minutes a task sits in review, its machine awake, before it is parked —
+   * 0 = at once (docs/taches.md § « Garer plus tard »). Ignored with `keep`.
+   */
+  taskReviewParkAfterMinutes: integer("task_review_park_after_minutes").notNull().default(0),
   /** Deprecated: the single default model before agent apps, moved into `taskAgentModels`. */
   taskAgentModel: text("task_agent_model"),
   /** The default model of a task, per agent app (`{ claude: "claude-opus-5-5" }`). */
@@ -275,9 +285,17 @@ export const projectImageBuilds = sqliteTable("project_image_builds", {
 
 // ─── Delegated work (docs/tasks.md) ──────────────────────────────────────────
 
+/** One of `tasks.links` — a page about the task elsewhere, drawn on it as `label` → `url`. */
+export type TaskLink = {
+  /** What to call it: « SPU-142 », « Issue #88 ». */
+  label: string
+  /** `http(s)` only — it is rendered as a link. */
+  url: string
+}
+
 /**
- * A task: a prompt handed to an agent, a worker it runs in, a branch it works on, and something
- * to review at the end. Its `state` is *derived* from the agent session (a background command in
+ * A task: a prompt handed to an agent, a worker it runs in, and something to review at the end —
+ * no branch of the platform's (RFC 0056: the agent makes one if it wants one, and names it). Its `state` is *derived* from the agent session (a background command in
  * the worker) on every read — the row only remembers the last thing observed.
  *
  * Timestamps are milliseconds rather than the seconds the older tables use: a conversation list
@@ -293,8 +311,13 @@ export const tasks = sqliteTable(
     autoTitle: integer("auto_title", { mode: "boolean" }).notNull().default(false),
     prompt: text("prompt").notNull(),
     baseBranch: text("base_branch"),
-    /** Cut from the first title at creation, and never renamed after. */
-    branch: text("branch").notNull(),
+    /**
+     * The branch Lite created for the task before its session started — only on tasks from before
+     * RFC 0056 (Cloud ab56551c). Null since: Lite does no git for a task, the agent branches (or
+     * not) and names the branch itself. Kept for the old rows, which still show it and still get
+     * `SPUNTO_TASK_BRANCH`.
+     */
+    branch: text("branch"),
     /** Resolved once at creation: the task's own choice, else the project's default. */
     model: text("model"),
     /**
@@ -307,6 +330,14 @@ export const tasks = sqliteTable(
     workerId: text("worker_id").references(() => workers.id, { onDelete: "set null" }),
     /** The agent session — the `task_commands` row of the current turn. */
     commandId: text("command_id"),
+    /**
+     * The dialect the session `commandId` speaks (`@spunto/build` → `AGENT_PROTOCOLS`), fixed when
+     * it starts: `agent-v1`, the Spunto agent contract, for every session started since the runners
+     * print it (RFC 0048 § 9). Null = a session started before — read with its app's previous
+     * dialect, or its project's for a task delegated before agent apps — so a conversation keeps the
+     * dialect it began on until it ends (Cloud cf96aa07, `protocolOf`).
+     */
+    sessionProtocol: text("session_protocol"),
     // queued | running | in-review | done | failed
     state: text("state").notNull().default("queued"),
     error: text("error"),
@@ -318,6 +349,14 @@ export const tasks = sqliteTable(
      */
     pendingAction: text("pending_action"),
     pendingSince: integer("pending_since", { mode: "timestamp_ms" }),
+    /**
+     * When review mode `stop` parks this task's machine on its own — a delayed park
+     * (`taskReviewParkAfterMinutes`). Cloud keeps it as a `task.settle` job with a later `run_at`;
+     * Lite has no job table, so the deadline is written here and the background floor parks what
+     * came due: a restart of Lite loses nothing, and a deadline passed while it was down is
+     * honoured at boot. Cleared by Keep awake, a reply, a Park by hand, and the park itself.
+     */
+    parkAt: integer("park_at", { mode: "timestamp_ms" }),
     /** When the state was last derived — the background floor's clock. Not a fact about the work. */
     lastRefreshedAt: integer("last_refreshed_at", { mode: "timestamp_ms" }),
     /** When the task last *moved*. What every list is sorted on. */
@@ -329,12 +368,20 @@ export const tasks = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     startedAt: integer("started_at", { mode: "timestamp_ms" }),
     completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+    // ---- What the caller says about the task (docs/taches.md § « Liens et métadonnées ») ----
+    //
+    // Written by whoever delegates the work — at creation or by `PATCH` — and never by Lite. Two
+    // columns because they have two readers: `links` are for a human (drawn at the top of the
+    // details, « where this came from »: a backlog card, an issue), `metadata` for a machine
+    // (string pairs nobody interprets, which a list can be filtered on — `?metadata[cardId]=…`).
+    links: text("links", { mode: "json" }).$type<TaskLink[]>().notNull().default(sql`'[]'`),
+    metadata: text("metadata", { mode: "json" }).$type<Record<string, string>>().notNull().default(sql`'{}'`),
   },
   (t) => [index("tasks_project_activity_idx").on(t.projectId, t.lastActivityAt), index("tasks_state_idx").on(t.state)],
 )
 
 /**
- * What the platform ran in a worker for a task — branch setup, the session, accept, drop — with
+ * What the platform ran in a worker for a task — a recycled worker's reset, the session, accept, drop — with
  * the tail of its output. Cloud keeps these as generic `worker_commands`; Lite only ever runs
  * commands *for* a task, so they hang off the task.
  *
@@ -402,6 +449,25 @@ export const taskAttachments = sqliteTable(
   (t) => [uniqueIndex("task_attachments_task_sha_idx").on(t.taskId, t.sha256)],
 )
 
+/**
+ * A worker's CPU and memory over time — what the Monitoring block of a task draws as History
+ * (Cloud reads its sandboxes' heartbeat samples back from OpenObserve; Lite has no telemetry
+ * backend, so it samples `docker stats` itself, services/worker-metrics.ts). One row per running
+ * worker per tick, kept 7 days: the longest range the chart offers. No foreign key on purpose —
+ * a deleted worker's samples go with the next prune, not in the delete's transaction.
+ */
+export const workerSamples = sqliteTable(
+  "worker_samples",
+  {
+    workerId: text("worker_id").notNull(),
+    ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
+    cpuPercent: real("cpu_percent").notNull(),
+    memUsedMb: real("mem_used_mb").notNull(),
+    memTotalMb: real("mem_total_mb").notNull(),
+  },
+  (t) => [index("worker_samples_worker_ts_idx").on(t.workerId, t.ts), index("worker_samples_ts_idx").on(t.ts)],
+)
+
 /** Single-row settings table (id is always "singleton"). */
 export const settings = sqliteTable("settings", {
   id: text("id").primaryKey().default("singleton"),
@@ -416,6 +482,10 @@ export const settings = sqliteTable("settings", {
   // Control-plane credential used to pull private Artifact Registry / GCR base
   // images — NOT injected into workers (unlike user/project secrets).
   gcpRegistryKey: text("gcp_registry_key"),
+  // The dashboard colour picked in Settings → Appearance (lib/appearance.ts): a product colour name
+  // (`amber`, `plum`…) or one of the design system's palette ids (`lagoon-amber`…). Null = Lite's
+  // own blue. Read by the root layout on every render, so the HTML arrives already dressed in it.
+  dashboardColor: text("dashboard_color"),
 })
 
 export type Project = typeof projects.$inferSelect

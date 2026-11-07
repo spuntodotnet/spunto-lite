@@ -86,7 +86,7 @@ test.describe("tasks API", () => {
     expect(codex).toMatchObject({ agentAppId: "codex", model: "gpt-5.5", agentOptions: { webSearch: "live" } })
 
     const events = await (await request.get(`/api/tasks/${codex.id}/events?tail=true`)).json()
-    expect(events.protocol).toBe("codex-runner")
+    expect(events.protocol).toBe("agent-v1")
     await request.delete(`/api/projects/${p.id}`)
   })
 
@@ -98,7 +98,22 @@ test.describe("tasks API", () => {
     await request.delete(`/api/projects/${p.id}`)
   })
 
-  test("delegate → queued with a placeholder title and its own branch → listed → fails honestly", async ({ request }) => {
+  test("a task needs no repository, and Lite cuts it no branch (RFC 0056)", async ({ request }) => {
+    // No repository: the base branch would be a promise nobody keeps, so it is dropped.
+    const bare = await project(request)
+    const loose = await (await request.post(`/api/projects/${bare.id}/tasks`, { data: { prompt: "x", baseBranch: "develop" } })).json()
+    expect(loose).toMatchObject({ state: "queued", branch: null, baseBranch: null })
+    // With one, it is what the worker is cloned from — still no branch of the task's own.
+    const withRepo = await project(request, { repositories: [{ id: "r1", provider: "git", project: "acme/app", cloneUrl: "https://example.invalid/acme/app.git", workspacePath: "app" }] })
+    const based = await (await request.post(`/api/projects/${withRepo.id}/tasks`, { data: { prompt: "x", baseBranch: "develop" } })).json()
+    expect(based).toMatchObject({ branch: null, baseBranch: "develop" })
+    for (const p of [bare, withRepo]) {
+      for (const t of await (await request.get(`/api/projects/${p.id}/tasks`)).json()) await request.post(`/api/tasks/${t.id}/cancel`)
+      await request.delete(`/api/projects/${p.id}`)
+    }
+  })
+
+  test("delegate → queued with a placeholder title and no branch → listed → fails honestly", async ({ request }) => {
     const p = await project(request, { taskAgentModels: { claude: "claude-sonnet-5-5" } })
     const res = await request.post(`/api/projects/${p.id}/tasks`, {
       data: { prompt: "## Fix the login on Safari\nIt breaks when the cookie is third-party." },
@@ -108,7 +123,8 @@ test.describe("tasks API", () => {
     expect(task.state).toBe("queued")
     expect(task.title).toBe("Fix the login on Safari")
     expect(task.autoTitle).toBe(true)
-    expect(task.branch).toMatch(/^task\/fix-the-login-on-safari-[a-z0-9]{6}$/)
+    // RFC 0056: Lite creates no branch — the agent makes one if it wants one.
+    expect(task.branch).toBeNull()
     // The project's default model, resolved once at creation.
     expect(task.model).toBe("claude-sonnet-5-5")
     expect(task.agentAppId).toBe("claude")
@@ -137,12 +153,12 @@ test.describe("tasks API", () => {
     expect((await request.post(`/api/tasks/${task.id}/messages`, { data: { prompt: "more" } })).status()).toBe(409)
     expect((await request.post(`/api/tasks/${task.id}/interrupt`)).status()).toBe(409)
 
-    // A name typed by hand is final; the branch keeps the first one.
+    // A name typed by hand is final, and renames nothing else.
     const renamed = await (await request.patch(`/api/tasks/${task.id}`, { data: { title: "Safari login" } })).json()
-    expect(renamed).toMatchObject({ title: "Safari login", autoTitle: false, branch: task.branch })
+    expect(renamed).toMatchObject({ title: "Safari login", autoTitle: false, branch: null })
 
     const events = await (await request.get(`/api/tasks/${task.id}/events?tail=true`)).json()
-    expect(events).toMatchObject({ protocol: "claude-runner", hasMore: false })
+    expect(events).toMatchObject({ protocol: "agent-v1", hasMore: false, draft: null })
     const diff = await (await request.get(`/api/tasks/${task.id}/diff`)).json()
     expect(diff).toMatchObject({ available: false, reason: "no-machine" })
 
@@ -151,9 +167,48 @@ test.describe("tasks API", () => {
     await request.delete(`/api/projects/${p.id}`)
   })
 
+  test("links and metadata from whoever delegates: stored, merged, filtered on", async ({ request }) => {
+    const p = await project(request)
+    const card = `card-${Date.now()}`
+    const res = await request.post(`/api/projects/${p.id}/tasks`, {
+      data: {
+        prompt: "Fix the login",
+        links: [{ label: "SPU-142", url: "https://cms.example.com/cards/142" }],
+        metadata: { cardId: card, source: "backlog" },
+      },
+    })
+    expect(res.status(), await res.text()).toBe(201)
+    const task = await res.json()
+    expect(task).toMatchObject({ links: [{ label: "SPU-142", url: "https://cms.example.com/cards/142" }], metadata: { cardId: card, source: "backlog" } })
+
+    // Found again by what it carries — every pair has to match.
+    const found = await (await request.get(`/api/tasks?metadata[cardId]=${card}`)).json()
+    expect(found.tasks.map((t: { id: string }) => t.id)).toEqual([task.id])
+    expect((await (await request.get(`/api/tasks?metadata[cardId]=${card}&metadata[source]=other`)).json()).tasks).toEqual([])
+    const inProject = await (await request.get(`/api/projects/${p.id}/tasks?metadata[source]=backlog`)).json()
+    expect(inProject.map((t: { id: string }) => t.id)).toEqual([task.id])
+    expect((await request.get(`/api/tasks?metadata[bad key]=x`)).status()).toBe(400)
+
+    // PATCH merges metadata key by key and replaces links as a whole.
+    const patched = await (await request.patch(`/api/tasks/${task.id}`, { data: { metadata: { source: null, pr: "7" }, links: [] } })).json()
+    expect(patched).toMatchObject({ metadata: { cardId: card, pr: "7" }, links: [], title: task.title })
+    expect(patched.metadata).not.toHaveProperty("source")
+
+    // Refusals: a non-http link, a key that cannot exist, nothing to change.
+    expect((await request.patch(`/api/tasks/${task.id}`, { data: { links: [{ label: "x", url: "javascript:alert(1)" }] } })).status()).toBe(400)
+    expect((await request.patch(`/api/tasks/${task.id}`, { data: { metadata: { "a b": "x" } } })).status()).toBe(400)
+    expect((await request.patch(`/api/tasks/${task.id}`, { data: {} })).status()).toBe(400)
+
+    // What circulated: the opening prompt is a message, with no link in it.
+    const shared = await (await request.get(`/api/tasks/${task.id}/shared`)).json()
+    expect(shared).toEqual({ links: [], files: [] })
+    expect(await (await request.get(`/api/tasks/${task.id}/tiles`)).json()).toEqual([])
+    await request.delete(`/api/projects/${p.id}`)
+  })
+
   test("the agent apps and their catalogs", async ({ request }) => {
     const apps = await (await request.get("/api/agent-apps")).json()
-    expect(apps.map((a: { id: string }) => a.id)).toEqual(["claude", "codex"])
+    expect(apps.map((a: { id: string }) => a.id)).toEqual(["claude", "codex", "mistral"])
     expect(apps[0]).toMatchObject({ name: "Claude Code", credentials: ["ANTHROPIC_API_KEY"] })
     expect(apps[0].catalog.models.some((m: { default?: boolean }) => m.default)).toBe(true)
     expect(apps[0].catalog.params.map((p: { id: string }) => p.id)).toContain("effort")
