@@ -1,0 +1,84 @@
+---
+import { SpuntoLogo } from "@spunto/design-system/brand"
+import { lhref, switchLocale, REPO_URL, UI, type Locale } from "../lib/i18n"
+
+interface Props {
+  locale: Locale
+  overDark?: boolean
+  wide?: boolean
+}
+
+const { locale, overDark = false, wide = false } = Astro.props
+const t = UI[locale]
+const path = Astro.url.pathname.replace(/\/$/, "") || "/"
+const other: Locale = locale === "en" ? "fr" : "en"
+const inDocs = /^(\/fr)?\/docs(\/|$)/.test(path)
+---
+
+<header
+  id="site-nav"
+  data-over-dark={overDark ? "" : undefined}
+  class="group/nav fixed inset-x-0 top-0 z-50 border-b border-transparent transition-colors duration-300 data-[scrolled]:border-border data-[scrolled]:bg-background/90 data-[scrolled]:backdrop-blur-md"
+>
+  <div class:list={["mx-auto flex h-16 items-center justify-between gap-4 px-5 md:px-10", wide ? "max-w-7xl" : "max-w-6xl"]}>
+    <a href={lhref(locale, "/")} class="flex items-center gap-2.5">
+      <SpuntoLogo tone="product" size={30} title="Spunto" />
+      <span
+        class="font-display text-base font-bold tracking-tight text-foreground group-data-[over-dark]/nav:not-group-data-[scrolled]/nav:text-white"
+      >
+        Spunto <span class="text-primary group-data-[over-dark]/nav:not-group-data-[scrolled]/nav:text-signal">Lite</span>
+      </span>
+    </a>
+
+    <nav
+      class="flex items-center gap-1 text-sm text-muted-foreground group-data-[over-dark]/nav:not-group-data-[scrolled]/nav:text-stone-300"
+    >
+      <a
+        href={lhref(locale, "/docs")}
+        class:list={[
+          "rounded-md px-3 py-1.5 transition-colors hover:text-foreground group-data-[over-dark]/nav:not-group-data-[scrolled]/nav:hover:text-white",
+          inDocs && "text-foreground",
+        ]}>{t.docs}</a
+      >
+      <a
+        href={REPO_URL}
+        class="hidden rounded-md px-3 py-1.5 transition-colors hover:text-foreground sm:inline group-data-[over-dark]/nav:not-group-data-[scrolled]/nav:hover:text-white"
+        >{t.github}</a
+      >
+      <a
+        href={switchLocale(path, other)}
+        hreflang={other}
+        lang={other}
+        class="rounded-md px-3 py-1.5 font-mono text-xs uppercase tracking-[0.14em] transition-colors hover:text-foreground group-data-[over-dark]/nav:not-group-data-[scrolled]/nav:hover:text-white"
+        title={t.languageName}>{other}</a
+      >
+      <button
+        type="button"
+        id="theme-toggle"
+        aria-label={t.theme}
+        title={t.theme}
+        class="rounded-md p-2 transition-colors hover:text-foreground group-data-[over-dark]/nav:not-group-data-[scrolled]/nav:hover:text-white"
+      >
+        <svg class="h-4 w-4 dark:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"></path></svg>
+        <svg class="hidden h-4 w-4 dark:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>
+      </button>
+      <a
+        href={lhref(locale, "/docs/installation")}
+        class="ml-1 hidden rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 md:inline-flex"
+        >{t.getStarted}</a
+      >
+    </nav>
+  </div>
+</header>
+
+<script>
+  const nav = document.getElementById("site-nav")!
+  const onScroll = () => nav.toggleAttribute("data-scrolled", window.scrollY > 20 || !nav.hasAttribute("data-over-dark"))
+  onScroll()
+  window.addEventListener("scroll", onScroll, { passive: true })
+
+  document.getElementById("theme-toggle")!.addEventListener("click", () => {
+    const dark = document.documentElement.classList.toggle("dark")
+    localStorage.setItem("theme", dark ? "dark" : "light")
+  })
+</script>

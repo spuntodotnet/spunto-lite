@@ -10,6 +10,8 @@ key** injected so `git push` just works.
 No cloud, no multi-tenant, no remote agents: one Next.js process talking straight
 to your local Docker socket.
 
+**Website and user docs: [lite.spunto.net](https://lite.spunto.net)** (source in [`site/`](site/README.md)).
+
 ## Quick start
 
 ```bash

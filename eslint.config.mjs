@@ -8,9 +8,9 @@ import typescript from "eslint-config-next/typescript"
 
 const config = [
   {
-    // Build output, generated types, vendored SQL, and the e2e workspace — a separate npm
-    // project with its own dependencies, which linting from here would resolve to nothing.
-    ignores: [".next/**", "next-env.d.ts", "drizzle/**", "e2e/**", "local-https/**"],
+    // Build output, generated types, vendored SQL, and the e2e and site workspaces — separate npm
+    // projects with their own dependencies, which linting from here would resolve to nothing.
+    ignores: [".next/**", "next-env.d.ts", "drizzle/**", "e2e/**", "local-https/**", "site/**"],
   },
   ...coreWebVitals,
   ...typescript,

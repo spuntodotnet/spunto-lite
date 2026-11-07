@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="t">
+  <title id="t">Spunto Lite</title>
+  <rect x="0" y="0" width="128" height="128" rx="14" fill="#83dbff"/>
+  <path d="M31 31h52v10H41v42H31z" fill="#102743"/>
+  <path d="M97 97H45V87h42V45h10z" fill="#102743"/>
+  <circle cx="64" cy="64" r="13" fill="#102743"/>
+  <rect x="45" y="17" width="10" height="10" fill="#102743"/>
+  <rect x="59" y="17" width="10" height="10" fill="#102743"/>
+  <rect x="73" y="17" width="10" height="10" fill="#102743"/>
+  <rect x="17" y="45" width="10" height="10" fill="#102743"/>
+  <rect x="17" y="59" width="10" height="10" fill="#102743"/>
+  <rect x="17" y="73" width="10" height="10" fill="#102743"/>
+  <circle cx="106" cy="50" r="5" fill="#102743"/>
+  <circle cx="106" cy="64" r="5" fill="#102743"/>
+  <circle cx="106" cy="78" r="5" fill="#102743"/>
+  <rect x="31" y="101" width="10" height="10" fill="#102743"/>
+  <circle cx="50" cy="106" r="5" fill="#102743"/>
+  <rect x="59" y="101" width="10" height="10" fill="#102743"/>
+  <circle cx="78" cy="106" r="5" fill="#102743"/>
+</svg>
