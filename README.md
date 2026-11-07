@@ -75,6 +75,16 @@ HTTPS with a local mkcert certificate. See
   rebuilds it instead of leaving your workers on the old one. What the two Spuntos share
   today and what they still duplicate — project creation, worker listing, the status
   vocabularies — is written down in [`docs/api-partagee.md`](docs/api-partagee.md).
+- **The IDE is Spunto's**: `spunto-pack` (1.1+, recipe 3) renames code-server's files to
+  *Spunto* and builds in two themes, *Spunto Light* (seeded as the default
+  `workbench.colorTheme`, without overwriting a `settings.json` the worker already has) and
+  *Spunto Dark*; code-server is started with `--app-name Spunto`,
+  `--disable-getting-started-override` and `--disable-update-check` — each only if the image's
+  code-server knows it. All of it comes from `@spunto/build`'s scripts, nothing Lite-side.
+- **The dashboard's colour is yours**: Settings → *Appearance* swaps Lite's own ink blue and
+  sky for another product pair (Spunto Cloud's seven) or one of the design system's 50
+  `data-palette`s. Stored in the settings row and written onto `<html>` by the root layout on
+  the server, so no page paints in the default first (`lib/appearance.ts`).
 - **A persistent terminal on dtach**, not a multiplexer. Closing the tab does not kill
   the build: the worker's agent attaches to a session that outlives it. dtach only
   does persistence and forwards every byte, so the *browser* keeps the mouse, the
