@@ -55,9 +55,12 @@ export function NewTaskButton({
  * branch, and — RFC 0048 — the harnesses the project allows, the models of the one picked, and one
  * chip per parameter its app declares) and sends what it returns.
  *
- * Lite asks no forge for branches, so the base branch is free text with the repository's
- * configured branch as its placeholder — leaving it blank means the remote's default. And no
- * title: the task takes one from the prompt, then the name the agent gives the conversation.
+ * The base branch is what the worker is cloned from (or, recycled, reset to) — not a branch the
+ * task gets: Lite creates none (RFC 0056), the agent makes one if it wants one. Lite asks no forge
+ * for branches, so it is free text with the repository's configured branch as its placeholder —
+ * leaving it blank means that one, else the remote's default. A project without a repository
+ * shows no chip at all: there is nothing to start from. And no title: the task takes one from the
+ * prompt, then the name the agent gives the conversation.
  */
 export function NewTask({
   projectId,
@@ -196,6 +199,8 @@ export function NewTask({
       draftKey={draftKey}
       branches={[]}
       defaultBranch={project?.repositories[0]?.branch || null}
+      // Nothing is cloned for a project without a repository, so a base branch would be ignored.
+      hideBaseBranch={!!project && project.repositories.length === 0}
       modelGroups={harnessApp ? [{ id: harnessApp.id, label: harnessApp.name, models: harnessApp.catalog.models.map(({ value, label }) => ({ value, label })) }] : []}
       defaultModel={defaultModel}
       onModelChange={(value) => setTypedModel({ key: composerKey, value })}
@@ -208,7 +213,7 @@ export function NewTask({
         project && allowedIds.length === 0
           ? `${project.name} has no harness yet: allow an agent app in its settings (Edit project → Agents) to delegate here.`
           : project
-            ? `In ${project.name}, on a worker and a branch of its own. Its session streams right here as soon as it starts — answer it as it works.`
+            ? `In ${project.name}, on a worker of its own. Its session streams right here as soon as it starts — answer it as it works.`
             : undefined
       }
       backHref={backHref}

@@ -98,7 +98,22 @@ test.describe("tasks API", () => {
     await request.delete(`/api/projects/${p.id}`)
   })
 
-  test("delegate → queued with a placeholder title and its own branch → listed → fails honestly", async ({ request }) => {
+  test("a task needs no repository, and Lite cuts it no branch (RFC 0056)", async ({ request }) => {
+    // No repository: the base branch would be a promise nobody keeps, so it is dropped.
+    const bare = await project(request)
+    const loose = await (await request.post(`/api/projects/${bare.id}/tasks`, { data: { prompt: "x", baseBranch: "develop" } })).json()
+    expect(loose).toMatchObject({ state: "queued", branch: null, baseBranch: null })
+    // With one, it is what the worker is cloned from — still no branch of the task's own.
+    const withRepo = await project(request, { repositories: [{ id: "r1", provider: "git", project: "acme/app", cloneUrl: "https://example.invalid/acme/app.git", workspacePath: "app" }] })
+    const based = await (await request.post(`/api/projects/${withRepo.id}/tasks`, { data: { prompt: "x", baseBranch: "develop" } })).json()
+    expect(based).toMatchObject({ branch: null, baseBranch: "develop" })
+    for (const p of [bare, withRepo]) {
+      for (const t of await (await request.get(`/api/projects/${p.id}/tasks`)).json()) await request.post(`/api/tasks/${t.id}/cancel`)
+      await request.delete(`/api/projects/${p.id}`)
+    }
+  })
+
+  test("delegate → queued with a placeholder title and no branch → listed → fails honestly", async ({ request }) => {
     const p = await project(request, { taskAgentModels: { claude: "claude-sonnet-5-5" } })
     const res = await request.post(`/api/projects/${p.id}/tasks`, {
       data: { prompt: "## Fix the login on Safari\nIt breaks when the cookie is third-party." },
@@ -108,7 +123,8 @@ test.describe("tasks API", () => {
     expect(task.state).toBe("queued")
     expect(task.title).toBe("Fix the login on Safari")
     expect(task.autoTitle).toBe(true)
-    expect(task.branch).toMatch(/^task\/fix-the-login-on-safari-[a-z0-9]{6}$/)
+    // RFC 0056: Lite creates no branch — the agent makes one if it wants one.
+    expect(task.branch).toBeNull()
     // The project's default model, resolved once at creation.
     expect(task.model).toBe("claude-sonnet-5-5")
     expect(task.agentAppId).toBe("claude")
@@ -137,9 +153,9 @@ test.describe("tasks API", () => {
     expect((await request.post(`/api/tasks/${task.id}/messages`, { data: { prompt: "more" } })).status()).toBe(409)
     expect((await request.post(`/api/tasks/${task.id}/interrupt`)).status()).toBe(409)
 
-    // A name typed by hand is final; the branch keeps the first one.
+    // A name typed by hand is final, and renames nothing else.
     const renamed = await (await request.patch(`/api/tasks/${task.id}`, { data: { title: "Safari login" } })).json()
-    expect(renamed).toMatchObject({ title: "Safari login", autoTitle: false, branch: task.branch })
+    expect(renamed).toMatchObject({ title: "Safari login", autoTitle: false, branch: null })
 
     const events = await (await request.get(`/api/tasks/${task.id}/events?tail=true`)).json()
     expect(events).toMatchObject({ protocol: "claude-runner", hasMore: false })

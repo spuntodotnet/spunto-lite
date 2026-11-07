@@ -188,7 +188,7 @@ export function ProjectTaskFields({
         </Field>
       )}
 
-      <Field label="Agent instructions" hint="Told to every task of this project, after the standing instruction to commit and push its work. What only this repository needs said: which tests to run, what not to touch.">
+      <Field label="Agent instructions" hint="Told to every task of this project, after the standing reminder that its worker is reset once it is over — so anything worth keeping, code included, has to be pushed. What only this repository needs said: which tests to run, what not to touch.">
         <Textarea
           value={value.taskAgentInstructions}
           onChange={(e) => set({ taskAgentInstructions: e.target.value })}
@@ -199,14 +199,14 @@ export function ProjectTaskFields({
       </Field>
 
       <Field label="Accept command" hint={<>Run by <span className="font-medium">Accept</span>, in the task&apos;s worker. Exit 0 marks it done. Empty = Accept just closes the task.</>}>
-        <Input value={value.taskValidateCommand} onChange={(e) => set({ taskValidateCommand: e.target.value })} placeholder='git push origin "$SPUNTO_TASK_BRANCH"' className="font-mono" />
+        <Input value={value.taskValidateCommand} onChange={(e) => set({ taskValidateCommand: e.target.value })} placeholder='git push origin "$(git branch --show-current)"' className="font-mono" />
       </Field>
 
       <Field label="Drop command" hint="Cleanup run when a task is dropped, after its session is killed.">
-        <Input value={value.taskCancelCommand} onChange={(e) => set({ taskCancelCommand: e.target.value })} placeholder='git push origin --delete "$SPUNTO_TASK_BRANCH"' className="font-mono" />
+        <Input value={value.taskCancelCommand} onChange={(e) => set({ taskCancelCommand: e.target.value })} placeholder='git push origin --delete "$(git branch --show-current)"' className="font-mono" />
       </Field>
 
-      <Field label="Worker during review" hint="A task keeps its worker until it is done or failed either way — releasing it mid-review would wipe what you are reviewing.">
+      <Field label="Worker during review" hint="A task keeps its worker until it is done or failed either way — handing it to the next task mid-review would reset what you are reviewing.">
         <Choice name="taskReviewMode" options={REVIEW_MODES} value={value.taskReviewMode} onChange={(v) => set({ taskReviewMode: v })} />
       </Field>
     </div>

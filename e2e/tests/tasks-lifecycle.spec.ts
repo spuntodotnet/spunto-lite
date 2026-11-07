@@ -37,6 +37,7 @@ type Task = {
   state: string
   title: string
   workerId: string | null
+  branch?: string | null
   pendingAction: string | null
   error: string | null
   machine?: string | null
@@ -84,7 +85,8 @@ test.describe("task lifecycle on a real worker", () => {
         image: "node:24",
         postCreateCommand: POST_CREATE,
         agentAppIds: ["claude"],
-        taskValidateCommand: 'git log --oneline -1 "$SPUNTO_TASK_BRANCH" && echo accepted',
+        // No SPUNTO_TASK_BRANCH any more (RFC 0056): the checkout says which branch the agent is on.
+        taskValidateCommand: 'test -z "${SPUNTO_TASK_BRANCH:-}" && git log --oneline -1 "$(git branch --show-current)" && echo accepted',
       },
     })
     expect(res.status(), await res.text()).toBe(201)
@@ -148,8 +150,10 @@ test.describe("task lifecycle on a real worker", () => {
     expect(t.state).toBe("done")
     expect(t.pendingAction).toBeNull()
     const commands = await (await request.get(`/api/tasks/${created.id}/commands`)).json()
-    expect(commands.map((c: { label: string }) => c.label)).toEqual(["Branch setup", "Agent session", "Accept command"])
-    expect(commands[2].stdout).toContain("accepted")
+    // A fresh worker: nothing ran before the session — no branch, no reset (RFC 0056).
+    expect(commands.map((c: { label: string }) => c.label)).toEqual(["Agent session", "Accept command"])
+    expect(commands[1].stdout).toContain("accepted")
+    expect(t.branch).toBeNull()
     // Accepted, the machine goes back to the pool parked — not left running until the next task.
     await expect.poll(() => workerState(request, t.workerId!), { timeout: 60_000 }).toBe("stopped")
   })
@@ -163,6 +167,19 @@ test.describe("task lifecycle on a real worker", () => {
     expect(workers.has(t.workerId!)).toBe(true) // the same machine
     // A typed title is never replaced by the session's.
     expect(t.title).toBe("Second")
+
+    // Recycled: the checkout was put back as a fresh clone would be before the session opened on
+    // it — the first task's note, left untracked, said and thrown away.
+    const ran = await (await request.get(`/api/tasks/${created.id}/commands`)).json()
+    expect(ran.map((c: { label: string }) => c.label).slice(0, 2)).toEqual(["Workspace reset", "Agent session"])
+    expect(ran[0].stdout).toContain("discarding leftovers from the previous task")
+    expect(ran[0].stdout).toContain("On main at")
+    const diff = await (await request.get(`/api/tasks/${created.id}/diff`)).json()
+    expect(diff.available).toBe(true)
+    expect(diff.branch).toBe("main")
+    const paths = diff.repos[0].files.map((f: { path: string }) => f.path)
+    expect(paths).toContain(`TASK-${created.id}-1.md`)
+    expect(paths.some((p: string) => p.startsWith("TASK-") && !p.includes(created.id))).toBe(false)
 
     // Review mode `stop` parks the worker.
     await expect.poll(async () => (await (await request.get(`/api/workers/${t.workerId}`)).json()).state, { timeout: 60_000 }).toBe("stopped")

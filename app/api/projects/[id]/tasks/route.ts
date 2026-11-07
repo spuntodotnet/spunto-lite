@@ -16,7 +16,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
 /**
  * Delegate: `{ prompt, title?, baseBranch?, model?, files? }`. Answers at once with the task
- * `queued`; allocating a worker, creating the branch and starting the session happen after.
+ * `queued`; allocating a worker (resetting it, if recycled) and starting the session happen after
+ * — no branch: the agent makes one if it wants one (RFC 0056).
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params

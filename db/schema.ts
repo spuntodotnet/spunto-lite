@@ -276,8 +276,8 @@ export const projectImageBuilds = sqliteTable("project_image_builds", {
 // ─── Delegated work (docs/tasks.md) ──────────────────────────────────────────
 
 /**
- * A task: a prompt handed to an agent, a worker it runs in, a branch it works on, and something
- * to review at the end. Its `state` is *derived* from the agent session (a background command in
+ * A task: a prompt handed to an agent, a worker it runs in, and something to review at the end —
+ * no branch of the platform's (RFC 0056: the agent makes one if it wants one, and names it). Its `state` is *derived* from the agent session (a background command in
  * the worker) on every read — the row only remembers the last thing observed.
  *
  * Timestamps are milliseconds rather than the seconds the older tables use: a conversation list
@@ -293,8 +293,13 @@ export const tasks = sqliteTable(
     autoTitle: integer("auto_title", { mode: "boolean" }).notNull().default(false),
     prompt: text("prompt").notNull(),
     baseBranch: text("base_branch"),
-    /** Cut from the first title at creation, and never renamed after. */
-    branch: text("branch").notNull(),
+    /**
+     * The branch Lite created for the task before its session started — only on tasks from before
+     * RFC 0056 (Cloud ab56551c). Null since: Lite does no git for a task, the agent branches (or
+     * not) and names the branch itself. Kept for the old rows, which still show it and still get
+     * `SPUNTO_TASK_BRANCH`.
+     */
+    branch: text("branch"),
     /** Resolved once at creation: the task's own choice, else the project's default. */
     model: text("model"),
     /**
@@ -334,7 +339,7 @@ export const tasks = sqliteTable(
 )
 
 /**
- * What the platform ran in a worker for a task — branch setup, the session, accept, drop — with
+ * What the platform ran in a worker for a task — a recycled worker's reset, the session, accept, drop — with
  * the tail of its output. Cloud keeps these as generic `worker_commands`; Lite only ever runs
  * commands *for* a task, so they hang off the task.
  *

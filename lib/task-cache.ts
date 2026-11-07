@@ -9,7 +9,8 @@ export type { TaskPendingAction }
 export interface Task extends TaskItem {
   projectId: string
   prompt: string
-  branch: string
+  /** Only on tasks from before RFC 0056 — Lite creates no branch since, the agent names its own. */
+  branch: string | null
   baseBranch: string | null
   model: string | null
   workerId: string | null

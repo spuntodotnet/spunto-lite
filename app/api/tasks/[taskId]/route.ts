@@ -15,7 +15,7 @@ export async function GET(_req: Request, { params }: Params) {
   return task ? json(serializeTaskDetail(task)) : notFound("Task not found")
 }
 
-/** Rename, in any state: `{ title }`. The branch keeps the name it was created with. */
+/** Rename, in any state: `{ title }`. Nothing else is renamed (a task has no branch of its own). */
 export async function PATCH(req: Request, { params }: Params) {
   const { taskId } = await params
   const parsed = await parseBody(req, RenameTaskSchema)

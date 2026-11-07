@@ -18,8 +18,8 @@ import {
 /**
  * Command execution inside a worker, for delegated work (docs/tasks.md), in two flavours:
  *
- *  - **foreground** (`runCommand`) — wait for it, get stdout/stderr/exit code back. Branch setup,
- *    the reset, accept and drop, a `git diff`.
+ *  - **foreground** (`runCommand`) — wait for it, get stdout/stderr/exit code back. A recycled
+ *    worker's reset, accept and drop, a `git diff`.
  *  - **background** (`startCommand` + `pollCommand` + `readCommandOutput` + `cancelCommand`) —
  *    detached inside the container, its output redirected to files, polled afterwards. The agent
  *    session: anything that outlives an HTTP request.

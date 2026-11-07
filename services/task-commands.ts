@@ -5,7 +5,7 @@ import { newId } from "../lib/id"
 import * as wc from "../lib/worker-commands"
 
 /**
- * What the platform ran in a worker for a task, written down — "Branch setup", "Agent session",
+ * What the platform ran in a worker for a task, written down — "Workspace reset", "Agent session",
  * "Accept command" — so the cockpit can tell the task's story (docs/tasks.md § "Ce que la
  * plateforme a lancé").
  *
