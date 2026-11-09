@@ -246,6 +246,50 @@ working, keys with one don't.
 Override the paths with `SSH_AGENT_DIR` (default `/run/spunto-ssh-agent`) and
 `HOST_SSH_AUTH_SOCK` (default `/run/host-services/ssh-auth.sock`).
 
+## Telemetry (opt-in)
+
+Off by default, and there is no default destination: nothing is ever sent anywhere
+unless you point it at a collector of your own. Set `TELEMETRY_OTLP_ENDPOINT` and Lite
+sends usage events as OTLP/HTTP logs to `<endpoint>/v1/logs`, every 10 s. That works
+with any OpenTelemetry collector; with OpenObserve:
+
+```bash
+docker run -d --name spunto-lite -p 80:80 \
+  … \
+  -e TELEMETRY_OTLP_ENDPOINT=https://openobserve.example.com/api/default \
+  -e TELEMETRY_OTLP_HEADERS="Authorization=Basic%20$(printf 'you@example.com:token' | base64)" \
+  -e TELEMETRY_INSTANCE=my-laptop \
+  ghcr.io/spuntodotnet/spunto-lite:latest
+```
+
+| Variable | |
+|---|---|
+| `TELEMETRY_OTLP_ENDPOINT` | Base URL. Setting it is the opt-in. OpenObserve: `https://<host>/api/<org>` |
+| `TELEMETRY_OTLP_HEADERS` | `key=value,key2=value2`, URL-encoded values — same format as `OTEL_EXPORTER_OTLP_HEADERS` |
+| `TELEMETRY_STREAM` | Sent as the `stream-name` header: the OpenObserve stream (default `spunto_lite`) |
+| `TELEMETRY_INSTANCE` | A name for this install (default: a random id kept in `DATA_DIR/telemetry-id`) |
+
+What is sent is usage, never content — no names, request bodies, query strings or IPs.
+Each event has an `event` field:
+
+- `lite.started`: version, Node, and the machine Docker runs on (OS, CPUs, memory).
+- `lite.heartbeat` (every 5 min): how many projects, and workers / services / tasks per state.
+- `page.view`: a page opened (full load or client-side navigation), its route with ids
+  masked (`/projects/:id/workers/:id`), status, duration.
+- `api.request`: an action (any non-GET API call) or an API call that failed (5xx),
+  same fields. The reads the dashboard polls every few seconds are left out.
+- `resources.volume_sizes`: how long measuring every volume took, and their total size.
+- `worker.start`: one per spawn, rebuild or start of a worker, once it is ready (or failed):
+  the total, and a `phase_<name>_ms` column per phase, plus one `worker.start_phase` event
+  per phase (`phase`, `order`, `duration_ms`) for grouping. Phases, in order: Lite's
+  `image` (built or found — `image_built` says which), `container` (created and started),
+  `boot` (until the agent's first hello), `recipe` (the agent bakes what the image lacks),
+  then the setup script's own `initializing`, `credentials`, `shell`, `dotfiles`,
+  `cloning`, `postCreate`, `postStart`.
+- `image.build`: one per image build (`trigger` spawn or manual, `forced`, `duration_ms`,
+  `outside_steps_ms` — pulling the base and committing, which no step covers), and one
+  `image.build_step` per block of the recipe (`step`, `step_kind`, `state`, `duration_ms`).
+
 ## Requirements
 
 - Docker with the socket at `/var/run/docker.sock`

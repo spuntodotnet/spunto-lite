@@ -48,6 +48,7 @@ import { isEncryptedPrivateKey, readHostPrivateKey } from "../lib/ssh-keys"
 import { WORKER_AGENT_SOCK, workerAgentBind, workerPublicKeyLine } from "../lib/ssh-agent"
 import { shellQuote } from "../lib/shell"
 import { effectiveFeatures } from "../lib/agent-apps"
+import { beginWorkerStart, dropWorkerStart, markWorkerStart, reportImageBuild, settleWorkerStart } from "./start-timings"
 
 /**
  * The tag carries two versions: the project's, and the *recipe's* — what `buildImageScript` bakes
@@ -95,11 +96,21 @@ async function imageExists(ref: string): Promise<boolean> {
  * another one wants the second — for them the existence check is the whole problem, since the
  * image existing is precisely the state they are trying to leave.
  */
-export async function ensureProjectImage(project: Project, version: number, force = false): Promise<string> {
+export async function ensureProjectImage(
+  project: Project,
+  version: number,
+  force = false,
+  trigger: "spawn" | "manual" = "spawn",
+  onBuild?: (buildId: string) => void,
+): Promise<string> {
   const ref = imageRefFor(project.id, version)
   if (!force && (await imageExists(ref))) return ref
 
   const buildId = newId()
+  const buildStarted = Date.now()
+  onBuild?.(buildId)
+  const report = (outcome: "ready" | "error") =>
+    reportImageBuild({ buildId, projectId: project.id, version, forced: force, trigger, outcome, durationMs: Date.now() - buildStarted, steps: tracker.steps })
   db.insert(projectImageBuilds).values({ id: buildId, projectId: project.id, version, imageRef: ref, state: "building", logs: "" }).run()
 
   // The plan comes out of the *same call* that emits the script, so the blocks a UI greys out
@@ -145,11 +156,13 @@ export async function ensureProjectImage(project: Project, version: number, forc
     await buildProjectImage({ baseImage: project.image, buildScript, imageRef: ref, noCache: force, onLog: flush, labels: { [BAKE_KEY_LABEL]: bakeKey } })
     logs += tracker.finish("ready").text
     persist("ready")
+    report("ready")
     return ref
   } catch (err) {
     logs += tracker.finish("error").text
     logs += `\n[build] ERROR: ${(err as Error).message}\n`
     persist("error")
+    report("error")
     throw err
   }
 }
@@ -161,7 +174,7 @@ export async function ensureProjectImage(project: Project, version: number, forc
 export function triggerBuild(projectId: string, force = false): boolean {
   const project = getProjectRow(projectId)
   if (!project) return false
-  void ensureProjectImage(project, project.currentVersion, force).catch((e) => console.error(`[build ${projectId}]`, e))
+  void ensureProjectImage(project, project.currentVersion, force, "manual").catch((e) => console.error(`[build ${projectId}]`, e))
   return true
 }
 
@@ -275,7 +288,11 @@ function spawnEnv(project: Project, workerId: string): string[] {
 async function runSpawnPipeline(workerId: string, project: Project, version: number, branch?: string | null) {
   try {
     setWorkerState(workerId, "building")
-    const image = await ensureProjectImage(project, version)
+    markWorkerStart(workerId, "image", { image_built: false })
+    const image = await ensureProjectImage(project, version, false, "spawn", (id) =>
+      markWorkerStart(workerId, "image", { image_built: true, build_id: id }),
+    )
+    markWorkerStart(workerId, "container")
 
     setWorkerState(workerId, "starting")
     const script = buildFullScript(project, workerId, branch)
@@ -315,12 +332,12 @@ async function runSpawnPipeline(workerId: string, project: Project, version: num
       agentVolume: viaAgent,
     })
     db.update(workers).set({ containerId, state: "starting" }).where(eq(workers.id, workerId)).run()
+    markWorkerStart(workerId, "boot", { data_plane: viaAgent ? "agent" : "exec" })
   } catch (err) {
     console.error(`[worker ${workerId}] spawn failed:`, err)
-    db.update(workers)
-      .set({ state: "error", setupStatus: { phase: "error", repos: [], postCreate: null, postStart: null, error: (err as Error).message } })
-      .where(eq(workers.id, workerId))
-      .run()
+    const setup: SetupStatus = { phase: "error", repos: [], postCreate: null, postStart: null, error: (err as Error).message }
+    db.update(workers).set({ state: "error", setupStatus: setup }).where(eq(workers.id, workerId)).run()
+    settleWorkerStart(workerId, "error", setup)
   }
 }
 
@@ -349,6 +366,7 @@ export function spawnWorker(projectId: string, name?: string, branch?: string): 
     createdAt: new Date(),
   }
   db.insert(workers).values(row).run()
+  beginWorkerStart(id, "spawn", projectId)
   void runSpawnPipeline(id, project, project.currentVersion, row.branch)
   return row
 }
@@ -402,6 +420,7 @@ export async function refreshWorker(w: Worker): Promise<Worker> {
           `Setup exited with code ${live.exitCode} before the workspace was ready — see the logs`,
       }
       db.update(workers).set({ state: "error", setupStatus: setup }).where(eq(workers.id, w.id)).run()
+      settleWorkerStart(w.id, "error", setup)
       return { ...w, state: "error", setupStatus: setup }
     }
     // The workspace was up and its container went away on its own — the case that used to be
@@ -441,6 +460,7 @@ export async function refreshWorker(w: Worker): Promise<Worker> {
     .where(and(eq(workers.id, w.id), eq(workers.state, w.state)))
     .run()
   if (changes === 0) return getWorkerRow(w.id) ?? w
+  if (state === "ready" || state === "error") settleWorkerStart(w.id, state, setup ?? w.setupStatus)
   return { ...w, state, setupStatus: setup ?? w.setupStatus, error: null }
 }
 
@@ -480,6 +500,7 @@ export async function stopWorker(id: string): Promise<Worker | undefined> {
   // the exit as ours, not as a crash. The container is still up if the stop failed, so put the
   // row back.
   db.update(workers).set({ state: "stopped", error: null }).where(eq(workers.id, id)).run()
+  dropWorkerStart(id)
   try {
     await stopContainer(w.containerId)
   } catch (err) {
@@ -496,16 +517,20 @@ export async function startWorker(id: string): Promise<Worker | undefined> {
   // that network when it spawns a worker, and only then: once Lite itself is recreated (an update),
   // a stopped worker restarted before any spawn would dial a name that no longer resolves.
   if (w.dataPlane === "agent") await joinSharedNetworkAsLite()
+  beginWorkerStart(id, "start", w.projectId)
+  markWorkerStart(id, "container")
   await startContainer(w.containerId)
   // Containers created before the shared network existed aren't attached to it;
   // joining on every start makes them reach the shared services too (no-op otherwise).
   await connectToSharedNetwork(w.containerId, [`worker-${id}`])
   db.update(workers).set({ state: "starting", error: null }).where(eq(workers.id, id)).run()
+  markWorkerStart(id, "boot", { data_plane: w.dataPlane })
   return { ...w, state: "starting", error: null }
 }
 
 export async function deleteWorker(id: string): Promise<void> {
   dropAgent(id)
+  dropWorkerStart(id)
   const w = getWorkerRow(id)
   if (w) await removeWorkerContainer(w.id, w.containerId).catch(() => {})
   db.delete(workers).where(eq(workers.id, id)).run()
@@ -530,6 +555,7 @@ export async function rebuildWorker(id: string): Promise<Worker | undefined> {
     .set({ containerId: null, state: "provisioning", projectVersion: project.currentVersion, error: null, setupStatus: { phase: "pending", repos: [], postCreate: null, postStart: null } })
     .where(eq(workers.id, id))
     .run()
+  beginWorkerStart(id, "rebuild", project.id)
   void runSpawnPipeline(id, project, project.currentVersion, w.branch)
   return getWorkerRow(id)
 }
@@ -590,14 +616,22 @@ export function applyProjectState(workerId: string, st: ProjectState): void {
   else if (setup?.phase === "error") state = "error"
   else state = "starting"
   if (state === w.state && JSON.stringify(setup) === JSON.stringify(w.setupStatus)) return
-  db.update(workers)
+  const { changes } = db
+    .update(workers)
     .set({ state, setupStatus: setup, ...(state !== "error" ? { error: null } : {}) })
     .where(and(eq(workers.id, workerId), eq(workers.state, w.state)))
     .run()
+  if (changes > 0 && (state === "ready" || state === "error")) settleWorkerStart(workerId, state, setup)
 }
 
 setAgentHooks({
-  workerForToken: (hash) => db.select({ id: workers.id }).from(workers).where(eq(workers.agentTokenHash, hash)).get() ?? null,
+  workerForToken: (hash) => {
+    const w = db.select({ id: workers.id }).from(workers).where(eq(workers.agentTokenHash, hash)).get() ?? null
+    // The agent's first hello of a start: it gets its plan, bakes what the image lacks, then
+    // starts the setup script.
+    if (w) markWorkerStart(w.id, "recipe")
+    return w
+  },
   planFor,
   onProjectState: applyProjectState,
 })
