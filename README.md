@@ -279,6 +279,16 @@ Each event has an `event` field:
 - `api.request`: an action (any non-GET API call) or an API call that failed (5xx),
   same fields. The reads the dashboard polls every few seconds are left out.
 - `resources.volume_sizes`: how long measuring every volume took, and their total size.
+- `worker.start`: one per spawn, rebuild or start of a worker, once it is ready (or failed):
+  the total, and a `phase_<name>_ms` column per phase, plus one `worker.start_phase` event
+  per phase (`phase`, `order`, `duration_ms`) for grouping. Phases, in order: Lite's
+  `image` (built or found — `image_built` says which), `container` (created and started),
+  `boot` (until the agent's first hello), `recipe` (the agent bakes what the image lacks),
+  then the setup script's own `initializing`, `credentials`, `shell`, `dotfiles`,
+  `cloning`, `postCreate`, `postStart`.
+- `image.build`: one per image build (`trigger` spawn or manual, `forced`, `duration_ms`,
+  `outside_steps_ms` — pulling the base and committing, which no step covers), and one
+  `image.build_step` per block of the recipe (`step`, `step_kind`, `state`, `duration_ms`).
 
 ## Requirements
 
