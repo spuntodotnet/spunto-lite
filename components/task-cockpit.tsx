@@ -369,11 +369,17 @@ export function TaskCockpit({
           : undefined
       }
       composer={
-        task && (
+        task &&
+        (task.state === "failed" && !task.canReopen ? (
+          <TaskReopenBlocked task={task} compact={isMobile} />
+        ) : (
           <TaskComposer
             layout={isMobile ? "compact" : "default"}
-            state={task.state}
-            canResume={task.canResume}
+            // A failed task that can be picked back up is answered like one in review — the state
+            // its first word puts it back in (docs/taches.md § « Reprendre une tâche en échec »).
+            // The package's composer only knows `failed` as "no box".
+            state={task.state === "failed" ? "in-review" : task.state}
+            canResume={task.canResume || task.canReopen}
             protocol={stream.protocol}
             pending={actions.pendingAction === "replying"}
             pendingAction={actions.pendingAction}
@@ -391,7 +397,7 @@ export function TaskCockpit({
               )
             }}
           />
-        )
+        ))
       }
       details={
         task && (
@@ -436,5 +442,18 @@ export function TaskCockpit({
         )
       }
     />
+  )
+}
+
+/**
+ * Where the reply box was, on a failed task that cannot be picked back up — so it does not just
+ * disappear without a word (Cloud's `TaskContinue`).
+ */
+function TaskReopenBlocked({ task, compact }: { task: Task; compact: boolean }) {
+  if (!task.reopenBlocker) return null
+  return (
+    <div className={compact ? "shrink-0 border-t border-border bg-card/40 px-3 py-2.5" : "shrink-0 border-t border-border bg-card/40 px-8 py-3"}>
+      <p className="mx-auto max-w-3xl text-[11px] leading-snug text-muted-foreground">This conversation can&apos;t be picked up again: {task.reopenBlocker}</p>
+    </div>
   )
 }
