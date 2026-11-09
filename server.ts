@@ -14,6 +14,9 @@ import { AGENT_CONNECT_PATH, handleAgentAsset, handleAgentUpgrade } from "./lib/
 import "./services/workers"
 import { startTaskScheduler } from "./services/tasks"
 import { startWorkerMetricsSampler } from "./services/worker-metrics"
+import { startResourcesRefresher } from "./services/resources"
+import { startUsageTelemetry } from "./services/telemetry"
+import { trackRequest } from "./lib/telemetry"
 import { startSshAgentProxy } from "./lib/ssh-agent"
 import { joinSharedNetworkAsLite } from "./lib/docker"
 
@@ -62,6 +65,11 @@ async function main() {
   // CPU and memory of every running worker, every 30 s, kept 7 days: the History of a task's
   // Monitoring block (services/worker-metrics.ts). Lite has no telemetry backend to ask instead.
   startWorkerMetricsSampler()
+  // The Resources page's slow measurements — CPU/memory, and volume sizes, which take minutes to
+  // walk once workers carry DinD image stores — taken in the background (services/resources.ts).
+  startResourcesRefresher()
+  // Opt-in, off unless TELEMETRY_OTLP_ENDPOINT is set (lib/telemetry.ts).
+  startUsageTelemetry()
   // The agent socket every worker mounts — what a passphrase-protected key signs through.
   startSshAgentProxy()
   // Where agent workers dial us back (lib/agent.ts). A recreated Lite container (an update) is no
@@ -81,6 +89,7 @@ async function main() {
       })
       return
     }
+    trackRequest(req, res)
     handle(req, res)
   }
 
