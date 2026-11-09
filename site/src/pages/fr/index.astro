@@ -1,13 +1,15 @@
 ---
 import Base from "../../layouts/Base.astro"
-import Home from "../../components/home/Home.astro"
+import { ProductHome } from "@spunto/brand-kit/home"
 ---
 
 <Base
   locale="fr"
-  transparentNav
+  overDark
   title="Spunto Lite — environnements de dev et sandboxes d’agents auto-hébergés, dans un conteneur"
-  description="Spunto Lite est un plan de contrôle sous licence MIT que vous faites tourner sur votre machine : projets à la devcontainer, espaces de travail Docker jetables avec VS Code dans le navigateur, terminal persistant, services partagés, et agents de code (Claude Code, Codex, Mistral Vibe) que vous relisez avant d’accepter. Un conteneur, votre socket Docker, aucun compte."
+  description="Spunto Lite est un plan de contrôle sous licence MIT que vous faites tourner sur votre machine : projets à la devcontainer, espaces de travail Docker jetables avec un IDE dans le navigateur, terminal persistant, services partagés, et agents de code (Claude Code, Codex, Mistral Vibe) que vous relisez avant d’accepter. Un conteneur, votre socket Docker, aucun compte."
 >
-  <Home locale="fr" />
+  <!-- The page is the brand kit's published edition for Lite (PUBLISHED.lite in coderhammer/spunto,
+       packages/brand-kit/src/home/editions.ts): bump @spunto/brand-kit to change it. -->
+  <ProductHome product="lite" locale="fr" client:visible />
 </Base>

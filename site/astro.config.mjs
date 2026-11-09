@@ -20,6 +20,8 @@ export default defineConfig({
   },
   vite: {
     plugins: [tailwindcss()],
+    // @spunto/brand-kit ships TypeScript source (like the design system): Vite compiles it for the build.
+    ssr: { noExternal: ["@spunto/brand-kit"] },
     server: { allowedHosts: true },
   },
 })
