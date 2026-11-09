@@ -28,6 +28,10 @@ export interface Task extends TaskItem {
   parkAt?: string | null
   /** Only on `GET /api/tasks/:id`. */
   canResume?: boolean
+  /** Only on `GET /api/tasks/:id`: a failed task a reply can still pick back up (docs/taches.md § « Reprendre une tâche en échec »). */
+  canReopen?: boolean
+  /** Only on `GET /api/tasks/:id`: why a failed task can't be picked back up, or null. */
+  reopenBlocker?: string | null
 }
 
 /** A row of the agent cockpit's list: a task and the name of its project. */

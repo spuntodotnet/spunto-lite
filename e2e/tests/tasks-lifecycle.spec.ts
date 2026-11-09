@@ -42,6 +42,8 @@ type Task = {
   error: string | null
   machine?: string | null
   canResume?: boolean
+  canReopen?: boolean
+  reopenBlocker?: string | null
 }
 
 async function workerState(request: APIRequestContext, id: string): Promise<string> {
@@ -252,5 +254,57 @@ test.describe("task lifecycle on a real worker", () => {
     t = await until(request, created.id, (x) => x.state === "done", 60_000)
     expect(t.state, t.error ?? "").toBe("done")
     await expect.poll(() => workerState(request, workerId), { timeout: 60_000 }).toBe("stopped")
+  })
+
+  test("a failed task is picked back up by a reply, even on a worker another task holds now", async ({ request }) => {
+    test.setTimeout(10 * 60_000)
+    await request.patch(`/api/projects/${projectId}`, { data: { taskReviewMode: "keep" } })
+    const first = await (await request.post(`/api/projects/${projectId}/tasks`, { data: { title: "Fourth", prompt: "A fourth note" } })).json()
+    let a = await until(request, first.id, (x) => x.state === "in-review" || x.state === "failed", 5 * 60_000)
+    expect(a.state, a.error ?? "").toBe("in-review")
+    const workerId = a.workerId!
+    workers.add(workerId)
+
+    // Dropped: failed, its machine handed back to the pool — and still answerable.
+    expect((await request.post(`/api/tasks/${first.id}/cancel`)).status()).toBe(202)
+    a = await until(request, first.id, (x) => x.state === "failed", 60_000)
+    expect(a.canReopen).toBe(true)
+    expect(a.reopenBlocker).toBeNull()
+
+    // The pool gives that machine to the next task.
+    const second = await (await request.post(`/api/projects/${projectId}/tasks`, { data: { title: "Fifth", prompt: "A fifth note" } })).json()
+    let b = await until(request, second.id, (x) => x.state === "in-review" || x.state === "failed", 5 * 60_000)
+    expect(b.state, b.error ?? "").toBe("in-review")
+    expect(b.workerId).toBe(workerId)
+
+    // A reply to the failed one puts it back in review, then to work, on the same — shared — machine.
+    const reply = await request.post(`/api/tasks/${first.id}/messages`, { data: { prompt: "Pick it back up" } })
+    expect(reply.status(), await reply.text()).toBe(202)
+    expect((await reply.json()).state).toBe("in-review")
+    a = await until(request, first.id, (x) => x.pendingAction === null, 3 * 60_000)
+    expect(a.error).toBeNull()
+    a = await until(request, first.id, (x) => x.state === "in-review", 60_000)
+    expect(a.state).toBe("in-review")
+    expect(a.workerId).toBe(workerId)
+    const types = (await events(request, first.id)).events.map((e) => e.type)
+    expect(types).toContain("session.reopened")
+    expect(types.lastIndexOf("session.started")).toBeGreaterThan(types.indexOf("session.reopened"))
+    const labels = (await (await request.get(`/api/tasks/${first.id}/commands`)).json()).map((c: { label: string }) => c.label)
+    expect(labels).toContain("Follow-up")
+    // The other conversation was left alone.
+    b = await task(request, second.id)
+    expect(b.state).toBe("in-review")
+    expect(b.workerId).toBe(workerId)
+
+    // Both dropped, then the machine deleted: nothing left to pick up, and the reply says why.
+    for (const id of [first.id, second.id]) {
+      expect((await request.post(`/api/tasks/${id}/cancel`)).status()).toBe(202)
+      await until(request, id, (x) => x.state === "failed", 60_000)
+    }
+    expect((await request.delete(`/api/workers/${workerId}`)).status()).toBeLessThan(300)
+    await expect.poll(async () => (await task(request, first.id)).canReopen, { timeout: 60_000 }).toBe(false)
+    expect((await task(request, first.id)).reopenBlocker).toContain("no longer exists")
+    const refused = await request.post(`/api/tasks/${first.id}/messages`, { data: { prompt: "Again" } })
+    expect(refused.status()).toBe(409)
   })
 })
