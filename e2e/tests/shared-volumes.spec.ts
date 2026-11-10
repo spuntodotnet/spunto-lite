@@ -110,7 +110,7 @@ test.describe("shared volumes", () => {
   test("resources lists volumes with a kind the UI knows", async ({ request }) => {
     const body = await (await request.get("/api/resources")).json()
     for (const v of body.volumes) {
-      expect(["workspace", "docker", "containerd", "shared", "other"]).toContain(v.kind)
+      expect(["workspace", "docker", "containerd", "shared", "service", "other"]).toContain(v.kind)
       if (v.kind === "shared") {
         // A shared volume belongs to a project, never to a single workspace.
         expect(v.workerId).toBeNull()

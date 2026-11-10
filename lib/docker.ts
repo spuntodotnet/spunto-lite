@@ -743,34 +743,67 @@ export async function getContainerStats(containerId: string) {
 }
 
 // ─── System-wide resource usage (for the Resources overview) ──────────────────
+//
+// Two speeds on purpose. Listing what exists — containers and their mounts, volumes, images with
+// their size — is a metadata read the daemon answers in milliseconds. Measuring a *volume's* size
+// is not: `docker system df` walks every file of every volume, and a worker's DinD volume holds a
+// whole image store. That walk took minutes on a real laptop, so the page that called it on each
+// poll never loaded. The listings stay live (services/resources.ts calls them per request); the
+// sizes are measured in the background and cached.
 
-export type DfVolume = { name: string; sizeBytes: number; refCount: number }
-export type DfImage = { id: string; repoTags: string[]; sizeBytes: number; created: number; containers: number }
+export type ListedContainer = {
+  id: string
+  /** Docker's own state word: `running`, `exited`, `created`, `paused`, `restarting`, `dead`. */
+  state: string
+  imageId: string
+  /** Named volumes it mounts. */
+  volumes: string[]
+}
+export type ListedVolume = { name: string }
+export type ListedImage = { id: string; repoTags: string[]; sizeBytes: number; created: number }
 
-/**
- * One-shot `docker system df` — the daemon's own accounting of volume and image
- * disk usage. Cheaper and more accurate than inspecting each object: sizes come
- * straight from the daemon. `UsageData.Size` is -1 when the daemon hasn't
- * computed it yet (we surface that as -1 so the UI can show "—").
- */
-export async function getSystemDf(): Promise<{ volumes: DfVolume[]; images: DfImage[] }> {
-  const df = (await docker.df()) as unknown as {
-    Volumes?: { Name: string; UsageData?: { Size?: number; RefCount?: number } }[]
-    Images?: { Id: string; RepoTags?: string[] | null; Size?: number; Created?: number; Containers?: number }[]
-  }
-  const volumes = (df.Volumes ?? []).map((v) => ({
-    name: v.Name,
-    sizeBytes: v.UsageData?.Size ?? -1,
-    refCount: v.UsageData?.RefCount ?? -1,
+/** Every container on the daemon, stopped ones included — one call, no per-container inspect. */
+export async function listAllContainers(): Promise<ListedContainer[]> {
+  const list = await docker.listContainers({ all: true })
+  return list.map((c) => ({
+    id: c.Id,
+    state: c.State,
+    imageId: c.ImageID,
+    volumes: (c.Mounts ?? []).filter((m) => m.Type === "volume" && m.Name).map((m) => m.Name as string),
   }))
-  const images = (df.Images ?? []).map((i) => ({
+}
+
+export async function listAllVolumes(): Promise<ListedVolume[]> {
+  const { Volumes } = await docker.listVolumes()
+  return (Volumes ?? []).map((v) => ({ name: v.Name }))
+}
+
+/** Images with their size — which the image list carries already, unlike a volume's. */
+export async function listAllImages(): Promise<ListedImage[]> {
+  const list = await docker.listImages()
+  return list.map((i) => ({
     id: i.Id,
     repoTags: (i.RepoTags ?? []).filter((t) => t && t !== "<none>:<none>"),
     sizeBytes: i.Size ?? 0,
     created: i.Created ?? 0,
-    containers: i.Containers ?? 0,
   }))
-  return { volumes, images }
+}
+
+/**
+ * The size of every volume, by name — the slow part of `docker system df`, and the only part
+ * asked for: `type=volume` (API 1.42+) spares the daemon the containers' writable layers and the
+ * images' shared sizes. An older daemon ignores the filter and computes everything, which is
+ * slower but just as right. -1 is a size the daemon hasn't computed.
+ */
+export async function measureVolumeSizes(): Promise<Record<string, number>> {
+  type Df = { Volumes?: { Name: string; UsageData?: { Size?: number } }[] }
+  const df = await new Promise<Df>((resolve, reject) =>
+    docker.modem.dial(
+      { path: "/system/df?", method: "GET", options: { type: "volume" }, statusCodes: { 200: true, 500: "server error" } },
+      (err, data) => (err ? reject(err) : resolve(data as Df)),
+    ),
+  )
+  return Object.fromEntries((df.Volumes ?? []).map((v) => [v.Name, v.UsageData?.Size ?? -1]))
 }
 
 /**

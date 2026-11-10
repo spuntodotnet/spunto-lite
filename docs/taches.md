@@ -147,7 +147,7 @@ POST /api/projects/:id/tasks
 | `running` | la session d'agent tourne |
 | `in-review` | elle a rendu la main proprement : il y a quelque chose à juger |
 | `done` | accepté — **seulement** par un clic |
-| `failed` | session morte mal, machine impossible à obtenir, ou tâche abandonnée (`error` dit laquelle) |
+| `failed` | session morte mal, machine impossible à obtenir, ou tâche abandonnée (`error` dit laquelle) ; une réponse peut la reprendre (voir « Reprendre une tâche en échec ») |
 
 L'état est **dérivé à la lecture** depuis la session, jamais sondé en boucle ; un plancher de
 fond (toutes les 10 s, les tâches `running` non lues depuis 30 s) garde les choses vraies quand
@@ -169,6 +169,28 @@ Si son process meurt quand même (le timeout de 6 h, un crash, la machine qui re
 que son dernier tour était fini, la tâche passe ou reste `in-review` — une réponse la reprend par
 `--resume`. Elle n'est `failed` que si le process meurt en plein tour *et* qu'on ne peut pas
 reprendre la conversation, ou pour une session one-shot.
+
+## Reprendre une tâche en échec
+
+`failed` ne veut plus dire « fini pour de bon » (Cloud 22c7b0fd). Le worker d'une tâche en échec
+est seulement garé, avec son disque, son checkout et le transcript du harnais : **une réponse
+la reprend**. La tâche repasse `in-review` (`reopenTask`, l'erreur et `completedAt` effacés,
+`session.reopened` dans la timeline), puis la réponse suit le chemin habituel : réveil de la
+machine, `--resume` sur l'id de session.
+
+Le cockpit affiche alors le compositeur normal. Sinon, un mot dit pourquoi on ne peut pas reprendre
+(`reopenBlocker`, sur `GET /api/tasks/:id` avec `canReopen`) :
+
+- le worker n'existe plus, ou son setup a échoué (le rebuilder depuis sa page, puis répondre) ;
+- la session n'a jamais démarré, ou aucun id de session n'a été lu ;
+- l'app d'agent de la tâche n'est plus autorisée par le projet.
+
+**Une différence avec Cloud : la machine peut être partagée.** Dans Cloud, une sandbox appartient à
+une seule tâche. Dans Lite, le worker rendu au pool a pu être donné à une autre tâche entre-temps.
+On le laisse faire : les deux conversations partagent alors le worker, avec le même checkout. Pour
+qu'une tâche n'éteigne pas la machine sous l'autre, aucun parquage (mode `stop`, « Garer plus
+tard », Park à la main) n'arrête un worker où une autre tâche travaille (`queued`, `running`, ou
+une action en vol), voir `workedOnByAnother`. Park à la main répond 409 dans ce cas.
 
 ## Rendre la machine au pool
 
@@ -426,6 +448,7 @@ Lite tourne sur des portables et des postes qu'on redémarre souvent ; ce n'est 
 | Jobs | table `platform_jobs` durable | en mémoire, dans le process, comme le spawn d'un worker |
 | `pendingAction` | dérivé des jobs vivants | écrit sur la ligne, effacé en `finally` |
 | Redémarrage pendant un job | le job reprend | au boot (`recoverInterruptedTasks`) : le lancement d'une tâche encore `queued` reprend, un Drop en vol est terminé, un Accept ou une réponse en vol est effacé avec une note |
+| Répondre à une tâche `failed` | la sandbox lui appartient seule | le worker a pu passer à une autre tâche : les deux conversations le partagent, et aucun parquage ne l'arrête sous celle qui travaille |
 | Machine arrêtée sous une session | `failed` | `in-review` si la conversation peut être reprise (voir « Un ordinateur qui redémarre ») |
 | Verrou du pool | advisory Postgres | chaîne de promesses par worker (un seul process) |
 | Pool | par membre | par projet (un seul utilisateur) |

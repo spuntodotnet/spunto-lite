@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Activity,
   Cpu,
@@ -17,7 +17,8 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
-import type { ResourcesOverview, ServiceResource, WorkerResource } from "@/lib/types"
+import type { ResourcesFreshness, ResourcesOverview, ServiceResource, WorkerResource } from "@/lib/types"
+import { Button } from "@/components/ui/button"
 import { workerBaseUrl } from "@/lib/worker-url"
 import { cfgFor, ResourceBars, formatRelativeTime } from "@/components/worker-card"
 
@@ -117,6 +118,10 @@ function WorkerRow({ w }: { w: WorkerResource }) {
 
       {w.running && w.stats ? (
         <ResourceBars stats={w.stats} />
+      ) : w.running ? (
+        <div className="mt-3 rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5 text-[11px] text-muted-foreground">
+          Measuring CPU and memory…
+        </div>
       ) : (
         <div className="mt-3 rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5 text-[11px] text-muted-foreground">
           Not consuming resources ({cfg.label.toLowerCase()}).
@@ -163,11 +168,58 @@ function ServiceRow({ s }: { s: ServiceResource }) {
 
       {s.running && s.stats ? (
         <ResourceBars stats={s.stats} />
+      ) : s.running ? (
+        <div className="mt-3 rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5 text-[11px] text-muted-foreground">
+          Measuring CPU and memory…
+        </div>
       ) : (
         <div className="mt-3 rounded-lg border border-border/40 bg-muted/20 px-3 py-2.5 text-[11px] text-muted-foreground">
           Not consuming resources ({cfg.label.toLowerCase()}).
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Freshness of the background measurements ────────────────────────────────
+
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s} s`
+  const m = Math.floor(s / 60)
+  return s % 60 ? `${m} min ${s % 60} s` : `${m} min`
+}
+
+/**
+ * CPU/memory and volume sizes are measured in the background (services/resources.ts) — the
+ * sizes take minutes to walk on a machine with DinD workers — so the page says how old they are,
+ * and lets you ask for a new walk.
+ */
+function Freshness({ f, onMeasure, pending }: { f: ResourcesFreshness; onMeasure: () => void; pending: boolean }) {
+  const measuring = !!f.sizesMeasuringSince
+  return (
+    <div className="flex flex-col items-end gap-1.5 text-[11px] text-muted-foreground text-right shrink-0">
+      <div>CPU &amp; memory {f.statsAt ? `sampled ${formatRelativeTime(f.statsAt)}` : "being sampled…"}</div>
+      <div className="flex items-center gap-2">
+        <span>
+          {measuring ? (
+            <span className="inline-flex items-center gap-1">
+              <RefreshCw className="size-3 animate-spin" /> Measuring volume sizes (started {formatRelativeTime(f.sizesMeasuringSince!)})
+            </span>
+          ) : f.sizesAt ? (
+            <>
+              Volume sizes measured {formatRelativeTime(f.sizesAt)}
+              {f.sizesDurationMs !== null && <> · took {formatDuration(f.sizesDurationMs)}</>}
+            </>
+          ) : (
+            "Volume sizes not measured yet"
+          )}
+        </span>
+        <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" disabled={measuring || pending} onClick={onMeasure}>
+          Measure now
+        </Button>
+      </div>
+      {f.sizesError && !measuring && <div className="text-destructive">Last measurement failed: {f.sizesError}</div>}
     </div>
   )
 }
@@ -188,10 +240,16 @@ function SectionHeader({ title, count }: { title: string; count: number }) {
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function ResourcesPage() {
-  const { data, isLoading, isFetching } = useQuery({
+  const qc = useQueryClient()
+  // Cheap now: the slow measurements come from the background, this only reads them.
+  const { data, isLoading } = useQuery({
     queryKey: ["resources"],
     queryFn: () => api.get<ResourcesOverview>("/api/resources"),
-    refetchInterval: 4000,
+    refetchInterval: 5000,
+  })
+  const measure = useMutation({
+    mutationFn: () => api.post<ResourcesOverview>("/api/resources/refresh"),
+    onSuccess: (overview) => qc.setQueryData(["resources"], overview),
   })
 
   return (
@@ -203,14 +261,7 @@ export default function ResourcesPage() {
             Everything that&apos;s switched on across all projects — running containers, live CPU/memory, volumes and images.
           </p>
         </div>
-        <div
-          className={cn(
-            "flex items-center gap-1.5 text-xs text-muted-foreground transition-opacity",
-            isFetching ? "opacity-100" : "opacity-0",
-          )}
-        >
-          <RefreshCw className="size-3.5 animate-spin" /> Refreshing…
-        </div>
+        {data && <Freshness f={data.freshness} onMeasure={() => measure.mutate()} pending={measure.isPending} />}
       </div>
 
       {isLoading || !data ? (
@@ -242,7 +293,7 @@ export default function ResourcesPage() {
               icon={HardDrive}
               label="Volumes"
               value={`${data.totals.volumesCount}`}
-              sub={formatBytes(data.totals.volumesSizeBytes)}
+              sub={data.freshness.sizesAt ? formatBytes(data.totals.volumesSizeBytes) : "size being measured…"}
             />
             <StatTile
               icon={Layers}
@@ -341,7 +392,12 @@ export default function ResourcesPage() {
                             <span className="text-muted-foreground">orphaned</span>
                           )}
                         </td>
-                        <td className="px-4 py-2 text-right font-mono tabular-nums text-xs">{formatBytes(v.sizeBytes)}</td>
+                        <td
+                          className="px-4 py-2 text-right font-mono tabular-nums text-xs"
+                          title={v.sizeBytes < 0 ? "Not measured yet — sizes are measured in the background" : undefined}
+                        >
+                          {formatBytes(v.sizeBytes)}
+                        </td>
                         <td className="px-4 py-2 text-center">
                           <span
                             className={cn(

@@ -12,9 +12,9 @@ import { serviceAddress, servicePrimaryPort } from "./services"
 //
 //  1. **SQLite only, no Docker round-trip.** The palette fetches this every time
 //     it opens, so it has to come back in milliseconds. `getResourcesOverview()`
-//     inspects every container and reads its stats — right for the Resources
-//     dashboard, far too slow here. The trade-off is that a worker's `state` is
-//     the stored one, not reconciled against the live container.
+//     lists every container, volume and image on the daemon — right for the
+//     Resources dashboard, more than this needs. The trade-off is that a
+//     worker's `state` is the stored one, not reconciled against the live container.
 //  2. **The whole index, not a query answer.** Matching happens client-side: the
 //     design-system palette filters accent- and case-insensitively over each
 //     item's label/keywords and highlights the matched slice. A control plane has

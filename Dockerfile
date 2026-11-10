@@ -25,6 +25,10 @@ RUN npm run build && rm -rf .next/cache
 
 ENV NODE_ENV=production
 ENV PORT=80
+# The revision CI builds (docker.yml), reported by the opt-in telemetry (services/telemetry.ts).
+# After the build on purpose: a new value must not invalidate its cache.
+ARG SPUNTO_LITE_VERSION=""
+ENV SPUNTO_LITE_VERSION=${SPUNTO_LITE_VERSION}
 EXPOSE 80
 
 CMD ["npm", "run", "start"]

@@ -231,7 +231,17 @@ export type ImageResource = {
   version: number | null
 }
 
+/** How old each background measurement is (services/resources.ts). */
+export type ResourcesFreshness = {
+  statsAt: string | null
+  sizesAt: string | null
+  sizesDurationMs: number | null
+  sizesMeasuringSince: string | null
+  sizesError: string | null
+}
+
 export type ResourcesOverview = {
+  freshness: ResourcesFreshness
   totals: {
     workersTotal: number
     workersRunning: number

@@ -290,9 +290,18 @@ export function serializeTask(row: Task) {
   }
 }
 
-/** The detail view adds whether a follow-up can resume the session (a session id was captured). */
+/**
+ * The detail view adds whether a follow-up can resume the session (a session id was captured) —
+ * and, on a failed task, whether a reply can still pick it back up (`reopenBlocker`).
+ */
 export function serializeTaskDetail(row: Task) {
-  return { ...serializeTask(row), canResume: events.latestSessionId(row.id) !== null }
+  const blocker = row.state === "failed" ? reopenBlocker(row, row.workerId ? getWorkerRow(row.workerId) : null, getProjectRow(row.projectId)) : null
+  return {
+    ...serializeTask(row),
+    canResume: events.latestSessionId(row.id) !== null,
+    canReopen: row.state === "failed" && blocker === null,
+    reopenBlocker: blocker,
+  }
 }
 
 // ─── Create ───────────────────────────────────────────────────────────────────
@@ -590,6 +599,21 @@ function heldByLiveTask(workerId: string, except?: string): boolean {
     .where(and(eq(tasks.workerId, workerId), inArray(tasks.state, ["queued", "running", "in-review"])))
     .all()
     .some((t) => t.id !== except)
+}
+
+/**
+ * Another task at work in this machine right now — running, starting, or about to wake it (an
+ * action in flight). What a park must not stop under its feet: a failed task picked back up keeps
+ * the machine it ran on even if the pool gave it to another task meanwhile (`reopenBlocker`), so
+ * two conversations can share one.
+ */
+function workedOnByAnother(workerId: string, taskId: string): boolean {
+  return db
+    .select({ id: tasks.id, state: tasks.state, pendingAction: tasks.pendingAction })
+    .from(tasks)
+    .where(and(eq(tasks.workerId, workerId), inArray(tasks.state, ["queued", "running", "in-review"])))
+    .all()
+    .some((t) => t.id !== taskId && (t.state !== "in-review" || t.pendingAction !== null))
 }
 
 /** Built from an older project config than the current one (what the worker card's Rebuild says). */
@@ -1047,6 +1071,10 @@ async function settleTask(taskId: string): Promise<void> {
     await withPoolLock(task.workerId, async () => {
       const worker = await getWorkerLive(task.workerId!)
       if (!worker || worker.state !== "ready" || getRawTask(taskId)?.state !== "in-review") return
+      if (workedOnByAnother(task.workerId!, taskId)) {
+        console.log(`[task:${taskId}] entering review — worker ${task.workerId} left up: another task is at work in it`)
+        return
+      }
       console.log(`[task:${taskId}] entering review — stopping worker ${task.workerId} (state kept on disk)`)
       await stopWorker(task.workerId!)
     })
@@ -1158,6 +1186,10 @@ export async function parkDueTasks(now = Date.now()): Promise<number> {
         const worker = await getWorkerLive(t.workerId!)
         const fresh = getRawTask(t.id)
         if (!worker || worker.state !== "ready" || fresh?.state !== "in-review" || fresh.pendingAction) return
+        if (workedOnByAnother(t.workerId!, t.id)) {
+          console.log(`[task:${t.id}] scheduled park skipped — another task is at work in worker ${t.workerId}`)
+          return
+        }
         console.log(`[task:${t.id}] scheduled park — stopping worker ${t.workerId} (state kept on disk)`)
         await stopWorker(t.workerId!)
         parked++
@@ -1360,6 +1392,7 @@ export async function parkTask(taskId: string): Promise<Task> {
   const worker = task.workerId ? await getWorkerLive(task.workerId) : null
   const machine = deriveTaskMachine(task, worker)
   if (machine !== "awake") throw new TaskActionError(`The task's machine is ${machine ?? "gone"}, not awake`, 409)
+  if (workedOnByAnother(task.workerId!, taskId)) throw new TaskActionError("Another task is at work in this machine — it cannot be parked under it", 409)
   // Parked now: the countdown to parking it later has nothing left to do.
   clearScheduledPark(taskId)
   await withPoolLock(task.workerId!, async () => {
@@ -1466,8 +1499,11 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
   if (!current) throw new TaskActionError("Not found", 404)
   const project = getProjectRow(current.projectId)
   const protocol = protocolOf(current, project)
-  const allowed: TaskState[] = isInteractive(protocol) ? ["running", "in-review"] : ["in-review"]
-  const task = await requireTask(taskId, allowed)
+  // A failed task is answered too, as long as its conversation can be resumed: it is put back in
+  // review first (`reopenTask`), then the turn goes the way any other does.
+  const allowed: TaskState[] = isInteractive(protocol) ? ["running", "in-review", "failed"] : ["in-review", "failed"]
+  let task = await requireTask(taskId, allowed)
+  if (task.state === "failed") task = reopenTask(task, project)
   if (!task.workerId) throw new TaskActionError("This task has no worker to continue in", 409)
   const live = isInteractive(protocol) ? await isSessionAlive(task) : null
   if (live) {
@@ -1545,6 +1581,56 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
     },
   )
   return claimed
+}
+
+// ─── Picking a failed task back up ────────────────────────────────────────────
+
+/**
+ * Why a failed task cannot be answered any more — or null when it can (Cloud 22c7b0fd, docs/taches.md
+ * § « Reprendre une tâche en échec »).
+ *
+ * Failed used to mean final, and the reply box disappeared with it. But the worker it ran on is
+ * only parked, with its disk, its checkout and the harness's transcript: the conversation is as
+ * resumable as it was in review. What it takes is a worker that still exists and can start, a
+ * session that actually ran, and a captured session id.
+ *
+ * Unlike Cloud, where a sandbox belongs to one task, the worker went back to the pool and another
+ * task may hold it now. That is let through: the two conversations share the machine, and a park
+ * never stops it under the one that is working (`workedOnByAnother`).
+ */
+export function reopenBlocker(
+  task: Task,
+  worker: Pick<Worker, "state" | "setupStatus"> | null | undefined,
+  project: Project | undefined,
+): string | null {
+  if (task.state !== "failed") return null
+  if (!task.workerId || !worker) return "its machine no longer exists."
+  if (worker.state === "error" && worker.setupStatus?.phase === "error") return "its machine failed to set up — rebuild it from its page, then reply."
+  if (!task.commandId) return "its agent session never started, so there is no conversation to resume."
+  if (!canResumeSession(task, project)) return "no session id was captured, so there is no conversation to resume."
+  return project ? taskAgentAppBlocker(task, project) : null
+}
+
+/**
+ * Put a failed task back in review, holding its worker again — what `followUpTask` does before
+ * answering one. `in-review` and not straight to `running`: that is the state a turn starts from,
+ * so every reply goes down one path; if that turn then fails to start, the task sits in review with
+ * the reason, Accept and Drop on offer. The moment is written into the timeline (`session.reopened`).
+ */
+function reopenTask(task: Task, project: Project | undefined): Task {
+  const worker = task.workerId ? getWorkerRow(task.workerId) : null
+  const blocked = reopenBlocker(task, worker, project)
+  if (blocked) throw new TaskActionError(`This task can no longer be picked up: ${blocked}`, 409)
+  const { changes } = db
+    .update(tasks)
+    .set({ state: "in-review", error: null, completedAt: null, parkAt: null, lastActivityAt: new Date() })
+    .where(and(eq(tasks.id, task.id), eq(tasks.state, "failed")))
+    .run()
+  if (changes === 0) throw new TaskActionError("The task moved meanwhile — reload it and try again", 409)
+  events.appendPlatformEvent(task.id, task.commandId, "session.reopened", { from: "failed" })
+  const shared = heldByLiveTask(task.workerId!, task.id)
+  console.log(`[task:${task.id}] failed → picked back up on worker ${task.workerId}${shared ? " (shared with another live task)" : ""}`)
+  return getRawTask(task.id)!
 }
 
 /**

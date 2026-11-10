@@ -36,6 +36,12 @@ test.describe("resources overview", () => {
     expect(t.volumesCount).toBe(body.volumes.length)
     expect(t.imagesCount).toBe(body.images.length)
 
+    // The slow measurements come from the background: the answer says how old they are.
+    const f = body.freshness
+    for (const key of ["statsAt", "sizesAt", "sizesMeasuringSince", "sizesError"]) {
+      expect(f[key] === null || typeof f[key] === "string", key).toBe(true)
+    }
+
     // Every worker entry is well-shaped.
     for (const w of body.workers) {
       expect(typeof w.id).toBe("string")
@@ -43,5 +49,16 @@ test.describe("resources overview", () => {
       expect(typeof w.projectName).toBe("string")
       expect(typeof w.running).toBe("boolean")
     }
+  })
+
+  test("answers without waiting for the volume walk, and can start one", async ({ request }) => {
+    const started = Date.now()
+    const res = await request.post("/api/resources/refresh")
+    expect(res.status()).toBe(202)
+    const body = await res.json()
+    expect(body).toHaveProperty("freshness")
+    // Reads stay cheap while it runs: listings and cached measurements only.
+    expect((await request.get("/api/resources")).status()).toBe(200)
+    expect(Date.now() - started).toBeLessThan(10_000)
   })
 })

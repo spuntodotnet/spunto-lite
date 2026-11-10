@@ -56,6 +56,12 @@ services:
       # picker, the image build and every worker's code-server together. Put the
       # value in `.env` (gitignored) — see `.env.example`.
       EXTENSIONS_GALLERY: ${EXTENSIONS_GALLERY:-}
+      # Opt-in usage telemetry to a collector of your own — off while the endpoint is
+      # empty (README § Telemetry). Put the values in `.env`.
+      TELEMETRY_OTLP_ENDPOINT: ${TELEMETRY_OTLP_ENDPOINT:-}
+      TELEMETRY_OTLP_HEADERS: ${TELEMETRY_OTLP_HEADERS:-}
+      TELEMETRY_STREAM: ${TELEMETRY_STREAM:-}
+      TELEMETRY_INSTANCE: ${TELEMETRY_INSTANCE:-}
 
   # Navigateur pilotable pour tester l'UI de bout en bout (humain ou agent
   # Claude via le serveur MCP `mcp/server.js`, voir `.mcp.json` + `mcp/README.md`).
