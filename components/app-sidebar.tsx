@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { FolderGit2, Server, Settings, KeyRound, Activity, MessagesSquare } from "lucide-react"
+import { FolderGit2, Server, Settings, KeyRound, Activity, MessagesSquare, Gauge } from "lucide-react"
 import { SidebarBrand } from "@spunto/design-system"
 import {
   Sidebar,
@@ -19,6 +19,8 @@ const NAV = [
   { href: "/projects", label: "Projects", icon: FolderGit2 },
   // Delegated work across every project: what the agents are doing, and which one needs you.
   { href: "/agents", label: "Agents", icon: MessagesSquare },
+  // What those agents consumed — cost, tokens, tools — read from their sessions' events.
+  { href: "/usage", label: "Usage", icon: Gauge },
   // Shared services: long-lived dependencies (Postgres, Elasticsearch…) mutualised
   // across every project's workers — a sibling of Projects, not a sub-page of one.
   { href: "/services", label: "Services", icon: Server },

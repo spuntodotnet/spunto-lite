@@ -342,3 +342,55 @@ export type Template = {
   postStartCommand: string
   forwardPorts: number[]
 }
+
+// ─── Usage (/usage) ──────────────────────────────────────────────────────────
+
+export type UsageTokens = { input: number; output: number; cacheRead: number; cacheCreation: number }
+
+/** One row of a breakdown: a project, an agent app, a model. `cost` null = nothing reported it. */
+export type UsageGroup = { id: string; name: string; cost: number | null; tasks: number; turns: number } & UsageTokens
+
+export type UsageTask = {
+  id: string
+  projectId: string
+  projectName: string | null
+  title: string
+  state: string
+  agentAppId: string
+  agentAppName: string
+  model: string | null
+  lastActivityAt: string
+  /** Null when the harness reports no cost (Codex). */
+  cost: number | null
+  turns: number
+  apiCalls: number
+  toolCalls: number
+  toolErrors: number
+  peakContext: number
+  contextWindow: number | null
+} & UsageTokens
+
+export type UsageReport = {
+  /** 0 = all time. */
+  days: number
+  /** First day of the period (YYYY-MM-DD, in `timeZone`), null for all time. */
+  from: string | null
+  timeZone: string
+  totals: UsageTokens & {
+    cost: number
+    /** Tasks that used tokens without reporting a cost — their spend is not in `cost`. */
+    unpricedTasks: number
+    tasks: number
+    turns: number
+    apiCalls: number
+    toolCalls: number
+    toolErrors: number
+  }
+  daily: (UsageTokens & { day: string; cost: number; turns: number; tasks: number })[]
+  tasks: UsageTask[]
+  projects: UsageGroup[]
+  apps: UsageGroup[]
+  models: UsageGroup[]
+  /** `ms`: summed time from call to result, for the calls that got one. */
+  tools: { name: string; n: number; errors: number; ms: number }[]
+}
