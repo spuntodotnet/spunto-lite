@@ -164,6 +164,9 @@ review are the project's *Delegated work* settings. The screens come from `@spun
 `@spunto/build/agent-stream`, shared with Spunto Cloud. Details, and what differs from the Cloud
 version: [`docs/taches.md`](docs/taches.md).
 
+What they consumed — cost, tokens, turns, tools, per day, task, project, agent and model — is on
+the **Usage** page, read straight from the sessions' events: [`docs/usage.md`](docs/usage.md).
+
 MCP servers (Notion, Linear…) are declared once in **Settings → MCP servers**, connected in OAuth
 from there, and given to each project's tasks through Lite's gateway — the worker never holds the
 vendor's token: [`docs/serveurs-mcp.md`](docs/serveurs-mcp.md).

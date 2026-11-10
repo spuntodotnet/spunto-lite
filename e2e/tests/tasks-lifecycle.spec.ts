@@ -158,6 +158,23 @@ test.describe("task lifecycle on a real worker", () => {
     expect(commands.map((c: { label: string }) => c.label)).toEqual(["Agent session", "Accept command"])
     expect(commands[1].stdout).toContain("accepted")
     expect(t.branch).toBeNull()
+
+    // The usage page reads it all back: two turns that reported a cost — the fake's running total,
+    // 0.0123 per turn — and the interrupted one that reported none; its calls' tokens; its tools.
+    const usage = await (await request.get("/api/usage?days=1&tz=Europe/Paris")).json()
+    const row = usage.tasks.find((x: { id: string }) => x.id === created.id)
+    expect(row, JSON.stringify(usage.totals)).toBeTruthy()
+    expect(row.cost).toBeCloseTo(0.0246, 6)
+    expect(row.turns).toBe(3)
+    expect(row.agentAppName).toBe("Claude Code")
+    expect(row.apiCalls).toBeGreaterThanOrEqual(3)
+    expect(row.input).toBe(1200 * row.apiCalls)
+    expect(row.peakContext).toBe(4200)
+    expect(row.toolCalls).toBeGreaterThanOrEqual(2)
+    expect(usage.tools.find((x: { name: string }) => x.name === "Bash")?.n).toBeGreaterThanOrEqual(2)
+    expect(usage.projects.find((x: { id: string }) => x.id === projectId)?.tasks).toBe(1)
+    expect(usage.daily.at(-1).cost).toBeGreaterThanOrEqual(0.0246 - 1e-9)
+
     // Accepted, the machine goes back to the pool parked — not left running until the next task.
     await expect.poll(() => workerState(request, t.workerId!), { timeout: 60_000 }).toBe("stopped")
   })
