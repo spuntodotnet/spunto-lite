@@ -25,6 +25,9 @@ const RUN = process.env.E2E_DOCKER === "1"
 
 const ENTRYPOINTS_FILE = "/etc/mp-feature-entrypoints"
 const DIND_ENTRYPOINT = "/usr/local/share/docker-init.sh"
+const FEATURE_HOOKS_DIR = "/etc/mp-feature-hooks"
+/** What docker-in-docker 3.2.0 declares as its postCreateCommand / postStartCommand. */
+const DIND_WAIT = "/usr/local/share/docker-wait.sh"
 
 function dockerCliAvailable(): boolean {
   try {
@@ -99,6 +102,18 @@ test.describe("feature docker-in-docker: the daemon actually runs", () => {
       9 * 60_000,
     )
     expect(state, "worker should build + start, not error").toBe("ready")
+
+    // ── Privileged because the feature says so (`"privileged": true` in its metadata), not because
+    // Lite knows the id — and the decision is kept on the image (lib/feature-metadata.ts) ──
+    const privileged = execFileSync("docker", ["inspect", "-f", "{{.HostConfig.Privileged}}", container], { encoding: "utf8" }).trim()
+    expect(privileged, "the worker must run privileged for the feature's dockerd").toBe("true")
+    const image = execFileSync("docker", ["inspect", "-f", "{{.Config.Image}}", container], { encoding: "utf8" }).trim()
+    const label = execFileSync("docker", ["image", "inspect", "-f", '{{index .Config.Labels "spunto.privileged"}}', image], { encoding: "utf8" }).trim()
+    expect(label, "the image should carry what its features asked for").toBe("true")
+
+    // ── The feature waits for its own daemon, in its lifecycle commands (@spunto/build 0.27) ──
+    const hooks = inContainer(container, ["cat", `${FEATURE_HOOKS_DIR}/postCreateCommand`])
+    expect(hooks.out, "the feature's postCreateCommand should be registered at build time").toContain(DIND_WAIT)
 
     // ── What the feature installed: the CLI and its entrypoint script ──
     // These pass even when the bug is present — asserted first so a failure here is read as

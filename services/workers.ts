@@ -48,6 +48,7 @@ import { isEncryptedPrivateKey, readHostPrivateKey } from "../lib/ssh-keys"
 import { WORKER_AGENT_SOCK, workerAgentBind, workerPublicKeyLine } from "../lib/ssh-agent"
 import { shellQuote } from "../lib/shell"
 import { effectiveFeatures } from "../lib/agent-apps"
+import { featuresNeedPrivileged } from "../lib/feature-metadata"
 import { beginWorkerStart, dropWorkerStart, markWorkerStart, reportImageBuild, settleWorkerStart } from "./start-timings"
 
 /**
@@ -78,8 +79,34 @@ const AGENT_BAKE_FORMAT = 1
 /** The label an image carries its bake key under — what the agent of a worker on it is told. */
 const BAKE_KEY_LABEL = "spunto.bakeKey"
 
-function hasDinD(project: Project): boolean {
-  return project.dind || project.features.some((f) => f.id === "docker-in-docker")
+/**
+ * Whether the image's features asked for a privileged container (lib/feature-metadata.ts), read
+ * once at build time and kept on the image: a worker gets what its image was baked with, and its
+ * spawn doesn't wait on a registry. Absent on images built before the label existed.
+ */
+const PRIVILEGED_LABEL = "spunto.privileged"
+
+/** The features the recipe installs — the agent apps' included — as the package resolves them. */
+function imageScript(project: Project) {
+  return buildImageScript({
+    features: effectiveFeatures(project),
+    vscodeExtensions: project.vscodeExtensions,
+    // Read from the environment here and passed in: the generator takes no configuration from
+    // `process.env` (that is the package's admission rule), so the one place that knows which
+    // registry this install resolves ids against is the caller.
+    extensionsGallery: EXTENSIONS_GALLERY_RAW,
+  })
+}
+
+/**
+ * Privileged, plus the per-worker /var/lib/docker and /var/lib/containerd volumes (lib/docker.ts):
+ * what a feature declaring `"privileged": true` — docker-in-docker — gets. From the image's label,
+ * or, for an image older than it, from the project's features as they are now.
+ */
+async function needsPrivileged(project: Project, image: string): Promise<boolean> {
+  const label = await docker.getImage(image).inspect().then((i) => i.Config?.Labels?.[PRIVILEGED_LABEL], () => undefined)
+  if (label !== undefined) return label === "true"
+  return featuresNeedPrivileged(imageScript(project).resolvedFeatures)
 }
 
 // ─── Image build ──────────────────────────────────────────────────────────────
@@ -116,15 +143,7 @@ export async function ensureProjectImage(
   // The plan comes out of the *same call* that emits the script, so the blocks a UI greys out
   // upfront cannot list something the script doesn't run. That is the whole reason it is returned
   // here rather than derived from `project.features` on the side.
-  const { script, steps } = buildImageScript({
-    features: effectiveFeatures(project),
-    vscodeExtensions: project.vscodeExtensions,
-    dind: project.dind,
-    // Read from the environment here and passed in: the generator takes no configuration from
-    // `process.env` (that is the package's admission rule), so the one place that knows which
-    // registry this install resolves ids against is the caller.
-    extensionsGallery: EXTENSIONS_GALLERY_RAW,
-  })
+  const { script, steps, resolvedFeatures } = imageScript(project)
 
   // Through the agent's runner, in bake-only mode: the same script a Spunto Cloud app builds with.
   const bakeKey = await recipeBakeKey({ image: project.image, script })
@@ -153,7 +172,16 @@ export async function ensureProjectImage(
   }
 
   try {
-    await buildProjectImage({ baseImage: project.image, buildScript, imageRef: ref, noCache: force, onLog: flush, labels: { [BAKE_KEY_LABEL]: bakeKey } })
+    // Inside the try: a feature whose metadata can't be read fails the build like a failed install.
+    const privileged = await featuresNeedPrivileged(resolvedFeatures)
+    await buildProjectImage({
+      baseImage: project.image,
+      buildScript,
+      imageRef: ref,
+      noCache: force,
+      onLog: flush,
+      labels: { [BAKE_KEY_LABEL]: bakeKey, [PRIVILEGED_LABEL]: String(privileged) },
+    })
     logs += tracker.finish("ready").text
     persist("ready")
     report("ready")
@@ -209,7 +237,6 @@ function buildFullScript(project: Project, workerId: string, branch?: string | n
     project: {
       repositories: project.repositories,
       features: effectiveFeatures(project),
-      dind: project.dind,
       postCreateCommand: project.postCreateCommand,
     },
     workerId,
@@ -225,7 +252,6 @@ function buildFullScript(project: Project, workerId: string, branch?: string | n
     project: {
       name: project.name,
       features: effectiveFeatures(project),
-      dind: project.dind,
       postCreateCommand: project.postCreateCommand,
       postStartCommand: project.postStartCommand,
       repositories: project.repositories,
@@ -322,7 +348,7 @@ async function runSpawnPipeline(workerId: string, project: Project, version: num
       image,
       cmd,
       env,
-      hasDinD: hasDinD(project),
+      privileged: await needsPrivileged(project, image),
       // From the *current* project row, like the setup script above: declaring a
       // shared volume and rebuilding a worker is enough to get it mounted, no
       // version bump needed on the image.
@@ -572,12 +598,7 @@ async function planFor(workerId: string): Promise<ProjectPlan | null> {
   if (!w?.containerId) return null
   const project = getProjectRow(w.projectId)
   if (!project) return null
-  const { script: bake } = buildImageScript({
-    features: effectiveFeatures(project),
-    vscodeExtensions: project.vscodeExtensions,
-    dind: project.dind,
-    extensionsGallery: EXTENSIONS_GALLERY_RAW,
-  })
+  const { script: bake } = imageScript(project)
   const labels = await docker.getContainer(w.containerId).inspect().then((i) => i.Config.Labels ?? {}, () => ({} as Record<string, string>))
   return {
     type: "project",

@@ -90,7 +90,6 @@ export function getSearchIndex(): SearchIndex {
         ...p.features.map((f) => f.id),
         ...p.forwardPorts.map(String),
         p.favorite ? "favorite" : "",
-        p.dind ? "dind docker-in-docker" : "",
       ].filter(Boolean),
     })
   }

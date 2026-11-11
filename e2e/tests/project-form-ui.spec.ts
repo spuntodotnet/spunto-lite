@@ -11,7 +11,7 @@ import { test, expect } from "../helpers/browser"
 // Lite's own). Both are exactly the kind of thing a round-trip test has to pin down.
 //
 // The form is laid out as the dashboard's (`layout="sidebar"`): a rail of pages, one shown at a
-// time — General, Tooling, Lifecycle, Runtime (docker-in-docker + shared volumes), Secrets.
+// time — General, Tooling, Lifecycle, Runtime (named ports + shared volumes), Secrets.
 
 /** Opens a page of the form from its rail. */
 async function openPage(page: Page, title: string) {
@@ -60,7 +60,6 @@ test.describe("project form → stored project", () => {
     await expect(page.locator('input[name="forwardPorts"]')).toHaveCount(1)
     await expect(page.locator('textarea[name="prewarmImages"]')).toHaveCount(0)
     await openPage(page, "Runtime")
-    await page.getByRole("switch").click()
 
     // Shared volumes are a section of Lite's own, declared through `customSections`
     // and drawn by the package's chrome on the Runtime page — so the round trip has to
@@ -91,7 +90,6 @@ test.describe("project form → stored project", () => {
       description: "driven by playwright",
       image: expect.stringMatching(/^mcr\.microsoft\.com\/devcontainers\/python:3\./),
       vscodeExtensions: ["esbenp.prettier-vscode"],
-      dind: true,
       postCreateCommand: "npm ci",
       postStartCommand: "npm run dev",
       // Nothing to type them in, so nothing is stored.
@@ -235,7 +233,6 @@ test.describe("project form → stored project", () => {
           features: [{ id: "docker-in-docker" }, { id: "python", options: { version: "3.11" } }],
           vscodeExtensions: ["golang.go"],
           prewarmImages: ["traefik:v3", "node:24"],
-          dind: true,
           postCreateCommand: "go mod download",
           postStartCommand: "go run .",
           forwardPorts: [8080],
@@ -291,7 +288,6 @@ test.describe("project form → stored project", () => {
       "features",
       "vscodeExtensions",
       "prewarmImages",
-      "dind",
       "postCreateCommand",
       "postStartCommand",
       "forwardPorts",
@@ -303,7 +299,7 @@ test.describe("project form → stored project", () => {
   })
 
   // Spunto Cloud's pages, so nobody gets lost going from one to the other — with Lite's Runtime
-  // kept for docker-in-docker and its shared volumes.
+  // kept for its named ports and shared volumes.
   test("the rail has Cloud's pages, Agents among them", async ({ page }) => {
     await page.goto("/projects/new")
     const entries = await page.getByRole("navigation", { name: "Form sections" }).getByRole("button").allTextContents()

@@ -89,7 +89,12 @@ export type ProjectVersionConfig = {
   features: ProjectFeature[]
   vscodeExtensions: string[]
   prewarmImages: string[]
-  dind: boolean
+  /**
+   * Only on snapshots taken before Lite's Docker-in-Docker switch was dropped (BAC-77, migration
+   * 0018): `true` asked for a privileged worker without the feature. Read by `restoreVersion`,
+   * which brings the `docker-in-docker` feature back in its place; never written.
+   */
+  dind?: boolean
   postCreateCommand: string | null
   postStartCommand: string | null
   repositories: Repository[]
@@ -116,7 +121,6 @@ export const projects = sqliteTable("projects", {
   features: text("features", { mode: "json" }).$type<ProjectFeature[]>().notNull().default(sql`'[]'`),
   vscodeExtensions: text("vscode_extensions", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
   prewarmImages: text("prewarm_images", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
-  dind: integer("dind", { mode: "boolean" }).notNull().default(false),
   postCreateCommand: text("post_create_command"),
   postStartCommand: text("post_start_command"),
   repositories: text("repositories", { mode: "json" }).$type<Repository[]>().notNull().default(sql`'[]'`),

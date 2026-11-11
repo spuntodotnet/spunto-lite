@@ -14,7 +14,6 @@ test.describe("project export", () => {
           name: "e2e Export Me",
           description: "exported",
           image: IMAGE,
-          dind: true,
           vscodeExtensions: ["dbaeumer.vscode-eslint"],
           prewarmImages: ["node:24"],
           postCreateCommand: "npm ci",
@@ -45,7 +44,6 @@ test.describe("project export", () => {
         name: "e2e Export Me",
         description: "exported",
         image: IMAGE,
-        dind: true,
         vscodeExtensions: ["dbaeumer.vscode-eslint"],
         prewarmImages: ["node:24"],
         postCreateCommand: "npm ci",
@@ -60,6 +58,8 @@ test.describe("project export", () => {
       expect(body.project).not.toHaveProperty("id")
       expect(body.project).not.toHaveProperty("secrets")
       expect(body.project).not.toHaveProperty("deployPublicKey")
+      // Docker is the feature: no switch of its own travels (the shared spec dropped it, BAC-77).
+      expect(body.project).not.toHaveProperty("dind")
     } finally {
       await request.delete(`/api/projects/${created.id}`)
     }

@@ -41,7 +41,8 @@ Un worker est un conteneur sur votre démon Docker, avec :
   où votre clé le peut.
 - les **secrets** de son projet et les secrets globaux, dans son environnement.
 
-Docker-in-Docker, quand un projet l’active, exécute un conteneur **privilégié**.
+Une feature qui se déclare privilégiée dans ses métadonnées — c’est le cas de Docker-in-Docker —
+fait tourner ses workers dans un conteneur **privilégié**.
 
 ## Agents
 

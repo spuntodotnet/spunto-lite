@@ -169,7 +169,12 @@ export type SpawnParams = {
   /** The container's main process: the worker script itself (`exec` data plane), or the agent's bootstrap. */
   cmd: string[]
   env: string[]
-  hasDinD: boolean
+  /**
+   * A feature of the image declared `"privileged": true` (docker-in-docker): the container runs
+   * privileged, with its own /var/lib/docker and /var/lib/containerd volumes so the inner daemon
+   * doesn't stack overlayfs on the worker's.
+   */
+  privileged: boolean
   /** Project-level volumes mounted in every worker, alongside its own /workspace. */
   sharedVolumes: SharedVolume[]
   /** Extra `HostConfig.Binds` entries, mounted as-is (the SSH agent socket dir, lib/ssh-agent.ts). */
@@ -222,7 +227,7 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
 
   const workspaceVolume = workerVolumeName(params.workerId, "workspace")
   await ensureVolume(workspaceVolume)
-  if (params.hasDinD) {
+  if (params.privileged) {
     for (const kind of ["docker", "containerd"] as const) await ensureVolume(workerVolumeName(params.workerId, kind))
   }
   // Project volumes are created on demand by the first worker that needs them,
@@ -244,11 +249,11 @@ export async function spawnContainer(params: SpawnParams): Promise<{ containerId
     Labels: params.labels,
     HostConfig: {
       NetworkMode: network,
-      Privileged: params.hasDinD,
+      Privileged: params.privileged,
       Init: true,
       Binds: [
         `${workspaceVolume}:/workspace`,
-        ...(params.hasDinD
+        ...(params.privileged
           ? [
               `${workerVolumeName(params.workerId, "docker")}:/var/lib/docker`,
               `${workerVolumeName(params.workerId, "containerd")}:/var/lib/containerd`,

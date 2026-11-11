@@ -14,7 +14,7 @@
     "@base-ui/react": "^1.9.0",
     "@fontsource-variable/caveat": "^5.3.0",
     "@spunto/brand-kit": "^0.4.0",
-    "@spunto/design-system": "^0.72.0",
+    "@spunto/design-system": "^0.75.0",
     "@tailwindcss/vite": "^4.3.5",
     "@types/three": "^0.187.0",
     "astro": "^7.4.7",

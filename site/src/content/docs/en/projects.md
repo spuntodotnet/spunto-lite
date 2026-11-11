@@ -72,9 +72,15 @@ declared port is green while something listens on it and greyed out while nothin
 
 ## Docker inside the workspace
 
-**Runtime → Docker** turns on Docker-in-Docker for the project's workers (the template of the same
-name starts with it), so `docker compose up` works inside a workspace, isolated from your host's
-daemon.
+Add the **Docker-in-Docker** feature (Tooling → Features; the template of the same name starts with
+it) and `docker compose up` works inside a workspace, isolated from your host's daemon. The feature
+declares itself `privileged` in its metadata, so its workers run as privileged containers with their
+own Docker storage, and it waits for its daemon before your `postCreateCommand` and
+`postStartCommand` run.
+
+Any feature that declares `"privileged": true` gets the same treatment. An image that ships Docker
+on its own, without the feature, gets neither: its container isn't privileged and nothing waits for
+its daemon — add the feature instead.
 
 ## Shared volumes
 

@@ -25,6 +25,9 @@ export class ProjectAgentAppsError extends Error {}
 /** The harness every new project starts with when it names none — so it can delegate right away. */
 const DEFAULT_AGENT_APP_IDS = ["claude"]
 
+/** The feature that asks for a privileged worker — what the old `dind` switch turned into. */
+const DIND_FEATURE_ID = "docker-in-docker"
+
 /**
  * Resolves each feature id against the catalog, baking in its ociRef/localScript.
  * An id the catalog doesn't know keeps the ref it came with — that's a feature the
@@ -50,7 +53,6 @@ export function buildVersionConfig(p: Project): ProjectVersionConfig {
     features: p.features,
     vscodeExtensions: p.vscodeExtensions,
     prewarmImages: p.prewarmImages,
-    dind: p.dind,
     postCreateCommand: p.postCreateCommand,
     postStartCommand: p.postStartCommand,
     repositories: p.repositories,
@@ -201,7 +203,6 @@ export function createProject(input: CreateProjectInput): SerializedProject {
     features: resolveFeatures(input.features),
     vscodeExtensions: input.vscodeExtensions,
     prewarmImages: input.prewarmImages,
-    dind: input.dind,
     postCreateCommand: input.postCreateCommand ?? null,
     postStartCommand: input.postStartCommand ?? null,
     repositories: input.repositories,
@@ -293,7 +294,6 @@ export function updateProject(id: string, input: UpdateProjectInput): Serialized
     features: input.features ? resolveFeatures(input.features) : existing.features,
     vscodeExtensions: input.vscodeExtensions ?? existing.vscodeExtensions,
     prewarmImages: input.prewarmImages ?? existing.prewarmImages,
-    dind: input.dind ?? existing.dind,
     postCreateCommand:
       input.postCreateCommand !== undefined ? (input.postCreateCommand ?? null) : existing.postCreateCommand,
     postStartCommand:
@@ -313,7 +313,6 @@ export function updateProject(id: string, input: UpdateProjectInput): Serialized
       features: merged.features,
       vscodeExtensions: merged.vscodeExtensions,
       prewarmImages: merged.prewarmImages,
-      dind: merged.dind,
       postCreateCommand: merged.postCreateCommand,
       postStartCommand: merged.postStartCommand,
       repositories: merged.repositories,
@@ -388,7 +387,6 @@ export function exportProject(id: string): ProjectExport | undefined {
     })),
     vscodeExtensions: p.vscodeExtensions,
     prewarmImages: p.prewarmImages,
-    dind: p.dind,
     postCreateCommand: p.postCreateCommand ?? undefined,
     postStartCommand: p.postStartCommand ?? undefined,
     repositories: p.repositories,
@@ -431,16 +429,17 @@ export function restoreVersion(projectId: string, version: number): SerializedPr
     .find((v) => v.version === version)
   if (!snap) return undefined
   const c = snap.config
+  // A snapshot from the days of the Docker-in-Docker switch: the feature is what asks for Docker now.
+  const features = c.dind && !c.features.some((f) => f.id === DIND_FEATURE_ID) ? [...c.features, ...resolveFeatures([{ id: DIND_FEATURE_ID }])] : c.features
   const newVersion = existing.currentVersion + 1
   db.update(projects)
     .set({
       name: c.name,
       description: c.description,
       image: c.image,
-      features: c.features,
+      features,
       vscodeExtensions: c.vscodeExtensions,
       prewarmImages: c.prewarmImages,
-      dind: c.dind,
       postCreateCommand: c.postCreateCommand,
       postStartCommand: c.postStartCommand,
       repositories: c.repositories,
@@ -453,6 +452,7 @@ export function restoreVersion(projectId: string, version: number): SerializedPr
     })
     .where(eq(projects.id, projectId))
     .run()
-  createVersion(projectId, newVersion, c)
+  // `dind: undefined` leaves the key out of the new snapshot's JSON: the feature says it now.
+  createVersion(projectId, newVersion, { ...c, dind: undefined, features })
   return serializeProject(getProjectRow(projectId)!)
 }
