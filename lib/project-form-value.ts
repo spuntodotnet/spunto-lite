@@ -79,7 +79,6 @@ export type ProjectPayload = {
   features: { id: string; options?: Record<string, string>; ociRef?: string }[]
   vscodeExtensions: string[]
   prewarmImages: string[]
-  dind: boolean
   postCreateCommand?: string
   postStartCommand?: string
   repositories: Repository[]
@@ -108,7 +107,6 @@ export function fromProject(p: Project): LiteFormValue {
       postStartCommand: p.postStartCommand ?? "",
       forwardPorts: p.forwardPorts,
       prewarmImages: p.prewarmImages,
-      dockerInDocker: p.dind,
     }),
     sharedVolumes: p.sharedVolumes ?? [],
     portsAttributes: p.portsAttributes ?? {},
@@ -141,7 +139,6 @@ export function fromExport({ project: p }: ProjectExport): LiteFormValue {
       postStartCommand: p.postStartCommand ?? "",
       forwardPorts: p.forwardPorts,
       prewarmImages: p.prewarmImages,
-      dockerInDocker: p.dind,
     }),
     // A spec exported before shared volumes existed simply doesn't have the key.
     sharedVolumes: p.sharedVolumes ?? [],
@@ -217,7 +214,6 @@ export function toProjectPayload(value: LiteFormValue): ProjectPayload {
     })),
     vscodeExtensions: value.vscodeExtensions,
     prewarmImages: value.prewarmImages,
-    dind: value.dockerInDocker,
     postCreateCommand: value.postCreateCommand.trim() || undefined,
     postStartCommand: value.postStartCommand.trim() || undefined,
     repositories: repos

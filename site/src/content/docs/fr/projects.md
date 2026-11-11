@@ -76,9 +76,15 @@ Machine d’une tâche, un port déclaré est vert tant que quelque chose écout
 
 ## Docker dans l’espace de travail
 
-**Runtime → Docker** active Docker-in-Docker pour les workers du projet (le modèle du même nom
-l’active d’emblée), de sorte que `docker compose up` fonctionne dans un espace de travail, isolé du
-démon de votre hôte.
+Ajoutez la feature **Docker-in-Docker** (Tooling → Features ; le modèle du même nom l’a d’emblée)
+et `docker compose up` fonctionne dans un espace de travail, isolé du démon de votre hôte. La feature
+se déclare `privileged` dans ses métadonnées : ses workers tournent dans des conteneurs privilégiés,
+avec leur propre stockage Docker, et elle attend son démon avant vos `postCreateCommand` et
+`postStartCommand`.
+
+Toute feature qui déclare `"privileged": true` est traitée de même. Une image qui embarque Docker
+seule, sans la feature, n’a ni l’un ni l’autre : son conteneur n’est pas privilégié et rien n’attend
+son démon — ajoutez plutôt la feature.
 
 ## Volumes partagés
 

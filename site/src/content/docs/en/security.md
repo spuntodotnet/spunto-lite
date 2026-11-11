@@ -37,7 +37,8 @@ A worker is a container on your Docker daemon, with:
   for as long as the key is unlocked. Code in a worker can push wherever your key can.
 - the **secrets** of its project and the global ones, in its environment.
 
-Docker-in-Docker, when a project turns it on, runs a **privileged** container.
+A feature that declares itself privileged in its metadata — Docker-in-Docker does — runs its
+workers in a **privileged** container.
 
 ## Agents
 

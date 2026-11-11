@@ -66,7 +66,6 @@ export type Project = {
   features: ProjectFeature[]
   vscodeExtensions: string[]
   prewarmImages: string[]
-  dind: boolean
   postCreateCommand: string | null
   postStartCommand: string | null
   repositories: Repository[]

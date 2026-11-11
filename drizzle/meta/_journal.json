@@ -127,6 +127,13 @@
       "when": 1794050918781,
       "tag": "0017_dashboard_color",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1794379709649,
+      "tag": "0018_drop_dind_switch",
+      "breakpoints": true
     }
   ]
 }

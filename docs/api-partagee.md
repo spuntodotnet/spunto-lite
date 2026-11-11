@@ -41,11 +41,11 @@ projet ; ils ne s'accordent pas sur comment on en crée un.
 | Auth | aucune | session ou clé d'API + appartenance à l'org |
 | Schéma | `lib/validation.ts` → `CreateProjectSchema` | `apps/api/src/modules/projects/projects.types.ts` → `CreateProjectSchema` |
 
-Les deux schémas s'appellent pareil, vivent dans deux dépôts, et ont **douze champs identiques** :
-`name`, `description`, `image`, `features[]`, `vscodeExtensions[]`, `prewarmImages[]`, `dind`,
-`postCreateCommand`, `postStartCommand`, `repositories[]`, `forwardPorts[]`, `secrets[]`. Même
-noms, mêmes types, mêmes bornes (`1..65535` sur un port des deux côtés). C'est de la duplication
-pure : le formulaire qui les remplit est déjà le même composant.
+Les deux schémas s'appellent pareil, vivent dans deux dépôts, et ont **onze champs identiques** :
+`name`, `description`, `image`, `features[]`, `vscodeExtensions[]`, `prewarmImages[]`,
+`postCreateCommand`, `postStartCommand`, `repositories[]`, `forwardPorts[]`, `secrets[]` (un
+douzième, `dind`, est sorti des deux côtés le 2026-11-08 : Docker, c'est la feature). Même noms,
+mêmes types, mêmes bornes (`1..65535` sur un port des deux côtés). C'est de la duplication pure : le formulaire qui les remplit est déjà le même composant.
 
 Ce qui diverge légitimement : Lite ajoute `sharedVolumes`, Cloud ajoute les huit champs `task*`
 (RFC 0020). La spec portable modélise déjà les deux en optionnel, avec la bonne règle — « un

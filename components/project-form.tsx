@@ -80,7 +80,7 @@ const MCP: ProjectFormSectionId = "mcp-servers"
  * (delegated work, MCP servers) before Secrets.
  *
  * Runtime holds what a running worker has around it: its named ports (Cloud's
- * Runtime page shows them alone), docker-in-docker and Lite's shared volumes.
+ * Runtime page shows them alone) and Lite's shared volumes.
  * Prewarm is listed there too but hidden (see `HIDDEN_SECTIONS`); a group drops
  * whatever isn't shown.
  */
@@ -89,7 +89,7 @@ const GROUPS: ProjectFormGroup[] = DEFAULT_GROUPS.flatMap((group): ProjectFormGr
     ? [
         {
           ...group,
-          hint: "What a running worker has around it: its named ports, Docker inside, and the volumes every worker of the project shares.",
+          hint: "What a running worker has around it: its named ports, and the volumes every worker of the project shares.",
           sections: [...group.sections, SHARED_VOLUMES],
         },
       ]
@@ -108,9 +108,9 @@ const GROUPS: ProjectFormGroup[] = DEFAULT_GROUPS.flatMap((group): ProjectFormGr
 )
 
 /**
- * Creating shows the rest — including docker-in-docker, which the dashboard only
- * reveals when editing, because in Lite a project *is* its devcontainer spec and
- * there's no second screen to tune it on.
+ * Creating shows the same sections as editing: in Lite a project *is* its
+ * devcontainer spec and there's no second screen to tune it on. Docker inside a
+ * worker is the `docker-in-docker` feature, picked under Tooling like any other.
  */
 const FORM_SECTIONS: ProjectFormSectionId[] = [
   ...EDIT_SECTIONS.filter((s) => !HIDDEN_SECTIONS.includes(s)),
