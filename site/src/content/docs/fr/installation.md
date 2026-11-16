@@ -128,7 +128,7 @@ et leurs volumes — puis supprimez Lite lui-même :
 
 ```bash
 docker rm -f spunto-lite
-docker volume rm spunto-lite-data spunto-lite-ssh-agent
+docker volume rm spunto-lite-data spunto-lite-ssh-agent spunto-lite-agent
 ```
 
 Tout ce qui reste porte un nom en `mp-…` (`docker ps -a`, `docker volume ls`, `docker images`).
