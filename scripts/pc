@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# process-compose, branché sur le démon de la sandbox (lancé par scripts/start.sh) : `pc attach`,
+# `pc process logs server -f`, `pc process restart app`… S'installe au premier appel s'il manque à l'image
+# (version épinglée, somme vérifiée : la même que l'image spunto-worker-base).
+set -euo pipefail
+VERSION=1.124.0
+if ! command -v process-compose >/dev/null 2>&1; then
+  case "$(uname -m)" in
+    x86_64) arch=amd64 sum=487ce011d5324b4578d3ec1860aaa1dd3a95bd4b2b433e03791f73a23d215fd3 ;;
+    aarch64) arch=arm64 sum=98e02400a05d1da74a6506a4ffb2682b1205b18f02ecfbfdea1005f9389fc52d ;;
+    *) echo "process-compose : architecture $(uname -m) non prise en charge" >&2; exit 1 ;;
+  esac
+  tmp=$(mktemp -d)
+  curl -fsSL --retry 5 --retry-all-errors -o "$tmp/pc.tar.gz" \
+    "https://github.com/F1bonacc1/process-compose/releases/download/v$VERSION/process-compose_linux_$arch.tar.gz"
+  echo "$sum  $tmp/pc.tar.gz" | sha256sum -c --quiet -
+  tar xzf "$tmp/pc.tar.gz" -C "$tmp" process-compose
+  sudo install -m 755 "$tmp/process-compose" /usr/local/bin/process-compose
+  rm -rf "$tmp"
+fi
+mkdir -p "$HOME/.config/process-compose" "$HOME/.process-compose/logs"   # sinon : un log de debug à chaque appel
+exec process-compose -U -u "$HOME/.process-compose/pc.sock" "$@"

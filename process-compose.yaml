@@ -1,0 +1,35 @@
+# Le dev de spunto-lite sur un worker Spunto, sous process-compose : lancé par scripts/start.sh, piloté par `pc`.
+#   pc attach                     état et logs
+#   pc process logs dev -f        suivre le dev (aussi : ~/.process-compose/logs/dev.log)
+#   pc process restart dev        le relancer
+# Le build (l'image Docker, comme en production) n'est pas ici : c'est le service `spunto-lite` de
+# docker-compose.yml, servi sur :3000 et refait par scripts/start.sh.
+version: "0.5"
+log_location: ${HOME}/.process-compose/logs/all.log
+log_configuration:
+  disable_json: true
+  no_color: true
+
+processes:
+  # `npm run dev` : tsx relance server.ts à chaque modification côté serveur, `next dev` recharge l'interface à
+  # chaud. Ses propres données (./data, SQLite), distinctes de celles du build (volume spunto-lite-data) : deux plans
+  # de contrôle qui croiraient posséder les mêmes workers se marcheraient dessus.
+  dev:
+    command: npm run dev
+    environment:
+      - PORT=3010
+      - DATA_DIR=./data
+      # Spunto exporte BASE_DOMAIN=spunto.net sur ses workers : le proxy de workers de Lite l'interpréterait.
+      - BASE_DOMAIN=localhost
+    log_location: ${HOME}/.process-compose/logs/dev.log
+    availability:
+      restart: on_failure
+      backoff_seconds: 2
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 3010
+        path: /api/health
+      period_seconds: 1
+      timeout_seconds: 5
+      failure_threshold: 120
