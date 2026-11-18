@@ -67,7 +67,7 @@ domain used by its tests:
 git clone https://github.com/spuntodotnet/spunto-lite.git
 cd spunto-lite
 cp .env.example .env          # optional — sane defaults work out of the box
-docker compose up -d --build  # or ./start.sh
+docker compose up -d --build
 ```
 
 ## Another port

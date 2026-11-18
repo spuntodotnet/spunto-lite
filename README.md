@@ -16,7 +16,7 @@ to your local Docker socket.
 
 ```bash
 cp .env.example .env          # optional — sane defaults work out of the box
-docker compose up -d --build  # or ./start.sh, which does the same
+docker compose up -d --build
 ```
 
 Or run the pre-built image straight from GHCR:
@@ -306,6 +306,11 @@ npm run db:generate     # regenerate SQL migrations after schema changes
 PORT=3900 npm run dev    # run the control plane directly (needs a reachable Docker socket)
 ```
 
+`next dev` runs once per checkout: while one is up, a second `npm run dev` in the same directory
+refuses to start. `bash scripts/instance.sh <port>` runs another one beside it, on a copy of the
+checkout with its own data. On a Spunto worker the whole stack is already up — the Docker image on
+`:3000`, the dev server on `:3010`: see [`CLAUDE.md`](CLAUDE.md).
+
 ## Testing
 
 End-to-end tests live in [`e2e/`](e2e/README.md) — a [Playwright](https://playwright.dev)
@@ -315,7 +320,7 @@ Chromium). No auth to set up (the control plane is open); SQLite means no DB ser
 
 ```bash
 # fast API suite — boot the app, then run the `api` project
-PORT=3900 DATA_DIR=./.e2e-data npm run dev
+PORT=3900 DATA_DIR=./.e2e-data npm run dev   # or, beside a running dev server: bash scripts/instance.sh 3900 --fresh
 cd e2e && npm install && E2E_BASE_URL=http://localhost:3900 npm run test:api
 ```
 

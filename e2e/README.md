@@ -26,6 +26,8 @@ Boot the control plane on a test port, then run the `api` project:
 ```bash
 # terminal 1 — the app (SQLite, no Docker needed for the api/browser control-plane tests)
 PORT=3900 DATA_DIR=./.e2e-data npm run dev        # from the repo root
+# …or, when a dev server already runs in this checkout (a Spunto worker: :3010), an isolated copy:
+bash scripts/instance.sh 3900 --fresh
 
 # terminal 2
 cd e2e && npm install
