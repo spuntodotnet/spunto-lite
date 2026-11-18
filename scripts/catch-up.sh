@@ -30,6 +30,10 @@ if echo "$changed" | grep -qE '^package(-lock)?\.json$'; then
   npm ci --no-audit --no-fund
   if up; then "$PC" process start dev >/dev/null; fi
 fi
+if echo "$changed" | grep -qx next.config.ts && up; then
+  echo "  next.config.ts a changé : relance du dev"   # next dev ne relit pas sa config
+  "$PC" process restart dev >/dev/null
+fi
 if echo "$changed" | grep -qx process-compose.yaml; then
   echo "  process-compose.yaml a changé : relance du dev"
   if up; then "$PC" down >/dev/null; fi
