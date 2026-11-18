@@ -67,7 +67,7 @@ local utilisé par ses tests :
 git clone https://github.com/spuntodotnet/spunto-lite.git
 cd spunto-lite
 cp .env.example .env          # facultatif — les valeurs par défaut conviennent d'emblée
-docker compose up -d --build  # ou ./start.sh
+docker compose up -d --build
 ```
 
 ## Un autre port

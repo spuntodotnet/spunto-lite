@@ -5,7 +5,9 @@ services:
     restart: unless-stopped
     ports:
       # Port 80 gives clean worker URLs (http://worker-<id>.localhost) with no :port.
-      - "80:80"
+      # LITE_PORT publishes it elsewhere on the host (a Spunto worker: :3000, scripts/start.sh);
+      # the container keeps listening on 80, which browser-remote and e2e reach as http://spunto-lite.
+      - "${LITE_PORT:-80}:80"
       # HTTPS for the local wildcard domain (see docs/local-domain.md). Harmless when
       # no cert is present: the server just doesn't listen on it.
       - "443:443"

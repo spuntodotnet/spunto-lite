@@ -11,7 +11,8 @@
 > ton changement touche l'API ou l'UI. Le repo a désormais une vraie suite
 > Playwright dans [`e2e/`](../e2e/README.md) (projet `api` HTTP-only + projet
 > `browser` pilotant `browser-remote` via CDP + `worker-lifecycle` opt-in) — voir
-> § 2 pour la lancer. Pas de scripts `reset.sh`/`restart.sh` en revanche. (Ce
+> § 2 pour la lancer. La stack du worker (build sur :3000, dev sur :3010) est
+> décrite dans [`CLAUDE.md`](../CLAUDE.md) § « Faire tourner ». (Ce
 > fichier suit le modèle du `docs/dev-workflow.md` de `coderhammer/spunto`, adapté
 > à l'outillage réellement disponible ici.)
 >
@@ -44,7 +45,9 @@ Le reste du fichier détaille chacun de ces points.
   Il sert à construire les liens worker/app du commentaire de handoff (§ 5).
 - `gh` est authentifié (compte `coderhammer`).
 - Le worker est jetable et dédié à cette seule tâche.
-- Dépendances installées (`npm install` via `postCreate`).
+- La stack est levée (`scripts/init.sh`, `scripts/start.sh`) : le dev sur
+  **:3010**, le build (l'image Docker) sur **:3000** — voir
+  [`CLAUDE.md`](../CLAUDE.md) § « Faire tourner (worker Spunto) »
 
 ## La stack
 
@@ -54,21 +57,21 @@ parle directement au socket Docker local. Persistance SQLite (Drizzle) sous
 
 | Besoin | Commande |
 |---|---|
-| Dev (watch, hot reload) | `npm run dev` |
+| Dev (watch, hot reload) | déjà levé sur **:3010** (process-compose) ; logs : `pc process logs dev -f` |
+| Le build, servi comme en prod | déjà levé sur **:3000** (l'image Docker) ; refait par le hook `Stop`, ou `bash scripts/start.sh` |
+| Une instance isolée (base vide, e2e) | `bash scripts/instance.sh <port> [--fresh]` (pas `PORT=… npm run dev` : un seul `next dev` par dossier) |
 | Build de prod | `npm run build` |
 | Lint | `npm run lint` |
 | Générer une migration Drizzle | `npm run db:generate` (après avoir édité le schéma) |
-| Stack complète en conteneur | `docker compose up -d --build` (app sur le port **80**) |
-| Stack + navigateur de test | `docker compose --profile browser up -d --build` (ajoute `browser-remote`) |
+| Navigateur de test | `docker compose --profile browser up -d coredns browser-remote` (atteint le build à `http://spunto-lite`) |
 | Suite e2e Playwright (§ 2) | `cd e2e && npm run test:api` (host) · `docker compose --profile test run --rm e2e` (compose) |
 
-> **Dev vs « comme en prod ».** `npm run dev` (watch, hot reload) suffit pour
-> itérer vite pendant que tu codes. Mais **il n'y a pas de `reset.sh` ici** : pour
-> valider le comportement réel avant de faire avancer la carte, repars d'un
-> conteneur neuf avec `docker compose up -d --build` (rebuild de l'image, app sur
-> le port 80) — c'est l'équivalent local le plus proche d'un environnement propre
-> que verra un relecteur. `--build` est ce qui garantit que ton code est bien
-> repris (pas une image cachée).
+> **Dev vs « comme en prod ».** Itère sur le dev (:3010), il suit le code tout
+> seul. Le build (:3000) est l'image Docker que publie la CI : le hook `Stop` la
+> refait à la fin de chaque tour si ses sources ont changé (le `npm run build` de
+> l'image compris), c'est elle que voit le relecteur. Ne lance pas
+> `docker compose up --build` à la main : il reconstruirait l'image hors du
+> verrou de `scripts/start.sh`.
 
 Pour **tester l'UI toi-même** (Claude), tu disposes des outils MCP `browser_*`
 (navigate / snapshot / click / type / screenshot) — voir la section
@@ -85,9 +88,9 @@ Commit au fur et à mesure sur la branche courante.
   logger ni committer une vraie valeur.
 - Suis le style du code existant (composants, `lib/`, `services/`, `server/`).
 
-Pour voir tes changements : `npm run dev` (watch) suffit pour l'itération ; pour
-valider le comportement réel « comme en prod », `docker compose up -d --build`
-puis ouvrir l'app sur le port 80 du worker (§ « La stack »).
+Pour voir tes changements : le dev sur :3010 (rechargement à chaud) ; le
+comportement réel « comme en prod », sur le build de :3000, refait à la fin du
+tour (ou tout de suite : `bash scripts/start.sh`).
 
 ## 2. Vérifier (obligatoire avant de faire avancer la carte)
 
@@ -99,7 +102,7 @@ Reprends les points de la check-list du haut — aucun n'est optionnel :
       « Lancer la suite e2e » ci-dessous). Étends-la si ta feature ajoute une
       route ou un écran.
 - [ ] **Smoke test réel de ta feature, de bout en bout**, sur la stack lancée
-      (`docker compose up -d --build`) — pas un test partiel ni un screenshot
+      (le build sur :3000, `bash scripts/start.sh` pour le mettre à jour) — pas un test partiel ni un screenshot
       d'une itération précédente. Pour une feature **UI**, pilote-la vraiment avec
       les outils `browser_*` (section suivante) et **joins une preuve à la carte**
       (§ 3) ; pour un changement **backend**, le résultat de la vérification, copié
@@ -108,8 +111,8 @@ Reprends les points de la check-list du haut — aucun n'est optionnel :
 Si le build/lint/e2e échoue ou si le flux ne va pas jusqu'au bout, **ne fais pas
 avancer la carte** : corrige et reprends cette étape.
 
-Le worker expose l'app sur le port 80 → le lien « App » du channel de la carte
-pointe dessus (voir `spuntoProjects.ts` côté `automations`).
+Le lien à donner pour tester est celui du build, port 3000 :
+`https://$WORKER_SLUG-3000.spunto.net`.
 
 ### Lancer la suite e2e
 
@@ -121,8 +124,8 @@ pas d'auth → pas de JWT à forger, les tests tapent l'API/l'UI ouvertes.
 **Rapide (API, sans navigateur)** — un port de test dédié + une base jetable :
 
 ```bash
-# terminal 1 — l'app sur un port de test (SQLite, pas de Docker requis)
-PORT=3900 DATA_DIR=./.e2e-data npm run dev
+# terminal 1 — une instance isolée sur un port de test, base vide (le dev de :3010 tourne déjà dans ce dossier)
+bash scripts/instance.sh 3900 --fresh
 # terminal 2
 cd e2e && npm install
 E2E_BASE_URL=http://localhost:3900 npm run test:api      # exactement ce que fait la CI
@@ -133,8 +136,7 @@ E2E_BASE_URL=http://localhost:3900 npm run test:browser  # UI, Chromium local (n
 le réseau compose) :
 
 ```bash
-docker compose up -d spunto-lite
-docker compose --profile test run --rm e2e               # api + browser, atteint l'app à http://spunto-lite
+docker compose --profile test run --rm e2e               # api + browser, atteint le build (:3000) à http://spunto-lite
 ```
 
 **Cycle de vie worker** (vrai Docker, opt-in — sinon le spec se skippe) :
@@ -165,8 +167,8 @@ pilotes toi-même le navigateur, sans écrire de spec. Ce repo embarque pour ça
 
 Déroulé type pour vérifier une feature UI :
 
-1. Lancer la stack **avec le navigateur** :
-   `docker compose --profile browser up -d --build`.
+1. Lancer le navigateur à côté du build (déjà levé) :
+   `docker compose --profile browser up -d coredns browser-remote`.
    (Le service `browser-remote` est lancé à la demande — image ~1,4 Go, pas au
    boot.)
 2. `browser_navigate` vers **`http://spunto-lite`** — le navigateur atteint
@@ -335,7 +337,7 @@ libellé humain (`[spunto-lite#97](…/pull/97)`, `[Carte Notion](…)`). Le blo
 
 À **remplir concrètement** (liens cliquables réels) — pas à laisser générique.
 Le commentaire doit à lui seul permettre de tester la feature. **Les deux liens
-les plus importants sont le lien direct vers l'app (port 80) et le lien vers le
+les plus importants sont le lien direct vers l'app (port 3000, le build) et le lien vers le
 worker (code-server) — ne les laisse jamais génériques ni absents**, y compris
 sur un commentaire reposté lors d'une itération ultérieure :
 
@@ -346,7 +348,7 @@ sur un commentaire reposté lors d'une itération ultérieure :
 <résumé 1-2 phrases : quoi + migration/route si pertinent>
 
 🧪 Comment tester
-1. Ouvrir l'app (lien direct) : https://$WORKER_SLUG-80.spunto.net
+1. Ouvrir l'app (lien direct) : https://$WORKER_SLUG-3000.spunto.net
 2. <étape concrète>
 3. <résultat attendu à observer>
 
@@ -366,7 +368,8 @@ npm run build ✅ · npm run lint ✅ · e2e ✅ · smoke test ✅
 > `$WORKER_SLUG` est une **vraie variable d'env** de ton shell — `echo
 > $WORKER_SLUG` pour la valeur réelle. Construis les liens app/code-server en
 > substituant sa valeur, jamais en laissant `$WORKER_SLUG` littéral dans le
-> commentaire posté. L'app est sur le **port 80** (`-80`), pas 3000.
+> commentaire posté. L'app à tester est le build, **port 3000** (`-3000`), pas le
+> dev de :3010.
 
 > Lien de la carte Notion à partir de `$NOTION_PAGE_ID` (même formule que pour le
 > corps de la PR en § 4.4) :
