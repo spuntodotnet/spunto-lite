@@ -31,11 +31,9 @@ Tout est levé à l'arrivée (`scripts/start.sh`), deux spunto-lite côte à cô
 - **Un spunto-lite de plus, isolé** (base vide, suite e2e, deux variantes) : `bash scripts/instance.sh <port>
   [--fresh]`, au premier plan (lance-le en tâche de fond ; l'arrêter : `bash scripts/instance.sh <port> stop`,
   `fuser -k` laisse vivre tsx watch). Pas `PORT=… npm run dev` dans le checkout : `next dev` refuse de tourner deux
-  fois dans le même dossier. Il copie l'état du checkout
-  (non commité compris) dans `../spunto-lite-instances/<port>/` (relance-le pour reprendre le code) ; jamais 3000,
-  3005 (browser-remote), 3010. Ex. : `bash scripts/instance.sh 3900 --fresh`, puis
+  fois dans le même dossier. Il copie l'état du checkout (non commité compris) dans `../spunto-lite-instances/<port>/`
+  (relance-le pour reprendre le code) ; jamais 3000, 3005 (browser-remote), 3010. Ex. : `bash scripts/instance.sh 3900 --fresh`, puis
   `cd e2e && E2E_BASE_URL=http://localhost:3900 npm run test:api`.
 - **Les URL des workers** (`worker-<id>.<hôte>`) ne passent pas par l'URL publique du worker Spunto (pas de
   sous-domaines sous `sbx-…-3000.spunto.net`) : de l'intérieur, `curl -H "Host: worker-<id>.localhost"
-  localhost:3000`, ou le navigateur `browser-remote` (`docker compose --profile browser up -d`, qui atteint le build
-  à `http://spunto-lite`).
+  localhost:3000`, ou le navigateur `browser-remote` (ci-dessus) sur `*.local.spunto.net` (`docs/local-domain.md`).
