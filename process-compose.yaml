@@ -25,11 +25,11 @@ processes:
     availability:
       restart: on_failure
       backoff_seconds: 2
+    # Prêt = le port écoute (server.ts n'écoute qu'une fois Next préparé). Pas de sonde HTTP : en dev, chaque requête
+    # servie par Next pousse un événement `built` sur le websocket HMR, et une sonde par seconde ferait recharger
+    # la page ouverte en boucle.
     readiness_probe:
-      http_get:
-        host: 127.0.0.1
-        port: 3010
-        path: /api/health
+      exec:
+        command: "bash -c 'exec 3<>/dev/tcp/127.0.0.1/3010'"
       period_seconds: 1
-      timeout_seconds: 5
       failure_threshold: 120
