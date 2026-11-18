@@ -15,7 +15,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 PC=scripts/pc
 DEV_PORT=3010
-export LITE_PORT=3000                        # docker-compose.yml : le build publié sur :3000 (il écoute sur 80 dedans)
+# Le port du build (docker-compose.yml : publié sur :3000, il écoute sur 80 dedans), noté dans .env, que docker
+# compose lit tout seul : un `docker compose up` lancé à la main garde le même port.
+if ! grep -qs '^LITE_PORT=' .env; then
+  [ ! -s .env ] || [ -z "$(tail -c1 .env)" ] || echo >> .env
+  echo "LITE_PORT=3000" >> .env
+fi
+LITE_PORT="$(sed -n 's/^LITE_PORT=//p' .env | tail -1)"
 sudo -n ln -sf "$PWD/scripts/pc" /usr/local/bin/pc 2>/dev/null || true
 
 BUILD=1 MODE=start

@@ -37,7 +37,7 @@ fi
 if echo "$changed" | grep -qx docker-compose.yml \
   && [ "$(docker inspect -f '{{.State.Running}}' spunto-lite 2>/dev/null)" = true ]; then
   echo "  docker-compose.yml a changé : conteneur du build recréé (sur l'image en place)"
-  LITE_PORT=3000 docker compose up -d --no-deps --no-build spunto-lite
+  docker compose up -d --no-deps --no-build spunto-lite   # le port du build : LITE_PORT, dans .env (start.sh)
 fi
 # Tout de suite : ce qui ne tourne pas démarre, tout répond, le commit est noté. L'image de :3000 (quelques minutes)
 # se refait en fond, pour ne pas faire attendre la tâche qui démarre : :3000 sert l'image précédente jusqu'à la
