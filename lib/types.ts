@@ -403,3 +403,15 @@ export type UsageReport = {
   /** `ms`: summed time from call to result, for the calls that got one. */
   tools: { name: string; n: number; errors: number; ms: number }[]
 }
+
+/** `GET /api/usage`: the last report of the period, computed in the background (services/usage-runner.ts). */
+export type UsageSnapshot = {
+  /** Null until the first one is made. */
+  report: UsageReport | null
+  computedAt: string | null
+  durationMs: number | null
+  /** A newer report is on its way: poll again. */
+  computing: boolean
+  /** The last computation failed. */
+  error: string | null
+}

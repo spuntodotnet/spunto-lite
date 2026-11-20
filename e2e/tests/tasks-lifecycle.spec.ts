@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test"
 import type { APIRequestContext } from "@playwright/test"
 import { execFileSync } from "node:child_process"
+import { usageReport } from "../helpers/usage"
 
 // Delegated work end to end, on a real container, with no forge and no API key.
 //
@@ -161,7 +162,7 @@ test.describe("task lifecycle on a real worker", () => {
 
     // The usage page reads it all back: two turns that reported a cost — the fake's running total,
     // 0.0123 per turn — and the interrupted one that reported none; its calls' tokens; its tools.
-    const usage = await (await request.get("/api/usage?days=1&tz=Europe/Paris")).json()
+    const usage = await usageReport(request, "days=1&tz=Europe/Paris", { fresh: true })
     const row = usage.tasks.find((x: { id: string }) => x.id === created.id)
     expect(row, JSON.stringify(usage.totals)).toBeTruthy()
     expect(row.cost).toBeCloseTo(0.0246, 6)

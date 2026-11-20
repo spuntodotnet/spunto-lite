@@ -1,13 +1,12 @@
 import { test, expect } from "@playwright/test"
+import { usageReport } from "../helpers/usage"
 
 // The Usage page's report (services/usage.ts). Its numbers come from real sessions — asserted in
 // tasks-lifecycle.spec.ts, on a real worker; here, the shape and the parameters, with whatever the
 // control plane already holds.
 test.describe("usage report", () => {
   test("GET /api/usage returns totals, every day of the period, and the breakdowns", async ({ request }) => {
-    const res = await request.get("/api/usage?days=7&tz=Europe/Paris")
-    expect(res.status()).toBe(200)
-    const body = await res.json()
+    const body = await usageReport(request, "days=7&tz=Europe/Paris")
     expect(body.days).toBe(7)
     expect(body.timeZone).toBe("Europe/Paris")
     expect(body.from).toMatch(/^\d{4}-\d{2}-\d{2}$/)
@@ -21,14 +20,20 @@ test.describe("usage report", () => {
   })
 
   test("an unknown period falls back to 30 days, an unknown time zone to UTC", async ({ request }) => {
-    const body = await (await request.get("/api/usage?days=12&tz=Not/AZone")).json()
+    const body = await usageReport(request, "days=12&tz=Not/AZone")
     expect(body.days).toBe(30)
     expect(body.timeZone).toBe("UTC")
     expect(body.daily).toHaveLength(30)
   })
 
+  test("answers at once, and says whether a newer report is coming", async ({ request }) => {
+    const body = await (await request.get("/api/usage?days=90&tz=Europe/Paris")).json()
+    for (const key of ["report", "computedAt", "durationMs", "computing", "error"]) expect(body, key).toHaveProperty(key)
+    expect(typeof body.computing).toBe("boolean")
+  })
+
   test("all time has no first day", async ({ request }) => {
-    const body = await (await request.get("/api/usage?days=0")).json()
+    const body = await usageReport(request, "days=0")
     expect(body.days).toBe(0)
     expect(body.from).toBeNull()
   })

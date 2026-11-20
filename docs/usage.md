@@ -9,8 +9,18 @@ par modèle et par outil. C'est la page *Consommation* d'obs (`spuntodotnet/obse
 ## D'où viennent les chiffres
 
 Obs interroge l'API de Spunto toutes les 5 minutes et additionne les événements dans des tables à
-lui. Lite a déjà chaque session dans `task_events` : `GET /api/usage` (`services/usage.ts`) fait le
-calcul à chaque requête, sans table, ni curseur, ni relevé à tenir à jour.
+lui. Lite a déjà chaque session dans `task_events` : le rapport (`services/usage.ts`) est calculé
+depuis elle, sans table, ni curseur, ni relevé à tenir à jour.
+
+Sur un long historique (quelques millions d'événements), ce calcul prend des dizaines de secondes.
+`better-sqlite3` étant synchrone, le faire dans la requête gelait tout le serveur pendant ce temps :
+il tourne donc **en arrière-plan**, dans un `worker_thread` avec sa propre connexion
+(`services/usage-worker.ts`). `GET /api/usage` répond tout de suite avec le dernier rapport de la
+période (`services/usage-runner.ts`) : `{ report, computedAt, durationMs, computing, error }`, `report`
+nul tant que le premier n'est pas fait, `computing` tant qu'un plus récent est en route — la page
+affiche « Computing usage… » et interroge chaque seconde, le reste de l'app continue. Un rapport est
+refait quand on le relit au-delà de 30 s, ou de cinq fois ce qu'il a pris ; un seul calcul à la fois,
+le dernier demandé d'abord. L'index `task_events (type, ts)` réduit le calcul d'environ un tiers.
 
 | Chiffre | Événement (`@spunto/build/agent-contract`) |
 |---|---|

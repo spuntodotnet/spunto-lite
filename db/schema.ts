@@ -431,7 +431,12 @@ export const taskEvents = sqliteTable(
     payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
     source: text("source"),
   },
-  (t) => [primaryKey({ columns: [t.taskId, t.seq] }), index("task_events_type_idx").on(t.taskId, t.type)],
+  (t) => [
+    primaryKey({ columns: [t.taskId, t.seq] }),
+    index("task_events_type_idx").on(t.taskId, t.type),
+    // The Usage report reads a few kinds of event over a period, across every task (services/usage.ts).
+    index("task_events_kind_ts_idx").on(t.type, t.ts),
+  ],
 )
 
 /** Files of a conversation, both ways (RFC 0022). Deduplicated per task on the content hash. */

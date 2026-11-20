@@ -11,13 +11,17 @@ import { segColors } from "@spunto/design-system/colors"
 import { formatTokens } from "@spunto/design-system/tasks"
 import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
-import type { UsageGroup, UsageReport, UsageTask } from "@/lib/types"
+import type { UsageGroup, UsageReport, UsageSnapshot, UsageTask } from "@/lib/types"
 import { formatRelativeTime } from "@/components/worker-card"
 
 /**
  * What the agents consumed — cost, tokens, turns, tools — over a period, across every project.
  * Spunto's own consumption dashboard (obs, `/consommation`), on Lite's own `task_events`
  * (services/usage.ts). The period lives in the URL (`?days=`), so a view is linkable.
+ *
+ * The server computes the report in the background (services/usage-runner.ts) and answers with
+ * the last one at once: on a large history the first one takes a while — the page says so, polls,
+ * and the rest of the app goes on meanwhile.
  */
 
 const PERIODS = [
@@ -338,12 +342,16 @@ function Usage() {
   const days = PERIODS.some((p) => p.value === asked) ? asked : 30
   const timeZone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone, [])
 
-  const { data, isLoading, isFetching, error } = useQuery({
+  const { data: snapshot, isLoading, error } = useQuery({
     queryKey: ["usage", days, timeZone],
-    queryFn: () => api.get<UsageReport>(`/api/usage?days=${days}&tz=${encodeURIComponent(timeZone)}`),
-    refetchInterval: 30_000,
+    queryFn: () => api.get<UsageSnapshot>(`/api/usage?days=${days}&tz=${encodeURIComponent(timeZone)}`),
+    // Every second while the server computes, to show its report as soon as it is made.
+    refetchInterval: (q) => (q.state.data?.computing ? 1000 : 30_000),
     placeholderData: keepPreviousData,
   })
+  // The previous period's report, kept while the new one's first answer comes: not to be shown as it.
+  const data = snapshot?.report?.days === days ? snapshot.report : null
+  const computing = !!snapshot?.computing
 
   const setDays = (d: number) => {
     const params = new URLSearchParams(search)
@@ -363,15 +371,28 @@ function Usage() {
           <p className="mt-1 text-sm text-muted-foreground">What your agents consumed across all projects — cost, tokens, turns and tools.</p>
         </div>
         <div className="flex items-center gap-3">
-          <RefreshCw className={cn("size-3.5 animate-spin text-muted-foreground transition-opacity", isFetching ? "opacity-100" : "opacity-0")} />
+          {data && snapshot?.computedAt && (
+            <span className="text-xs text-muted-foreground" title={new Date(snapshot.computedAt).toLocaleString()}>
+              {computing ? "Updating…" : `Updated ${formatRelativeTime(snapshot.computedAt)}`}
+            </span>
+          )}
+          <RefreshCw className={cn("size-3.5 animate-spin text-muted-foreground transition-opacity", computing ? "opacity-100" : "opacity-0")} />
           <Tabs items={PERIODS} value={days} onChange={setDays} label="Period" />
         </div>
       </div>
 
-      {error ? (
+      {error && !data ? (
         <p className="text-sm text-destructive">Could not load usage: {(error as Error).message}</p>
+      ) : snapshot?.error && !data && !computing ? (
+        <p className="text-sm text-destructive">Could not compute usage: {snapshot.error}</p>
       ) : isLoading || !data || !t ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <div className="rounded-xl border border-dashed border-border py-12 text-center" role="status">
+          <RefreshCw className="mx-auto mb-2 size-5 animate-spin text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">Computing usage…</p>
+          <p className="mt-1 text-xs text-muted-foreground/80">
+            On a long history this takes a while. It runs on the server: keep using the app, the report will be here when you come back.
+          </p>
+        </div>
       ) : t.tasks === 0 ? (
         <div className="rounded-xl border border-dashed border-border py-12 text-center">
           <MessagesSquare className="mx-auto mb-2 size-6 text-muted-foreground" />
