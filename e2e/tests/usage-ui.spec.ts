@@ -15,7 +15,8 @@ test.describe("usage page", () => {
     await period.getByRole("tab", { name: "7 days" }).click()
     await expect(page).toHaveURL(/\/usage\?days=7$/)
     await expect(period.getByRole("tab", { name: "7 days" })).toHaveAttribute("aria-selected", "true")
-    // Either the dashboard or its empty state — never stuck loading.
-    await expect(page.getByText("Context sent per day").or(page.getByText("No agent activity in this period."))).toBeVisible()
+    // Either the dashboard or its empty state — never stuck loading. The report is computed in the
+    // background: on a long history, "Computing usage…" comes first.
+    await expect(page.getByText("Context sent per day").or(page.getByText("No agent activity in this period."))).toBeVisible({ timeout: 60_000 })
   })
 })
