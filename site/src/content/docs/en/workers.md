@@ -36,6 +36,10 @@ from reality.
 Light* theme by default and *Spunto Dark* available; a `settings.json` you already have in the
 workspace is never overwritten.
 
+A project can do without it: switch **Spunto IDE** off under its extensions, and its workers have
+no editor, only their terminal — port 8080 is then a port like any other. It is part of the image,
+so the change makes a new version, picked up when a worker is rebuilt.
+
 ## The terminal
 
 The worker page's **Terminal** tab gives you persistent shells, in tabs. Persistence comes from
@@ -72,6 +76,10 @@ worker, `WORKER_SLUG` and `BASE_DOMAIN` are set, so an app can build its own pub
 
 Files outside `/workspace` (and outside the project's shared volumes) live in the container and
 don't survive a rebuild or an update — install tools through features or hooks, not by hand.
+
+Opening a port of a stopped worker (`http://worker-<id>-<port>.localhost`, its IDE…) shows
+**Workspace is stopped** with a **Start workspace** button, rather than an error: it starts the
+worker, waits for it, and reloads the page you asked for. Nothing starts on the visit alone.
 
 ## Watching a worker
 

@@ -2,18 +2,22 @@ import { createTask, listProjectTasks, serializeTask } from "@/services/tasks"
 import { getProjectRow } from "@/services/projects"
 import { json, notFound, parseBody } from "@/lib/http"
 import { CreateTaskSchema } from "@/lib/validation"
-import { metadataFilter, taskError } from "@/lib/task-routes"
+import { metadataFilter, onHoldParam, taskError } from "@/lib/task-routes"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-/** A project's tasks, most recently active first. `?metadata[key]=value` keeps those carrying every pair. */
+/**
+ * A project's tasks, most recently active first. `?metadata[key]=value` keeps those carrying every
+ * pair; `?onHold=true` lists the ones set aside, which the default leaves out.
+ */
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   if (!getProjectRow(id)) return notFound("Project not found")
-  const filter = metadataFilter(new URL(req.url).searchParams)
+  const searchParams = new URL(req.url).searchParams
+  const filter = metadataFilter(searchParams)
   if ("response" in filter) return filter.response
-  return json((await listProjectTasks(id, 100, filter.metadata)).map(serializeTask))
+  return json((await listProjectTasks(id, 100, filter.metadata, onHoldParam(searchParams))).map(serializeTask))
 }
 
 /**

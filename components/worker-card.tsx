@@ -224,6 +224,7 @@ function workerMenu(
   latestVersion: number,
   m: ReturnType<typeof useWorkerMutations>,
   onDelete: () => void,
+  ide = true,
 ): ActionMenuEntry[] {
   const running = worker.state === "ready"
   // Down, whichever way it got there. `stopped` alone left an `error` worker with a "Stop" that
@@ -233,8 +234,8 @@ function workerMenu(
   const down = worker.state === "stopped" || worker.state === "error"
 
   return [
-    // Only a live worker serves code-server.
-    running && { label: "Open IDE", icon: Code2, href: workerBaseUrl(worker.id), target: "_blank" },
+    // Only a live worker serves code-server — and only one whose project has the IDE.
+    running && ide && { label: "Open IDE", icon: Code2, href: workerBaseUrl(worker.id), target: "_blank" },
     "separator",
     down
       ? { label: "Start", icon: Play, onClick: () => m.start.mutate(), loading: m.start.isPending }
@@ -292,12 +293,15 @@ export function WorkerCard({
   projectId,
   projectVersion,
   task,
+  ide = true,
 }: {
   worker: Worker
   projectId: string
   projectVersion: number
   /** The task holding this machine, or the last one that ran on it — see `indexTasksByWorker`. */
   task?: WorkerTask
+  /** Whether the project has Spunto IDE: without it, a repository chip opens nothing. */
+  ide?: boolean
 }) {
   const running = worker.state === "ready"
   // One set of mutations for the whole card: the outdated banner and the `⋯`
@@ -326,11 +330,11 @@ export function WorkerCard({
         render={{ link: ({ href, className, children }) => <Link href={href} className={className}>{children}</Link> }}
         gitStatus={repos}
         // Only a live worker can serve code-server; otherwise the chip stays static.
-        repoHref={running ? (repo) => workerBaseUrl(worker.id, { folder: repo.path }) : undefined}
+        repoHref={running && ide ? (repo) => workerBaseUrl(worker.id, { folder: repo.path }) : undefined}
         currentProjectVersion={projectVersion}
         onRebuild={() => setConfirming("rebuild")}
         rebuilding={rebuild.isPending}
-        menu={workerMenu(worker, projectVersion, mutations, () => setConfirming("delete"))}
+        menu={workerMenu(worker, projectVersion, mutations, () => setConfirming("delete"), ide)}
         // What this machine is busy with — the same pair as the table's Task column, seen from
         // the card. `footer` replaces the whole foot, so the "View" button is redrawn here the
         // way the package draws it; without a task the card keeps its own.

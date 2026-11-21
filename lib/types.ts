@@ -65,6 +65,8 @@ export type Project = {
   image: string
   features: ProjectFeature[]
   vscodeExtensions: string[]
+  /** Spunto IDE (code-server) in the workers — off, they only have their terminal. */
+  ide: boolean
   prewarmImages: string[]
   postCreateCommand: string | null
   postStartCommand: string | null
@@ -77,6 +79,8 @@ export type Project = {
   agentAppIds: string[]
   currentVersion: number
   favorite: boolean
+  /** Labels the Projects table is filtered by — outside the versioned config (`PUT /api/projects/:id/tags`). */
+  tags: string[]
   // How delegated work runs here — see `TaskSettingsSchema` and docs/taches.md.
   taskValidateCommand: string | null
   taskCancelCommand: string | null
@@ -153,7 +157,7 @@ export type ProjectVersion = {
   id: string
   projectId: string
   version: number
-  config: Omit<Project, "id" | "currentVersion" | "favorite" | "createdAt">
+  config: Omit<Project, "id" | "currentVersion" | "favorite" | "tags" | "createdAt">
   createdAt: string
 }
 
@@ -182,6 +186,8 @@ export type WorkerResource = {
   name: string
   projectId: string
   projectName: string
+  /** The project has Spunto IDE: the worker serves code-server. */
+  ide: boolean
   state: string
   running: boolean
   projectVersion: number

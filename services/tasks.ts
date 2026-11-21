@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
 import { MCP_ENV, STREAM_ENV } from "@spunto/build/agent-runners"
 import {
   applyProtocol,
@@ -359,6 +359,7 @@ export function createTask(projectId: string, input: CreateTaskInput): Task {
     pendingAction: null,
     pendingSince: null,
     parkAt: null,
+    onHoldAt: null,
     lastRefreshedAt: null,
     lastActivityAt: now,
     eventsCommandId: null,
@@ -802,6 +803,11 @@ export type TaskQuery = {
   projectId?: string
   /** Only the tasks carrying every one of these pairs — an integration finding the task it created. */
   metadata?: Record<string, string>
+  /**
+   * Which side of « On hold » to list: false (the default) leaves the tasks set aside out, true
+   * lists only them. A lookup by `metadata` keeps both sides unless it says.
+   */
+  onHold?: boolean
   limit?: number
   offset?: number
 }
@@ -831,6 +837,11 @@ export async function listAllTasks(q: TaskQuery = {}) {
     const pattern = `%${q.query.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`
     filters.push(sql`${tasks.title} LIKE ${pattern} ESCAPE '\\'`)
   }
+  // Counted under the same filters, whichever side is listed: what the « On hold » switch shows.
+  const onHoldScope = and(...filters, ON_HOLD)
+  const byMetadata = !!q.metadata && Object.keys(q.metadata).length > 0
+  const onHold = q.onHold ?? (byMetadata ? undefined : false)
+  if (onHold !== undefined) filters.push(onHold ? ON_HOLD : NOT_ON_HOLD)
   const scoped = filters.length > 0 ? and(...filters) : undefined
 
   const counts = Object.fromEntries(TASK_STATES.map((s) => [s, 0])) as Record<TaskState, number>
@@ -842,6 +853,7 @@ export async function listAllTasks(q: TaskQuery = {}) {
     .all()
   for (const r of countRows) counts[r.state as TaskState] = Number(r.n)
   const total = q.states?.length ? q.states.reduce((sum, s) => sum + counts[s], 0) : Object.values(counts).reduce((a, b) => a + b, 0)
+  const onHoldCount = Number(db.select({ n: sql<number>`count(*)` }).from(tasks).where(onHoldScope).get()?.n ?? 0)
 
   const where = q.states?.length ? (scoped ? and(scoped, inArray(tasks.state, q.states)) : inArray(tasks.state, q.states)) : scoped
   const rows = db
@@ -859,15 +871,29 @@ export async function listAllTasks(q: TaskQuery = {}) {
       projectName: r.projectName,
     })),
   )
-  return { tasks: page, total, counts }
+  return { tasks: page, total, counts, onHoldCount }
 }
 
-export async function listProjectTasks(projectId: string, limit = 100, metadata?: Record<string, string>): Promise<Task[]> {
+/**
+ * On hold, as the lists read it: the flag *and* still in review. Everything that moves a task on
+ * clears the flag, so the state is a belt to those braces — a task that left review somehow still
+ * carrying it shows up where its state puts it, never hidden.
+ */
+const ON_HOLD = and(isNotNull(tasks.onHoldAt), eq(tasks.state, "in-review"))!
+const NOT_ON_HOLD = or(isNull(tasks.onHoldAt), ne(tasks.state, "in-review"))!
+
+export async function listProjectTasks(projectId: string, limit = 100, metadata?: Record<string, string>, onHold?: boolean): Promise<Task[]> {
   const byMetadata = !!metadata && Object.keys(metadata).length > 0
+  const filters = [eq(tasks.projectId, projectId)]
+  if (byMetadata) filters.push(metadataContains(metadata!)!)
+  // A project's list leaves the tasks on hold out, like the cockpit's default view (they are found
+  // again from there); a lookup by metadata keeps both sides unless it says.
+  const side = onHold ?? (byMetadata ? undefined : false)
+  if (side !== undefined) filters.push(side ? ON_HOLD : NOT_ON_HOLD)
   const rows = db
     .select()
     .from(tasks)
-    .where(byMetadata ? and(eq(tasks.projectId, projectId), metadataContains(metadata!)) : eq(tasks.projectId, projectId))
+    .where(and(...filters))
     .orderBy(desc(tasks.lastActivityAt), desc(tasks.createdAt))
     .limit(Math.min(200, Math.max(1, limit)))
     .all()
@@ -1316,6 +1342,7 @@ async function runTaskAction(task: Task, command: string, kind: "validate" | "ca
 export async function validateTask(taskId: string): Promise<Task> {
   await requireTask(taskId, ["in-review"])
   const claimed = claimPending(taskId, "accepting")
+  clearHold(taskId)
   void runJob(
     taskId,
     "accept",
@@ -1350,6 +1377,7 @@ export async function validateTask(taskId: string): Promise<Task> {
 export async function cancelTask(taskId: string): Promise<Task> {
   await requireTask(taskId, ["queued", "running", "in-review"])
   const claimed = claimPending(taskId, "dropping")
+  clearHold(taskId)
   void runJob(
     taskId,
     "drop",
@@ -1433,7 +1461,52 @@ export async function wakeTask(taskId: string): Promise<Task> {
   } catch (err) {
     throw new TaskActionError((err as Error)?.message ?? String(err), 409)
   }
+  // Waking it is coming back to it: it returns to « In review ».
+  clearHold(taskId)
   return getRawTask(taskId) ?? task
+}
+
+// ─── On hold: setting a task in review aside for later ───────────────────────
+
+/**
+ * Set a task in review aside (Cloud 1f00c6b8, docs/taches.md § « On hold : pour plus tard »): its
+ * machine is parked and it leaves the default lists for the « On hold » view, until someone comes
+ * back to it.
+ *
+ * Not a state — it is still `in-review`, and Accept, Drop, a reply or Wake work on it as on any
+ * other (each one also takes it off hold). Park is part of the gesture, not a precondition: a
+ * machine already parked is left alone, and one that is starting, gone, or shared with a task at
+ * work does not block filing the task. Refused while an accept, drop or reply is in flight: each is
+ * about to move the task on. Idempotent.
+ */
+export async function holdTask(taskId: string): Promise<Task> {
+  const task = await requireTask(taskId, ["in-review"])
+  if (task.pendingAction) throw new TaskActionError(`Cannot put on hold while ${task.pendingAction} this task`, 409)
+  const worker = task.workerId ? await getWorkerLive(task.workerId) : null
+  if (deriveTaskMachine(task, worker) === "awake" && !workedOnByAnother(task.workerId!, taskId)) {
+    clearScheduledPark(taskId)
+    await withPoolLock(task.workerId!, async () => {
+      console.log(`[task:${taskId}] put on hold — stopping worker ${task.workerId}`)
+      await stopWorker(task.workerId!)
+    })
+  }
+  if (task.onHoldAt) return getRawTask(taskId) ?? task
+  const changed = db.update(tasks).set({ onHoldAt: new Date() }).where(and(eq(tasks.id, taskId), eq(tasks.state, "in-review"))).run().changes
+  if (changed === 0) throw new TaskActionError("The task moved meanwhile — reload it and try again", 409)
+  return getRawTask(taskId)!
+}
+
+/** Back to « In review », without waking the machine (Wake does that). Any state, idempotent. */
+export async function unholdTask(taskId: string): Promise<Task> {
+  const task = getRawTask(taskId)
+  if (!task) throw new TaskActionError("Not found", 404)
+  clearHold(taskId)
+  return getRawTask(taskId)!
+}
+
+/** Take a task off hold — what every move that comes back to it does. */
+function clearHold(taskId: string): void {
+  db.update(tasks).set({ onHoldAt: null }).where(and(eq(tasks.id, taskId), isNotNull(tasks.onHoldAt))).run()
 }
 
 /**
@@ -1506,6 +1579,8 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
   if (task.state === "failed") task = reopenTask(task, project)
   if (!task.workerId) throw new TaskActionError("This task has no worker to continue in", 409)
   const live = isInteractive(protocol) ? await isSessionAlive(task) : null
+  // Somebody answered: the task is back on someone's desk, so no longer on hold.
+  clearHold(taskId)
   if (live) {
     const stored = attachments.storeFiles(task.id, live.id, "user", files)
     const paths = await attachments.materialize(task.workerId, task.id, attachments.attachmentsByIds(task.id, stored.map((f) => f.id)))

@@ -106,6 +106,15 @@ ports, eux, n’en créent pas.
 - Le journal d’un build d’image s’ouvre depuis la page du projet, et suit le build en direct
   pendant qu’il tourne.
 
+## Tags
+
+Les tags se posent à côté du nom du projet, sur sa page, et se retirent au même endroit. Un tag a
+la même couleur partout, puisque sa couleur vient de son nom. La table Projects les affiche sous le
+nom de chaque projet, avec au-dessus une rangée de filtres : choisissez-en un ou plusieurs, et
+seuls restent les projets qui les portent tous ; la recherche lit aussi les tags. Les tags ne font
+pas partie de la configuration du projet : en poser ne crée pas de version et ne reconstruit rien.
+Par l’API : `PUT /api/projects/:id/tags` avec `{"tags": [...]}`.
+
 ## Modèles
 
 **New project → From a template** préremplit le formulaire pour Next.js, Vite + React, Astro,

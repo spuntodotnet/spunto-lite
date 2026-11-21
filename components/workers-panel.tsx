@@ -61,11 +61,14 @@ export function WorkersPanel({
   workers,
   view,
   taskFor,
+  ide = true,
 }: {
   projectId: string
   projectVersion: number
   workers: Worker[]
   view: WorkerView
+  /** Whether the project's workers have Spunto IDE — without it, no « Open IDE ». */
+  ide?: boolean
   taskFor?: (worker: Worker) => WorkerTask | undefined
 }) {
   if (workers.length === 0) {
@@ -77,7 +80,7 @@ export function WorkersPanel({
           </div>
           <div>
             <p className="font-medium text-sm">No workspaces yet</p>
-            <p className="text-sm text-muted-foreground mt-1">Spawn a workspace to get a full dev environment with code-server.</p>
+            <p className="text-sm text-muted-foreground mt-1">Spawn a workspace to get a full dev environment{ide ? " with code-server" : ""}.</p>
           </div>
           <SpawnWorkerButton projectId={projectId} variant="outline" />
         </div>
@@ -87,10 +90,10 @@ export function WorkersPanel({
   return view === "card" ? (
     <div className="grid gap-3 sm:grid-cols-2">
       {workers.map((w) => (
-        <WorkerCard key={w.id} worker={w} projectId={projectId} projectVersion={projectVersion} task={taskFor?.(w)} />
+        <WorkerCard key={w.id} worker={w} projectId={projectId} projectVersion={projectVersion} task={taskFor?.(w)} ide={ide} />
       ))}
     </div>
   ) : (
-    <WorkerTable workers={workers} projectId={projectId} projectVersion={projectVersion} taskFor={taskFor} />
+    <WorkerTable workers={workers} projectId={projectId} projectVersion={projectVersion} taskFor={taskFor} ide={ide} />
   )
 }

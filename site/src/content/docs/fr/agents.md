@@ -117,6 +117,16 @@ dans chaque dépôt : il montre ce qui va être jeté, puis `reset --hard`, `cl
 les fichiers ignorés comme `node_modules` sont justement l’intérêt du recyclage), `fetch` et
 `checkout -B <base> origin/<base>`. Une machine neuve saute cette étape.
 
+## On hold, pour plus tard
+
+Une relecture qui peut attendre se met **On hold** : le bouton est dans l’en-tête de la tâche et
+sur sa ligne dans **Agents**. Il gare la machine de la tâche et la sort de la liste par défaut vers
+la vue **On hold** (la bascule à côté de la recherche). Elle reste en revue : répondre, **Wake**,
+Accept ou Drop marchent comme d’habitude, et chacun la ramène. **Back to review** la remet dans
+*In review* sans réveiller la machine. Le compte *In review* ne compte plus les tâches mises de
+côté. Par l’API : `POST /api/tasks/:id/hold` et `/unhold`, et `?onHold=true` sur les listes de
+tâches.
+
 ## Pendant la revue : garder ou garer
 
 **Worker during review**, dans les réglages Delegated work du projet :

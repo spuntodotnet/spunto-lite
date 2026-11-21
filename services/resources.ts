@@ -40,6 +40,8 @@ export type WorkerResource = {
   name: string
   projectId: string
   projectName: string
+  /** The project has Spunto IDE: the worker serves code-server. */
+  ide: boolean
   state: string
   running: boolean
   projectVersion: number
@@ -291,6 +293,8 @@ export async function getResourcesOverview(): Promise<ResourcesOverview> {
       name: w.name,
       projectId: w.projectId,
       projectName: project?.name ?? "(deleted project)",
+      // Whether it has an editor to open (the project's Spunto IDE switch).
+      ide: project?.ide !== false,
       projectVersion: w.projectVersion,
       createdAt: (w.createdAt instanceof Date ? w.createdAt : new Date(w.createdAt)).toISOString(),
     }

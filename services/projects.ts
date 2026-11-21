@@ -52,6 +52,7 @@ export function buildVersionConfig(p: Project): ProjectVersionConfig {
     image: p.image,
     features: p.features,
     vscodeExtensions: p.vscodeExtensions,
+    ide: p.ide,
     prewarmImages: p.prewarmImages,
     postCreateCommand: p.postCreateCommand,
     postStartCommand: p.postStartCommand,
@@ -199,9 +200,11 @@ export function createProject(input: CreateProjectInput): SerializedProject {
     id,
     name: input.name,
     description: input.description ?? null,
+    tags: [],
     image: input.image,
     features: resolveFeatures(input.features),
     vscodeExtensions: input.vscodeExtensions,
+    ide: input.ide ?? true,
     prewarmImages: input.prewarmImages,
     postCreateCommand: input.postCreateCommand ?? null,
     postStartCommand: input.postStartCommand ?? null,
@@ -293,6 +296,7 @@ export function updateProject(id: string, input: UpdateProjectInput): Serialized
     image: input.image ?? existing.image,
     features: input.features ? resolveFeatures(input.features) : existing.features,
     vscodeExtensions: input.vscodeExtensions ?? existing.vscodeExtensions,
+    ide: input.ide ?? existing.ide,
     prewarmImages: input.prewarmImages ?? existing.prewarmImages,
     postCreateCommand:
       input.postCreateCommand !== undefined ? (input.postCreateCommand ?? null) : existing.postCreateCommand,
@@ -312,6 +316,7 @@ export function updateProject(id: string, input: UpdateProjectInput): Serialized
       image: merged.image,
       features: merged.features,
       vscodeExtensions: merged.vscodeExtensions,
+      ide: merged.ide,
       prewarmImages: merged.prewarmImages,
       postCreateCommand: merged.postCreateCommand,
       postStartCommand: merged.postStartCommand,
@@ -336,6 +341,23 @@ export function setFavorite(id: string, favorite: boolean): SerializedProject | 
   if (!existing) return undefined
   db.update(projects).set({ favorite }).where(eq(projects.id, id)).run()
   return serializeProject(getProjectRow(id)!)
+}
+
+/**
+ * Tidies a list of tags as typed (Cloud `normalizeTags`): trimmed, inner whitespace collapsed,
+ * empty ones and duplicates dropped, in the order given. Case is kept and matters, as in the
+ * colour: a tag's colour is a hash of its exact name, so "API" and "api" are two tags.
+ */
+export function normalizeTags(tags: string[]): string[] {
+  return [...new Set(tags.map((t) => t.trim().replace(/\s+/g, " ")).filter(Boolean))]
+}
+
+/** Replaces a project's tags. Not a new version: tags are not the recipe (no rebuild, no history). */
+export function setProjectTags(id: string, tags: string[]): string[] | undefined {
+  if (!getProjectRow(id)) return undefined
+  const normalized = normalizeTags(tags)
+  db.update(projects).set({ tags: normalized }).where(eq(projects.id, id)).run()
+  return normalized
 }
 
 /**
@@ -405,6 +427,7 @@ export function exportProject(id: string): ProjectExport | undefined {
     // Not (yet) fields of the shared spec — see `buildProjectExport`. Left out at their defaults.
     portsAttributes: Object.keys(p.portsAttributes ?? {}).length ? p.portsAttributes : undefined,
     taskReviewParkAfterMinutes: p.taskReviewParkAfterMinutes > 0 ? p.taskReviewParkAfterMinutes : undefined,
+    ide: p.ide ? undefined : false,
   })
 }
 
@@ -439,6 +462,8 @@ export function restoreVersion(projectId: string, version: number): SerializedPr
       image: c.image,
       features,
       vscodeExtensions: c.vscodeExtensions,
+      // Snapshots taken before the IDE could be turned off: it was always there.
+      ide: c.ide ?? true,
       prewarmImages: c.prewarmImages,
       postCreateCommand: c.postCreateCommand,
       postStartCommand: c.postStartCommand,

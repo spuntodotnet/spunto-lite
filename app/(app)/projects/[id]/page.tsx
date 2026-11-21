@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "@spunto/design-system"
 import { ProjectPanel, PanelSection, type ProjectVersionEntry } from "@spunto/design-system/projects"
+import { TagChips } from "@spunto/design-system/workers"
 import { ArrowLeft, Cpu, Download, Layers, Sparkles, TriangleAlert } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
@@ -52,6 +53,15 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     queryKey: ["builds", id],
     queryFn: () => api.get<ProjectImageBuild[]>(`/api/projects/${id}/builds`),
     refetchInterval: 3000,
+  })
+  // `next` is the whole list, as `TagChips` reports it — never recomputed from a stale query.
+  const setTags = useMutation({
+    mutationFn: (tags: string[]) => api.put<{ tags: string[] }>(`/api/projects/${id}/tags`, { tags }),
+    onSuccess: ({ tags }) => {
+      qc.setQueryData<Project>(["project", id], (p) => (p ? { ...p, tags } : p))
+      qc.invalidateQueries({ queryKey: ["projects"] })
+    },
+    onError: (e) => toast.error((e as Error).message),
   })
   const { data: registry } = useQuery({
     queryKey: ["extension-registry"],
@@ -120,6 +130,9 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             <ArrowLeft className="h-4 w-4" />
           </Link>
           <h1 className="text-lg font-semibold truncate">{project.name}</h1>
+          {/* Labels the Projects table is filtered by, coloured by a hash of their name — the same
+              colour here, in the table and its filter. Not the recipe: no version, no rebuild. */}
+          <TagChips tags={project.tags ?? []} onAdd={(_, next) => setTags.mutate(next)} onRemove={(_, next) => setTags.mutate(next)} maxLength={40} className="ml-1" />
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {/* Plain link: the route sets Content-Disposition, the browser downloads it. */}
@@ -236,6 +249,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               workers={workers}
               view={workerView}
               taskFor={(w) => tasksByWorker.get(w.id)}
+              ide={project.ide !== false}
             />
           )}
         </div>

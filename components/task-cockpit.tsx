@@ -313,6 +313,8 @@ export function TaskCockpit({
       onDrop={actions.drop}
       onTitleChange={actions.rename}
       titleUpdating={actions.renaming}
+      onHoldChange={actions.setOnHold}
+      holdUpdating={actions.holding}
       backHref={backHref}
       onBack={onBack}
       render={{ link: nextLink }}

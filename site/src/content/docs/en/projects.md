@@ -100,6 +100,15 @@ next launch is warm. Names, descriptions and port labels don't.
   version).
 - An image build's log opens from the project page, and tails the build while it runs.
 
+## Tags
+
+Tags sit next to the project's name on its page: add them there, remove them there. A tag has the
+same colour everywhere, since its colour comes from its name. The Projects table shows them under
+each name, with a row of filters above it — pick one or more and only the projects carrying them
+all stay; the search reads tags too. Tags are not part of the project's configuration: setting
+them makes no version and rebuilds nothing. By the API: `PUT /api/projects/:id/tags` with
+`{"tags": [...]}`.
+
 ## Templates
 
 **New project → From a template** pre-fills the form for Next.js, Vite + React, Astro, FastAPI,

@@ -89,6 +89,8 @@ export type ProjectVersionConfig = {
   features: ProjectFeature[]
   vscodeExtensions: string[]
   prewarmImages: string[]
+  /** Spunto IDE (code-server) in the image. Absent on snapshots taken before it could be turned off: on. */
+  ide?: boolean
   /**
    * Only on snapshots taken before Lite's Docker-in-Docker switch was dropped (BAC-77, migration
    * 0018): `true` asked for a privileged worker without the feature. Read by `restoreVersion`,
@@ -117,9 +119,19 @@ export const projects = sqliteTable("projects", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   description: text("description"),
+  // Labels the projects are sorted by ("frontend", "client-x"…), Cloud 7e4f8da5. Not part of the
+  // recipe: outside the versioned config, set by their own route (`PUT /api/projects/:id/tags`),
+  // they never bump the version nor rebuild. A tag's colour is a hash of its name (`tagColor`).
+  tags: text("tags", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
   image: text("image").notNull(),
   features: text("features", { mode: "json" }).$type<ProjectFeature[]>().notNull().default(sql`'[]'`),
   vscodeExtensions: text("vscode_extensions", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
+  /**
+   * Whether this project's workers have Spunto IDE, code-server on port 8080 (Cloud RFC 0064, where
+   * the IDE became an app a project picks). Off: no editor, no extensions, only the terminal — and
+   * 8080 is a port like any other. Part of the image, so a change mints a version and rebuilds.
+   */
+  ide: integer("ide", { mode: "boolean" }).notNull().default(true),
   prewarmImages: text("prewarm_images", { mode: "json" }).$type<string[]>().notNull().default(sql`'[]'`),
   postCreateCommand: text("post_create_command"),
   postStartCommand: text("post_start_command"),
@@ -361,6 +373,14 @@ export const tasks = sqliteTable(
      * honoured at boot. Cleared by Keep awake, a reply, a Park by hand, and the park itself.
      */
     parkAt: integer("park_at", { mode: "timestamp_ms" }),
+    /**
+     * When someone set this task in review aside — « On hold » (Cloud 1f00c6b8, docs/taches.md
+     * § « On hold : pour plus tard »). Not a state: the task is still `in-review`, its machine
+     * parked, and it leaves the default lists for the « On hold » view. Every move that comes back
+     * to it (a reply, Wake, Accept, Drop) clears it; the lists read it *and* `in-review`, so a task
+     * that left review still carrying it is never hidden. Null = not on hold.
+     */
+    onHoldAt: integer("on_hold_at", { mode: "timestamp_ms" }),
     /** When the state was last derived — the background floor's clock. Not a fact about the work. */
     lastRefreshedAt: integer("last_refreshed_at", { mode: "timestamp_ms" }),
     /** When the task last *moved*. What every list is sorted on. */

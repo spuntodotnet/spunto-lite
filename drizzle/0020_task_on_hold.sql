@@ -1,0 +1,1 @@
+ALTER TABLE `tasks` ADD `on_hold_at` integer;

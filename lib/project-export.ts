@@ -41,11 +41,14 @@ export type { SpecProject }
 export type ProjectExtras = {
   portsAttributes?: PortsAttributes
   taskReviewParkAfterMinutes?: number
+  /** `false`: no Spunto IDE in the workers (Cloud: the IDE app left out of the project). Absent = on. */
+  ide?: boolean
 }
 
 const ExtrasSchema = z.object({
   portsAttributes: PortsAttributesSchema.optional().catch(undefined),
   taskReviewParkAfterMinutes: z.number().int().min(0).max(24 * 60).optional().catch(undefined),
+  ide: z.boolean().optional().catch(undefined),
 })
 
 /** The envelope — the package's — with the extras above on its project. */
@@ -53,7 +56,7 @@ export type ProjectExport = ProjectSpec & { project: ProjectSpec["project"] & Pr
 
 /** `buildProjectSpec`, plus the extras. Unset extras are left out, like every unset field. */
 export function buildProjectExport(project: SpecProject & ProjectExtras, now?: Date): ProjectExport {
-  const { portsAttributes, taskReviewParkAfterMinutes, ...spec } = project
+  const { portsAttributes, taskReviewParkAfterMinutes, ide, ...spec } = project
   const built = buildProjectSpec(spec, now)
   return {
     ...built,
@@ -61,6 +64,7 @@ export function buildProjectExport(project: SpecProject & ProjectExtras, now?: D
       ...built.project,
       ...(portsAttributes ? { portsAttributes } : {}),
       ...(taskReviewParkAfterMinutes ? { taskReviewParkAfterMinutes } : {}),
+      ...(ide === false ? { ide } : {}),
     },
   }
 }
@@ -79,13 +83,14 @@ export function parseProjectExport(text: string): ProjectExport {
   const raw = (JSON.parse(text) as { project?: unknown }).project
   const extras = ExtrasSchema.safeParse(raw ?? {})
   if (!extras.success) return spec
-  const { portsAttributes, taskReviewParkAfterMinutes } = extras.data
+  const { portsAttributes, taskReviewParkAfterMinutes, ide } = extras.data
   return {
     ...spec,
     project: {
       ...spec.project,
       ...(portsAttributes ? { portsAttributes } : {}),
       ...(taskReviewParkAfterMinutes !== undefined ? { taskReviewParkAfterMinutes } : {}),
+      ...(ide === false ? { ide } : {}),
     },
   }
 }
