@@ -95,6 +95,8 @@ function imageScript(project: Project) {
     // `process.env` (that is the package's admission rule), so the one place that knows which
     // registry this install resolves ids against is the caller.
     extensionsGallery: EXTENSIONS_GALLERY_RAW,
+    // No IDE: spunto-pack is plumbing only (tmux, dtach, sshd), and no extension is installed.
+    ...(project.ide === false ? { codeServerInPack: false } : {}),
   })
 }
 
@@ -257,6 +259,8 @@ function buildFullScript(project: Project, workerId: string, branch?: string | n
       repositories: project.repositories,
     },
     extensionsGallery: EXTENSIONS_GALLERY_RAW,
+    // No IDE: no code-server loop, no editor settings — the terminal stays.
+    ide: project.ide !== false,
   })
 
   return buildWorkerScript({

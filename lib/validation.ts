@@ -112,6 +112,8 @@ export const CreateProjectSchema = z.object({
   image: z.string().min(1),
   features: z.array(FeatureInputSchema).default([]),
   vscodeExtensions: z.array(ExtensionIdSchema).default([]),
+  /** Spunto IDE (code-server) in the workers. Absent = on. */
+  ide: z.boolean().optional(),
   prewarmImages: z.array(z.string()).default([]),
   postCreateCommand: z.string().optional(),
   postStartCommand: z.string().optional(),
@@ -143,6 +145,8 @@ export const UpdateProjectSchema = z.object({
   image: z.string().min(1).optional(),
   features: z.array(FeatureInputSchema).optional(),
   vscodeExtensions: z.array(ExtensionIdSchema).optional(),
+  /** Part of the image: a change mints a version, like features. */
+  ide: z.boolean().optional(),
   prewarmImages: z.array(z.string()).optional(),
   postCreateCommand: z.string().optional(),
   postStartCommand: z.string().optional(),

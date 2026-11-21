@@ -125,6 +125,8 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
   const status = worker.setupStatus
   const activeBuild = builds[0]
   const codeUrl = workerBaseUrl(worker.id)
+  // A project without Spunto IDE: its workers have no editor to open.
+  const ide = project?.ide !== false
   const outdated = !!project && !settingUp && worker.projectVersion < project.currentVersion
   const ports = workerPorts(running ? detectedPorts : [], project?.forwardPorts ?? [])
 
@@ -196,7 +198,7 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
                     <GitBranch className="h-3 w-3 text-muted-foreground shrink-0" />
                     <span className="text-xs font-mono font-medium truncate">{repo.path.replace("/workspace/", "")}</span>
                   </div>
-                  {running && (
+                  {running && ide && (
                     <a href={workerBaseUrl(worker.id, { folder: repo.path })} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "h-6 px-2 text-[11px] gap-1 text-muted-foreground shrink-0")}>
                       <Code2 className="h-3 w-3" /> Open
                     </a>
@@ -283,7 +285,7 @@ export default function WorkerCockpit({ params }: { params: Promise<{ id: string
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {running && (
+          {running && ide && (
             <a href={codeUrl} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "default", size: "sm" }), "h-8 px-3 text-xs gap-1.5")}>
               <Code2 className="h-3.5 w-3.5" /> Open IDE <ExternalLink className="h-2.5 w-2.5 opacity-70" />
             </a>

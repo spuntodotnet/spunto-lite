@@ -49,6 +49,7 @@ import { ProjectMcpServersSection, useProjectMcpServers } from "@/components/pro
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 
 /**
  * Sections Lite doesn't show. Anything absent from `sections` doesn't exist in
@@ -392,6 +393,23 @@ export function ProjectForm({ initial }: { initial?: Project }) {
               value={value.portsAttributes}
               onChange={(portsAttributes) => handleChange({ ...value, portsAttributes })}
             />
+          ),
+          // Spunto IDE in the workers (Cloud RFC 0064: there, an app a project picks). Off, a worker
+          // has no editor, only its terminal, and port 8080 is a port like any other.
+          extensions: (
+            <div className="mt-3 flex items-start justify-between gap-3 rounded-md border border-border px-3 py-2.5">
+              <div className="min-w-0">
+                <Label htmlFor="project-ide" className="text-sm">
+                  Spunto IDE
+                </Label>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {value.ide
+                    ? "VS Code in the browser (code-server) on port 8080, with the extensions above."
+                    : "No editor in the workspaces, only their terminal. The extensions above are kept but not installed."}
+                </p>
+              </div>
+              <Switch id="project-ide" checked={value.ide} onCheckedChange={(ide) => handleChange({ ...value, ide })} aria-label="Spunto IDE in this project's workspaces" />
+            </div>
           ),
           features: (
             <FeatureVersions

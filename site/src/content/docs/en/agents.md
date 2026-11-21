@@ -120,6 +120,15 @@ repository: it shows what is about to be thrown away, then `reset --hard`, `clea
 
 **Park** and **Wake** are also on the Machine panel of any task in review.
 
+## On hold, for later
+
+A review that can wait goes **On hold** — the button is in the task's header and on its row in
+**Agents**. It parks the task's machine and moves the task out of the default list into the
+**On hold** view (the switch next to the search). It is still in review: reply, **Wake**, Accept
+or Drop work as usual, and each of them brings it back. **Back to review** returns it to
+*In review* without waking the machine. The *In review* count leaves out the tasks set aside.
+By the API: `POST /api/tasks/:id/hold` and `/unhold`, and `?onHold=true` on the task lists.
+
 ## Project settings
 
 | Setting | Default | |

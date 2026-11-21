@@ -153,6 +153,15 @@ test.describe("tasks API", () => {
     expect((await request.post(`/api/tasks/${task.id}/messages`, { data: { prompt: "more" } })).status()).toBe(409)
     expect((await request.post(`/api/tasks/${task.id}/interrupt`)).status()).toBe(409)
 
+    // On hold is for a task in review only; Back to review takes any.
+    expect((await request.post(`/api/tasks/${task.id}/hold`)).status()).toBe(409)
+    const unheld = await request.post(`/api/tasks/${task.id}/unhold`)
+    expect(unheld.status()).toBe(200)
+    expect((await unheld.json()).onHoldAt).toBeNull()
+    const sides = await (await request.get(`/api/tasks?projectId=${p.id}&onHold=true`)).json()
+    expect(sides).toMatchObject({ tasks: [], onHoldCount: 0 })
+    expect((await request.post(`/api/tasks/no-such-task/unhold`)).status()).toBe(404)
+
     // A name typed by hand is final, and renames nothing else.
     const renamed = await (await request.patch(`/api/tasks/${task.id}`, { data: { title: "Safari login" } })).json()
     expect(renamed).toMatchObject({ title: "Safari login", autoTitle: false, branch: null })

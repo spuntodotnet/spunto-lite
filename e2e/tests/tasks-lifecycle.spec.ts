@@ -45,6 +45,7 @@ type Task = {
   canResume?: boolean
   canReopen?: boolean
   reopenBlocker?: string | null
+  onHoldAt?: string | null
 }
 
 async function workerState(request: APIRequestContext, id: string): Promise<string> {
@@ -266,6 +267,25 @@ test.describe("task lifecycle on a real worker", () => {
     expect((await request.post(`/api/tasks/${created.id}/park`)).status()).toBe(409)
     expect((await request.post(`/api/tasks/${created.id}/wake`)).status()).toBe(200)
     await expect.poll(() => workerState(request, workerId), { timeout: 2 * 60_000 }).toBe("ready")
+
+    // On hold: the machine parked, the task out of the default lists and into « On hold », still
+    // in review. Wake takes it off hold, back to « In review ».
+    const held = await request.post(`/api/tasks/${created.id}/hold`)
+    expect(held.status(), await held.text()).toBe(200)
+    expect((await held.json()).onHoldAt).toBeTruthy()
+    await expect.poll(() => workerState(request, workerId), { timeout: 60_000 }).toBe("stopped")
+    t = await task(request, created.id)
+    expect(t.state).toBe("in-review")
+    expect(t.machine).toBe("parked")
+    const ids = (page: { tasks: { id: string }[] }) => page.tasks.map((x) => x.id)
+    const listed = await (await request.get(`/api/tasks?projectId=${projectId}`)).json()
+    expect(ids(listed)).not.toContain(created.id)
+    expect(listed.onHoldCount).toBe(1)
+    expect(ids(await (await request.get(`/api/tasks?projectId=${projectId}&onHold=true`)).json())).toContain(created.id)
+    expect((await (await request.get(`/api/projects/${projectId}/tasks`)).json()).map((x: { id: string }) => x.id)).not.toContain(created.id)
+    expect((await request.post(`/api/tasks/${created.id}/wake`)).status()).toBe(200)
+    await expect.poll(() => workerState(request, workerId), { timeout: 2 * 60_000 }).toBe("ready")
+    expect((await task(request, created.id)).onHoldAt).toBeNull()
 
     // Accepted: done, and the machine parked for the next task.
     expect((await request.post(`/api/tasks/${created.id}/validate`)).status()).toBe(202)

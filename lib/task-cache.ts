@@ -36,7 +36,13 @@ export interface Task extends TaskItem {
 
 /** A row of the agent cockpit's list: a task and the name of its project. */
 export type TaskRow = Task & { projectName: string }
-export type TasksPage = { tasks: TaskRow[]; total: number; counts: Record<string, number> }
+export type TasksPage = {
+  tasks: TaskRow[]
+  total: number
+  counts: Record<string, number>
+  /** How many tasks on hold match the search, whichever side is listed — drawn on the « On hold » switch. */
+  onHoldCount?: number
+}
 
 /**
  * One task, three caches — and the rules that keep them telling the same story (docs/tasks.md §

@@ -40,6 +40,8 @@ export interface LiteFormValue extends ProjectFormValue, TaskSettings {
   sharedVolumes: SharedVolume[]
   /** A label and a path per declared port, edited under the package's port list (lib/ports.ts). */
   portsAttributes: PortsAttributes
+  /** Spunto IDE (code-server) in the workers — the toggle above the extensions. */
+  ide: boolean
 }
 
 /**
@@ -78,6 +80,7 @@ export type ProjectPayload = {
   image: string
   features: { id: string; options?: Record<string, string>; ociRef?: string }[]
   vscodeExtensions: string[]
+  ide: boolean
   prewarmImages: string[]
   postCreateCommand?: string
   postStartCommand?: string
@@ -90,7 +93,7 @@ export type ProjectPayload = {
 
 /** A fresh creation form: everything empty but the default base image. */
 export function newProjectFormValue(): LiteFormValue {
-  return { ...toProjectFormValue({ image: DEFAULT_IMAGE }), sharedVolumes: [], portsAttributes: {}, ...DEFAULT_TASK_SETTINGS }
+  return { ...toProjectFormValue({ image: DEFAULT_IMAGE }), sharedVolumes: [], portsAttributes: {}, ide: true, ...DEFAULT_TASK_SETTINGS }
 }
 
 /** An existing project, as the form edits it. */
@@ -110,6 +113,7 @@ export function fromProject(p: Project): LiteFormValue {
     }),
     sharedVolumes: p.sharedVolumes ?? [],
     portsAttributes: p.portsAttributes ?? {},
+    ide: p.ide !== false,
     agentAppIds: p.agentAppIds ?? [],
     taskAgentModels: p.taskAgentModels ?? {},
     taskAgentInstructions: p.taskAgentInstructions ?? "",
@@ -144,6 +148,7 @@ export function fromExport({ project: p }: ProjectExport): LiteFormValue {
     sharedVolumes: p.sharedVolumes ?? [],
     // Lite's extras beside the spec (see `ProjectExtras`): absent from a Cloud file, so empty.
     portsAttributes: p.portsAttributes ?? {},
+    ide: p.ide !== false,
     // The spec has no harness list (it is this instance's apps): the new project's default. Its
     // CLI-era fields (`taskAgentCommand`…) are left behind — agent apps replaced them (RFC 0048).
     ...DEFAULT_TASK_SETTINGS,
@@ -212,7 +217,9 @@ export function toProjectPayload(value: LiteFormValue): ProjectPayload {
       options: f.options?.version ? { version: f.options.version } : undefined,
       ociRef: f.ociRef,
     })),
+    // Kept with the IDE off: the build skips them, and turning it back on finds them again.
     vscodeExtensions: value.vscodeExtensions,
+    ide: value.ide,
     prewarmImages: value.prewarmImages,
     postCreateCommand: value.postCreateCommand.trim() || undefined,
     postStartCommand: value.postStartCommand.trim() || undefined,

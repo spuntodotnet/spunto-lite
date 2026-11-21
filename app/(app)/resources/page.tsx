@@ -103,7 +103,7 @@ function WorkerRow({ w }: { w: WorkerResource }) {
             <span>{formatRelativeTime(w.createdAt)}</span>
           </div>
         </div>
-        {w.running && (
+        {w.running && w.ide && (
           <a
             href={workerBaseUrl(w.id)}
             target="_blank"

@@ -26,3 +26,9 @@ export function metadataFilter(params: URLSearchParams): { metadata: Record<stri
   }
   return { metadata }
 }
+
+/** `?onHold=true|false` — which side of « On hold » a list shows; absent leaves the list's default. */
+export function onHoldParam(params: URLSearchParams): boolean | undefined {
+  const value = params.get("onHold")
+  return value === "true" || value === "1" ? true : value === "false" || value === "0" ? false : undefined
+}

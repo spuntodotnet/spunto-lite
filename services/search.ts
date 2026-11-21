@@ -115,7 +115,8 @@ export function getSearchIndex(): SearchIndex {
     // nothing to route to otherwise, so an entry would be a dead link.
     if (w.state !== "ready") continue
 
-    hits.push({
+    // A project without Spunto IDE serves no editor.
+    if (project?.ide !== false) hits.push({
       id: `service:${w.id}:code`,
       kind: "service",
       label: `${w.name} · code-server`,

@@ -1,14 +1,16 @@
 import { listAllTasks, TASK_STATES, type TaskState } from "@/services/tasks"
 import { json } from "@/lib/http"
-import { metadataFilter } from "@/lib/task-routes"
+import { metadataFilter, onHoldParam } from "@/lib/task-routes"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
 /**
  * Every task of the install, filtered and paged — the agent cockpit's list.
- * `?state=running,in-review&q=login&projectId=…&metadata[key]=value&limit=40&offset=0`. The counts
- * ignore `state`; `metadata[key]` (repeatable) keeps the tasks carrying every given pair.
+ * `?state=running,in-review&q=login&projectId=…&metadata[key]=value&onHold=true&limit=40&offset=0`.
+ * The counts ignore `state`; `metadata[key]` (repeatable) keeps the tasks carrying every given pair;
+ * `onHold` picks a side of « On hold » (the default leaves the tasks on hold out) and `onHoldCount`
+ * counts them under the same filters.
  */
 export async function GET(req: Request) {
   const url = new URL(req.url)
@@ -25,6 +27,7 @@ export async function GET(req: Request) {
   return json(
     await listAllTasks({
       metadata: filter.metadata,
+      onHold: onHoldParam(url.searchParams),
       states,
       query: url.searchParams.get("q") ?? undefined,
       projectId: url.searchParams.get("projectId") ?? undefined,

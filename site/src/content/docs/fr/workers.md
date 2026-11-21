@@ -37,6 +37,10 @@ ne peut donc pas s’écarter de la réalité.
 *Spunto Light* par défaut et *Spunto Dark* disponible ; un `settings.json` déjà présent dans
 l’espace de travail n’est jamais écrasé.
 
+Un projet peut s’en passer : coupez **Spunto IDE** sous ses extensions, et ses workers n’ont plus
+d’éditeur, seulement leur terminal — le port 8080 redevient un port comme les autres. Ça fait
+partie de l’image : le changement crée une nouvelle version, prise au prochain rebuild d’un worker.
+
 ## Le terminal
 
 L’onglet **Terminal** de la page du worker vous donne des shells persistants, en onglets. La
@@ -76,6 +80,10 @@ construire sa propre URL publique.
 Les fichiers hors de `/workspace` (et hors des volumes partagés du projet) vivent dans le conteneur
 et ne survivent ni à un rebuild ni à une mise à jour — installez vos outils par des features ou des
 hooks, pas à la main.
+
+Ouvrir un port d’un worker arrêté (`http://worker-<id>-<port>.localhost`, son IDE…) affiche
+**Workspace is stopped** avec un bouton **Start workspace**, plutôt qu’une erreur : il démarre le
+worker, l’attend, et recharge la page demandée. Rien ne démarre à la simple visite.
 
 ## Surveiller un worker
 

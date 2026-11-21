@@ -11,6 +11,9 @@ import {
   workerNetworkName,
 } from "../lib/docker"
 import { getServiceBySlug, servicePrimaryPort } from "../services/services"
+import { getWorkerLive, getWorkerRow, startWorker } from "../services/workers"
+import type { Worker } from "../db/schema"
+import { renderPage, type ProxyPage } from "./proxy-pages"
 
 /** A proxied subdomain either points at a worker or at a shared service. */
 export type ProxyRoute = { kind: "worker"; workerId: string; port: number } | { kind: "service"; label: string }
@@ -87,9 +90,106 @@ async function resolveTarget(host?: string): Promise<{ ip: string; port: number 
   return ip ? { ip, port: route.port } : null
 }
 
+/**
+ * What to show instead of a worker's port, when it cannot be reached (Cloud `workerBlockPage`,
+ * BAC-74) — or null to keep the plain error. `refused`: the container is up, nothing answered on
+ * the port.
+ */
+export function workerBlockPage(worker: Pick<Worker, "id" | "state" | "containerId" | "error"> | undefined, port: number, dashboardUrl: string, refused = false): { status: number; page: ProxyPage } {
+  const subject = worker ? `worker ${worker.id} · port ${port}` : `port ${port}`
+  const common = { subject, dashboardUrl, state: worker?.state ?? null }
+  if (!worker) {
+    return { status: 404, page: { ...common, kind: "notfound", title: "No such workspace", message: "This address points at a workspace that doesn't exist — it may have been deleted." } }
+  }
+  if (["provisioning", "building", "starting"].includes(worker.state)) {
+    return {
+      status: 503,
+      page: { ...common, kind: "starting", autoPoll: true, title: "Workspace is starting", message: "The workspace is coming up. This page reloads on its own once it is ready." },
+    }
+  }
+  if (worker.state === "ready" && refused) {
+    return {
+      status: 502,
+      page: { ...common, kind: "unavailable", canRetry: true, title: `Nothing listens on port ${port}`, message: "The workspace is running, but nothing answers on this port yet. Start the app inside it, then retry." },
+    }
+  }
+  if (!worker.containerId) {
+    return {
+      status: 503,
+      page: { ...common, kind: "unavailable", canRetry: true, title: "Workspace has no container", message: "This workspace was never built, so there is nothing to start.", detail: worker.error },
+    }
+  }
+  // Stopped — by hand, by a park, or by a crash (`error`, with what Docker said): Start brings it
+  // back, on the click only.
+  return {
+    status: 503,
+    page: {
+      ...common,
+      kind: "stopped",
+      canStart: true,
+      title: worker.state === "error" ? "Workspace stopped on an error" : "Workspace is stopped",
+      message: "Start it to open this port. Its disk was kept: /workspace is as it was left.",
+      detail: worker.state === "error" ? worker.error : null,
+    },
+  }
+}
+
+/** Lite's own page for a worker, from the host the request came on (`worker-<id>-<port>.<domain>[:port]`). */
+function dashboardUrlFor(req: IncomingMessage, workerId: string): string {
+  const host = req.headers.host ?? ""
+  const [name, port] = host.split(":")
+  const base = BASE_DOMAINS.find((d) => name.toLowerCase().endsWith("." + d)) ?? "localhost"
+  const proto = (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0] ?? "http"
+  const projectId = getWorkerRow(workerId)?.projectId
+  return `${proto}://${base}${port ? `:${port}` : ""}${projectId ? `/projects/${projectId}/workers/${workerId}` : "/"}`
+}
+
+function wantsHtml(req: IncomingMessage): boolean {
+  return (req.method === "GET" || req.method === "HEAD") && (req.headers.accept ?? "").includes("text/html")
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown) {
+  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" })
+  res.end(JSON.stringify(body))
+}
+
+/**
+ * The backing API of the pages above, on the worker's own host: its state, and a start. Only the
+ * stopped ones start — a worker already on its way, or up, answers with its state.
+ */
+async function handleControl(req: IncomingMessage, res: ServerResponse, workerId: string, path: string) {
+  const worker = await getWorkerLive(workerId)
+  if (!worker) return sendJson(res, 404, { error: "No such workspace" })
+  if (path === "/__spunto/status") return sendJson(res, 200, { state: worker.state })
+  if (req.method !== "POST") return sendJson(res, 405, { error: "POST only" })
+  if (!["stopped", "error"].includes(worker.state)) return sendJson(res, 200, { state: worker.state })
+  if (!worker.containerId) return sendJson(res, 409, { error: "This workspace has no container to start" })
+  try {
+    const started = await startWorker(workerId)
+    console.log(`[proxy] worker ${workerId} started from its port page`)
+    return sendJson(res, 200, { state: started?.state ?? "starting" })
+  } catch (err) {
+    return sendJson(res, 409, { error: (err as Error)?.message ?? "Start failed" })
+  }
+}
+
+async function sendBlockPage(req: IncomingMessage, res: ServerResponse, route: Extract<ProxyRoute, { kind: "worker" }>, refused: boolean) {
+  const worker = await getWorkerLive(route.workerId).catch(() => getWorkerRow(route.workerId))
+  const { status, page } = workerBlockPage(worker, route.port, dashboardUrlFor(req, route.workerId), refused)
+  res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" })
+  res.end(renderPage(page))
+}
+
 export async function handleProxyRequest(req: IncomingMessage, res: ServerResponse) {
-  const target = await resolveTarget(req.headers.host?.split(":")[0])
+  const host = req.headers.host?.split(":")[0]
+  const route = parseProxyHost(host)
+  const path = (req.url ?? "/").split("?")[0]
+  if (route?.kind === "worker" && (path === "/__spunto/status" || path === "/__spunto/start")) {
+    return handleControl(req, res, route.workerId, path)
+  }
+  const target = await resolveTarget(host)
   if (!target) {
+    if (route?.kind === "worker" && wantsHtml(req)) return sendBlockPage(req, res, route, false)
     res.writeHead(502, { "content-type": "text/plain" })
     res.end("Not reachable (worker or service not running yet?)")
     return
@@ -102,7 +202,9 @@ export async function handleProxyRequest(req: IncomingMessage, res: ServerRespon
     },
   )
   proxyReq.on("error", () => {
-    if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" })
+    if (res.headersSent) return void res.end()
+    if (route?.kind === "worker" && wantsHtml(req)) return void sendBlockPage(req, res, route, true).catch(() => res.end())
+    res.writeHead(502, { "content-type": "text/plain" })
     res.end("Bad gateway")
   })
   req.pipe(proxyReq)

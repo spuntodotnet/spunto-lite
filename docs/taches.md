@@ -254,6 +254,23 @@ revue (Cloud 275d6fed) :
 Pas dans le spec d'export `@spunto/build` (0.25), comme les labels des ports : Lite les écrit à
 côté, sous les noms de Cloud, et les relit lui-même (`ProjectExtras`, `lib/project-export.ts`).
 
+### On hold : pour plus tard
+
+Une tâche qu'on relira « plus tard » encombre *In review* sans qu'on veuille l'accepter ; Park
+règle le coût de la machine, pas l'encombrement. **On hold** (Cloud 1f00c6b8) fait les deux : sur
+une tâche en revue, il **gare sa machine** (comme Park, s'il y a une machine debout et qu'aucune
+autre tâche n'y travaille) et la **sort des listes par défaut** vers la vue *On hold* du cockpit
+(`/agents?onHold=1`, la bascule à côté de la recherche, avec son compte).
+
+- **Pas un nouvel état** : la tâche reste `in-review`, avec une colonne `tasks.on_hold_at`
+  (migration `0020`). Les listes lisent « on hold » comme `on_hold_at` **et** `in-review` : une
+  tâche qui aurait quitté la revue avec le drapeau n'est jamais cachée.
+- **On en sort dès qu'on y revient** : répondre, Wake, Accept et Drop remettent le drapeau à null.
+  **Back to review** (`unhold`) la remet dans *In review* sans réveiller la machine.
+- Le compte *In review* ne compte plus les tâches mises de côté. La liste d'un projet les laisse
+  dehors aussi (`?onHold=true` pour les lister) ; un filtre par métadonnées voit les deux côtés.
+- Refusé (409) hors revue, ou pendant un Accept, un Drop ou une réponse en vol. Idempotent.
+
 **Un seul chemin de réveil** pour une réponse, Accept, Drop et Wake : un worker arrêté — ou tombé
 tout seul — est redémarré, un conteneur disparu est rebuildé sur le même volume ; seul un worker
 dont le *setup* a échoué est refusé (le relancer échouerait pareil). Le checkout **n'est pas
@@ -515,8 +532,8 @@ tâche en porte), plus les secrets du projet **tels qu'ils sont maintenant**
 ## Routes
 
 ```
-GET    /api/tasks                               — toutes les tâches (?state=&q=&projectId=&metadata[clé]=&limit=&offset=), compteurs par état hors filtre d'état
-GET    /api/projects/:id/tasks                  — celles d'un projet (?metadata[clé]=)
+GET    /api/tasks                               — toutes les tâches (?state=&q=&projectId=&metadata[clé]=&onHold=&limit=&offset=), compteurs par état hors filtre d'état, onHoldCount
+GET    /api/projects/:id/tasks                  — celles d'un projet (?metadata[clé]=&onHold=)
 POST   /api/projects/:id/tasks                  — délègue { prompt, title?, baseBranch?, model?, agentAppId?, agentOptions?, files?, links?, metadata? } → 201, queued
 GET    /api/tasks/:taskId                       — détail, re-dérivé, + canResume
 PATCH  /api/tasks/:taskId                       — { title?, links?, metadata? } : renomme (rien d'autre ne bouge), remplace les liens, fusionne les métadonnées
@@ -531,6 +548,8 @@ POST   /api/tasks/:taskId/validate              — Accept → 202
 POST   /api/tasks/:taskId/cancel                — Drop → 202
 POST   /api/tasks/:taskId/park                  — gare la machine d'une tâche en revue (409 sinon, ou pendant une action en vol)
 POST   /api/tasks/:taskId/wake                  — rallume la machine garée d'une tâche en revue
+POST   /api/tasks/:taskId/hold                  — On hold : gare la machine et sort la tâche en revue des listes par défaut (409 sinon)
+POST   /api/tasks/:taskId/unhold                — Back to review, sans réveiller la machine
 POST   /api/tasks/:taskId/keep-awake            — annule le parquage programmé (`parkAt`) d'une tâche en revue (409 sinon)
 GET    /api/workers/:id/machine-ports           — les ports d'un worker : déclarés (label, chemin) et à l'écoute
 GET    /api/tasks/:taskId/attachments/:id       — les octets d'une pièce jointe (PNG/JPEG/WebP/GIF inline, le reste en téléchargement)

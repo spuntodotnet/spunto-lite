@@ -35,7 +35,7 @@ function TaskCell({ task, projectId }: { task?: WorkerTask; projectId: string })
   return <WorkerTaskChip entry={task} href={`/projects/${projectId}/tasks/${task.task.id}`} render={{ link: nextLink }} className="max-w-[200px]" />
 }
 
-function RowActions({ worker, projectId }: { worker: Worker; projectId: string }) {
+function RowActions({ worker, projectId, ide }: { worker: Worker; projectId: string; ide: boolean }) {
   const running = worker.state === "ready"
   const { del } = useWorkerMutations(projectId, worker.id)
   const [confirming, setConfirming] = useState(false)
@@ -47,7 +47,7 @@ function RowActions({ worker, projectId }: { worker: Worker; projectId: string }
   })
   return (
     <div className="flex items-center justify-end gap-1">
-      {running && (
+      {running && ide && (
         <Tooltip content={gitStatus.length > 0 ? <GitStatusSummary repos={gitStatus} /> : null} side="top">
           <a href={workerBaseUrl(worker.id)} target="_blank" rel="noreferrer" className={cn(buttonVariants({ variant: "outline", size: "sm" }), "h-7 text-xs gap-1")}>
             <Code2 className="h-3 w-3" /> Open
@@ -76,10 +76,13 @@ export function WorkerTable({
   projectId,
   projectVersion,
   taskFor,
+  ide = true,
 }: {
   workers: Worker[]
   projectId: string
   projectVersion: number
+  /** Whether the project has Spunto IDE — without it, no « Open ». */
+  ide?: boolean
   /** The task a machine is busy with (or last ran), so the two tabs name each other. */
   taskFor?: (worker: Worker) => WorkerTask | undefined
 }) {
@@ -127,7 +130,7 @@ export function WorkerTable({
                 </span>
               </td>
               <td className="px-4 py-2.5 w-0">
-                <RowActions worker={w} projectId={projectId} />
+                <RowActions worker={w} projectId={projectId} ide={ide} />
               </td>
             </tr>
           ))}

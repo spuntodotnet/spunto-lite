@@ -72,6 +72,16 @@ export function useTaskActions(taskId: string, task?: Pick<Task, "pendingAction"
     },
   })
 
+  // On hold parks the machine too: the task is read again for its machine dot, and the lists for
+  // the row that just left them.
+  const hold = useMutation({
+    mutationFn: (onHold: boolean) => api.post<Task>(`/api/tasks/${taskId}/${onHold ? "hold" : "unhold"}`),
+    onMutate: (onHold) => patchTask(queryClient, taskId, { onHoldAt: onHold ? new Date().toISOString() : null }),
+    onSuccess: (data) => patchTask(queryClient, taskId, data),
+    onError: (error) => toast.error((error as Error).message),
+    onSettled: () => invalidateTask(queryClient, taskId),
+  })
+
   const pendingAction: TaskPendingAction | null =
     task?.pendingAction ??
     (validate.isPending ? "accepting" : cancel.isPending ? "dropping" : followUp.isPending ? "replying" : null)
@@ -86,8 +96,33 @@ export function useTaskActions(taskId: string, task?: Pick<Task, "pendingAction"
     reply: (prompt: string, files: TurnFile[] = []) => !busy && followUp.mutate({ prompt, files }),
     rename: (title: string) => rename.mutate(title),
     renaming: rename.isPending,
+    /** Set a task in review aside, its machine parked (`true`), or back to review (`false`) — docs/taches.md § « On hold : pour plus tard ». */
+    setOnHold: (onHold: boolean) => hold.mutate(onHold),
+    holding: hold.isPending,
     interrupt: () => interrupt.mutate(),
     replyError: followUp.error ? (followUp.error as Error).message : null,
     replyFailed: followUp.isError,
   }
+}
+
+/**
+ * On hold / Back to review for a row of a list (`POST /api/tasks/:id/{hold,unhold}`). The row is
+ * marked in every cache on the click — the cockpit's list filters on `onHoldAt`, so it leaves on
+ * that frame — then the lists are read again, for the counts and the machine the hold just parked.
+ */
+export function useTaskHoldActions() {
+  const queryClient = useQueryClient()
+  const hold = useMutation({
+    mutationFn: ({ taskId, onHold }: { taskId: string; onHold: boolean }) => api.post<Task>(`/api/tasks/${taskId}/${onHold ? "hold" : "unhold"}`),
+    onMutate: ({ taskId, onHold }) => patchTask(queryClient, taskId, { onHoldAt: onHold ? new Date().toISOString() : null }),
+    onError: (error: Error, { taskId }) => {
+      toast.error(error.message)
+      invalidateTask(queryClient, taskId)
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: PROJECT_TASKS_KEY })
+      queryClient.invalidateQueries({ queryKey: ALL_TASKS_KEY })
+    },
+  })
+  return { setOnHold: (task: Pick<Task, "id">, onHold: boolean) => hold.mutate({ taskId: task.id, onHold }) }
 }

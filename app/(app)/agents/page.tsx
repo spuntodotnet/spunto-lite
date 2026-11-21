@@ -8,6 +8,7 @@ import { api } from "@/lib/api"
 import { ALL_TASKS_KEY, taskPollInterval, type TasksPage } from "@/lib/task-cache"
 import { TaskCockpit } from "@/components/task-cockpit"
 import { NewTask, NewTaskButton } from "@/components/new-task"
+import { useTaskHoldActions } from "@/hooks/use-task-actions"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 
@@ -20,6 +21,9 @@ import { cn } from "@/lib/utils"
  * a conversation is linkable and survives a reload. With none picked, the right is a new
  * conversation: the composer, where its session will stream once delegated. On a phone it is one
  * pane at a time: picking a conversation — or "New" (`?new=1`) — pushes it over the list.
+ *
+ * Tasks on hold (docs/taches.md § « On hold : pour plus tard ») have their own view, `?onHold=1`:
+ * in review, their machine parked, kept out of the default list until someone comes back to them.
  */
 
 const PAGE_SIZE = 40
@@ -29,6 +33,7 @@ function AgentsCockpit() {
   const search = useSearchParams()
   const selectedId = search.get("task")
   const composing = search.get("new") === "1"
+  const held = search.get("onHold") === "1"
   const isMobile = useIsMobile()
 
   const [states, setStates] = useState<TaskState[]>([])
@@ -38,6 +43,7 @@ function AgentsCockpit() {
   const params = new URLSearchParams({ limit: String(limit) })
   if (states.length > 0) params.set("state", states.join(","))
   if (query.trim()) params.set("q", query.trim())
+  if (held) params.set("onHold", "true")
 
   const { data, isLoading } = useQuery({
     queryKey: [...ALL_TASKS_KEY, params.toString()],
@@ -48,6 +54,11 @@ function AgentsCockpit() {
     refetchInterval: (q) => taskPollInterval(q.state.data?.tasks ?? [], 8_000),
     placeholderData: (previous) => previous,
   })
+
+  const holdActions = useTaskHoldActions()
+  // Filtered here too, not only by the query: a hold marks the row in the cache on the click, and
+  // this is what makes it leave the list on that same frame instead of at the next read.
+  const tasks = (data?.tasks ?? []).filter((t) => (t.state === "in-review" && Boolean(t.onHoldAt)) === held)
 
   const select = (taskId: string | null) => {
     const next = new URLSearchParams(search.toString())
@@ -62,7 +73,7 @@ function AgentsCockpit() {
     <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
       <TaskConversationList
         className={cn("w-full shrink-0 lg:w-80 lg:border-r lg:border-border", composing && !selectedId && "max-lg:hidden")}
-        tasks={data?.tasks ?? []}
+        tasks={tasks}
         total={data?.total}
         counts={data?.counts}
         loading={isLoading}
@@ -80,6 +91,17 @@ function AgentsCockpit() {
         }}
         onLoadMore={() => setLimit((n) => n + PAGE_SIZE)}
         pageSize={PAGE_SIZE}
+        held={held}
+        onHeldChange={(value) => {
+          const next = new URLSearchParams(search.toString())
+          if (value) next.set("onHold", "1")
+          else next.delete("onHold")
+          setStates([])
+          setLimit(PAGE_SIZE)
+          router.replace(`/agents?${next}`, { scroll: false })
+        }}
+        heldCount={data?.onHoldCount}
+        onHoldChange={holdActions.setOnHold}
         // Delegating from here is the point: it opens on the right, where the conversation will
         // stream, and asks which project.
         action={<NewTaskButton label="New" />}

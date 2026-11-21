@@ -1,11 +1,12 @@
 "use client"
 
-import { useRef, useState, type ReactNode } from "react"
+import { useRef, useState, type MouseEvent, type ReactNode } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, cn, formatRelativeTime, toast } from "@spunto/design-system"
-import { ArrowDown, ArrowUp, Box, GitBranch, Plus, Rocket, Search, Sparkles, Star, Upload } from "lucide-react"
+import { tagColor } from "@spunto/design-system/workers"
+import { ArrowDown, ArrowUp, Box, GitBranch, Plus, Rocket, Search, Sparkles, Star, Upload, X } from "lucide-react"
 import { api } from "@/lib/api"
 import { PROJECT_IMPORT_HANDOFF_KEY, parseProjectExport } from "@/lib/project-export"
 import type { Project } from "@/lib/types"
@@ -20,7 +21,12 @@ import { newTaskHref } from "@/components/new-task"
    Favorites are their own group on top, whatever the sort: they are the projects someone chose to
    keep in reach. Both groups follow the same sort, the one that moved last first by default. Each
    row has the two things a project is opened for — a workspace, a task — without the detour
-   through its page. */
+   through its page.
+
+   Tags (Cloud 7e4f8da5, `PUT /api/projects/:id/tags`, set on the project's page) show under each
+   name and filter the table: a project is shown when it carries every tag picked. Their colour is
+   a hash of the name (`tagColor`), so a tag looks the same on every row, in the filter and on the
+   project's page. */
 
 /** `GET /api/projects`: the project and its counts (services/projects.ts `ProjectListStats`). */
 type ProjectRow = Project & {
@@ -70,8 +76,31 @@ function shortImage(image: string): string {
 
 /** What the search box looks in: name, description, image, and each repository's label and URL. */
 function matches(p: ProjectRow, q: string): boolean {
-  return [p.name, p.description, p.image, ...p.repositories.flatMap((r) => [r.project, r.cloneUrl])].some((v) =>
+  return [p.name, p.description, p.image, ...p.repositories.flatMap((r) => [r.project, r.cloneUrl]), ...(p.tags ?? [])].some((v) =>
     v?.toLowerCase().includes(q),
+  )
+}
+
+/** A tag as a toggle: in its colour, ringed when picked. */
+function TagToggle({ tag, active, onClick }: { tag: string; active: boolean; onClick: (e: MouseEvent) => void }) {
+  const c = tagColor(tag)
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      title={active ? `Stop filtering on “${tag}”` : `Only projects tagged “${tag}”`}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none transition-opacity",
+        c.bg,
+        c.text,
+        c.border,
+        active ? "ring-1 ring-current" : "opacity-80 hover:opacity-100",
+      )}
+    >
+      {tag}
+      {active && <X className="h-2.5 w-2.5" />}
+    </button>
   )
 }
 
@@ -153,6 +182,7 @@ export default function ProjectsPage() {
   const fileInput = useRef<HTMLInputElement>(null)
   const [sort, setSort] = useState<Sort>({ key: "activity", desc: true })
   const [query, setQuery] = useState("")
+  const [picked, setPicked] = useState<string[]>([])
   const { data: projects = [], isLoading } = useQuery({
     queryKey: ["projects"],
     queryFn: () => api.get<ProjectRow[]>("/api/projects"),
@@ -179,8 +209,21 @@ export default function ProjectsPage() {
 
   const onSort = (key: SortKey) => setSort((s) => (s.key === key ? { key, desc: !s.desc } : { key, desc: FIRST_DESC[key] }))
 
+  // Every tag in use, the most used first.
+  const tagUse = new Map<string, number>()
+  for (const p of projects) for (const t of p.tags ?? []) tagUse.set(t, (tagUse.get(t) ?? 0) + 1)
+  const allTags = [...tagUse.keys()].sort((a, b) => tagUse.get(b)! - tagUse.get(a)! || a.localeCompare(b))
+  const activeTags = picked.filter((t) => tagUse.has(t))
+  const toggleTag = (tag: string, e?: MouseEvent) => {
+    e?.stopPropagation()
+    setPicked((ts) => (ts.includes(tag) ? ts.filter((t) => t !== tag) : [...ts, tag]))
+  }
+
   const q = query.trim().toLowerCase()
-  const shown = projects.filter((p) => !q || matches(p, q)).sort(compare(sort))
+  const shown = projects
+    .filter((p) => activeTags.every((t) => p.tags?.includes(t)))
+    .filter((p) => !q || matches(p, q))
+    .sort(compare(sort))
   const favorites = shown.filter((p) => p.favorite)
   const others = shown.filter((p) => !p.favorite)
 
@@ -236,6 +279,13 @@ export default function ProjectsPage() {
               </span>
             )}
           </div>
+          {(project.tags?.length ?? 0) > 0 && (
+            <div className="mt-1.5 flex max-w-[22rem] flex-wrap gap-1">
+              {project.tags.map((t) => (
+                <TagToggle key={t} tag={t} active={activeTags.includes(t)} onClick={(e) => toggleTag(t, e)} />
+              ))}
+            </div>
+          )}
         </TableCell>
 
         <TableCell>
@@ -347,16 +397,30 @@ export default function ProjectsPage() {
           </div>
 
           <div className="space-y-3">
-            <label className="relative block w-full sm:w-64">
-              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Name, repository, image…"
-                aria-label="Search projects"
-                className="h-8 w-full rounded-md border border-border bg-background pl-7 pr-2 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
-              />
-            </label>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="relative block w-full sm:w-64">
+                <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Name, repository, image, tag…"
+                  aria-label="Search projects"
+                  className="h-8 w-full rounded-md border border-border bg-background pl-7 pr-2 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
+                />
+              </label>
+              {allTags.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by tag">
+                  {allTags.map((t) => (
+                    <TagToggle key={t} tag={t} active={activeTags.includes(t)} onClick={() => toggleTag(t)} />
+                  ))}
+                  {activeTags.length > 0 && (
+                    <button type="button" onClick={() => setPicked([])} className="text-[11px] text-muted-foreground hover:text-foreground hover:underline">
+                      Clear
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
 
             <div className="overflow-x-auto rounded-lg border border-border">
               <Table>
@@ -376,7 +440,7 @@ export default function ProjectsPage() {
                   {shown.length === 0 && (
                     <TableRow className="hover:bg-transparent">
                       <TableCell colSpan={COLUMNS} className="py-10 text-center text-sm text-muted-foreground">
-                        No project matches “{query.trim()}”.
+                        {q ? <>No project matches “{query.trim()}”{activeTags.length > 0 && " with these tags"}.</> : "No project has all these tags."}
                       </TableCell>
                     </TableRow>
                   )}
