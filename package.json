@@ -13,8 +13,9 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
-    "@spunto/build": "^0.28.4",
-    "@spunto/design-system": "^0.82.0",
+    "@spunto/agent-runners": "^0.1.0",
+    "@spunto/build": "^0.33.0",
+    "@spunto/design-system": "^0.86.0",
     "@tanstack/react-query": "^5.62.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",

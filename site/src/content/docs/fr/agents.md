@@ -58,6 +58,24 @@ La page de la tâche comporte trois onglets :
   Ce sont les mêmes sessions persistantes que sur la page du worker ; la session propre de l’agent
   n’en fait jamais partie.
 
+### Quand l’agent vous pose une question
+
+Claude Code s’arrête parfois pour poser une question à choix, par exemple quelle bibliothèque
+utiliser ou quelle approche suivre. La question s’affiche dans la conversation sous forme de liste
+d’options, et la tâche porte un badge ambre **Asks you** dans les listes. Son tour vous attend :
+
+- cliquez sur une option (une seule question à choix unique se répond d’un clic), ou cochez-en
+  plusieurs puis **Send answers** ;
+- **Something else…** permet d’écrire votre propre réponse ;
+- ou tapez simplement une réponse : l’agent prend votre message comme réponse.
+
+Par l’API : `pendingQuestion` sur la tâche, et `POST /api/tasks/:id/answer`.
+
+Quand Claude lance des **sous-agents**, ils sont regroupés sous l’appel qui les a lancés
+(« 3 subagents · 2 working »). Cliquez sur l’un d’eux pour lire ce qu’il a fait. Quand Claude
+compacte son contexte, la conversation affiche un repère discret *Context compacted* au lieu du
+résumé.
+
 La colonne de détails réunit les faits sur la tâche : la machine (sa page, ses ports nommés,
 Park / Wake), les chiffres de la session (contexte, tokens, coût, tours), ce que Claude Code
 rapporte sur lui-même (quota du forfait, serveurs MCP, skills…), les pull requests et liens partagés

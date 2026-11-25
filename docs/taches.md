@@ -49,9 +49,21 @@ Il faut donc, dans le projet :
    avec, dans le premier dépôt, cloné avec la clé SSH des réglages — celle qui sert aussi au
    `git push` de la branche que l'agent choisit de pousser.
 
+**Les paquets.** Comme dans Cloud depuis #853, tout ce qui est propre à un harnais vit dans
+**`@spunto/agent-runners`** : les runners, leurs adaptateurs, les scripts d'installation des SDK et
+les catalogues de modèles. **`@spunto/build`** ne garde que le côté plateforme, commun à toutes les
+apps : le contrat (`agent-contract` : `runnerCommand`, `RUNNER_ENV`, `OPTIONS_ENV`, `STREAM_ENV`,
+`MCP_ENV`, `QUESTIONS_ENV`, les types de catalogue, `agentOptionsError`) et sa lecture
+(`agent-stream`). Cloud tient la frontière : son API n'importe jamais `@spunto/agent-runners`, ses
+apps d'agent si. Lite est les deux à la fois, plan de contrôle et apps d'agent. Seul
+`lib/agent-apps.ts` importe le paquet des harnais : c'est l'équivalent du manifeste d'une app de Cloud.
+
 **L'image.** Chaque app allumée ajoute sa feature (`spunto-agent-claude`, `spunto-agent-codex`,
-`spunto-agent-mistral`, des `localScript` livrés par `@spunto/build`, cachés du sélecteur) **après**
-celles du projet (`effectiveFeatures`, `lib/agent-apps.ts`) : un Node privé et le SDK épinglé sous
+`spunto-agent-mistral`) **après** celles du projet (`effectiveFeatures`, `lib/agent-apps.ts`).
+C'est `agentFeature(harness)` de `@spunto/agent-runners`, `{ id, script }` : le script
+d'installation est écrit tel quel dans la recette, comme une feature inline. C'est ce que les apps
+de Cloud déclarent dans leur manifeste (`agent.feature.script`, #851). Une feature d'agent listée à
+la main par le projet n'est installée qu'une fois, à sa place, à la façon de l'app. Ce qu'elle installe : un Node privé et le SDK épinglé sous
 `/opt/spunto/agents`, plus le CLI sur le `PATH` pour les humains du terminal. Mistral Vibe n'a pas
 de SDK Node : sa feature installe uv, un Python à lui et `mistral-vibe` épinglé sous
 `/opt/spunto/agents/mistral` (le Python de l'image, absent ou trop vieux, ne compte jamais), et
@@ -64,24 +76,27 @@ partie de la version : la changer crée une version et rebuild, comme changer un
 `format: esm`, `target: node20`, une fois par process et gardé, comme `runnerBundle` de Cloud) en un
 seul fichier, **pas** cuit dans l'image : il est passé en base64 dans l'environnement de la
 commande, qui l'écrit puis s'exécute dessus — une correction du runner arrive avec une montée de
-`@spunto/build`, sans rebuild. esbuild est donc une dépendance de prod de Lite, et reste hors du
+`@spunto/agent-runners`, sans rebuild. esbuild est donc une dépendance de prod de Lite, et reste hors du
 bundle serveur de Next (`serverExternalPackages`) ; dans ce bundle, `runnerFile` pointe sur une copie
-du seul `.mjs`, sans son adaptateur, et l'entrée est relue dans `node_modules/@spunto/build`.
+du seul `.mjs`, sans son adaptateur, et l'entrée est relue dans `node_modules/@spunto/agent-runners`.
 `AGENT_RUNNERS_DIR` remplace toujours l'entrée d'un harnais par `<id>.mjs`, bundlée à chaque session
 (c'est un outil de mise au point) :
 
 ```
 <node> <runner>.mjs run [--model <id>] [--resume <session id>]
 stdin   {"type":"user","text"} · {"type":"interrupt","id"} · {"type":"title","id","description"}
+        · {"type":"answer","callId","answers"}
 stdout  le contrat d'agent Spunto (agent-v1) : notre vocabulaire, une ligne par événement,
         avec en `source` le message du harnais dont il vient — lu par un seul lecteur strict
 ```
 
 **Une session garde le dialecte sur lequel elle a commencé** (Cloud cf96aa07) :
 `tasks.session_protocol` (migration `0013`) est écrit au lancement de chaque session (`agent-v1`
-aujourd'hui) et dit comment la lire (`protocolOf`). Une session lancée par un Lite d'avant la montée
-n'en a pas : elle reste lue dans l'ancien dialecte de son app (`claude-runner`, `codex-runner`, le
-`legacyProtocol` du harnais) jusqu'à sa fin ; sa prochaine reprise démarre sur le contrat. Le
+aujourd'hui) et dit comment la lire (`protocolOf`). Le contrat est le seul dialecte que Lite lise
+encore. Comme dans Cloud depuis #846, les anciens (`claude-stream`, `claude-runner`, `codex-runner`)
+sont partis avec `applyProtocol`, `sessionTitleProbe` et `legacyProtocol`. Une session qui n'a pas
+de dialecte écrit (aucune n'a encore démarré, ou elle date d'avant le contrat) se lit `none` : il
+n'y a rien à lire, et son historique est déjà stocké. Le
 dialecte d'une session est écrit **avant** son lancement : un redémarrage de Lite entre le lancement
 et la ligne qui l'enregistre adopte la session, et doit la lire dans le bon dialecte.
 
@@ -92,7 +107,48 @@ Anthropic.
 Tous les dialectes de runner sont interactifs : une réponse pendant un tour part dans le stdin vivant (Codex
 la garde pour la fin du tour), une interruption arrête le tour sans tuer la session. Le titre de la
 conversation est **demandé** à la session juste après le premier tour (`sessionTitleRequestLine`) :
-Claude Code ne se nomme plus tout seul en `stream-json`.
+le runner répond par une ligne `session.title`, la seule façon dont une tâche prend le nom que
+sa session lui donne.
+
+**Une question de l'agent** (Cloud #856). Claude Code pose parfois une question à choix
+(`AskUserQuestion` : de 1 à 4 questions, de 2 à 4 options, choix multiple, « Other »). Chaque
+session reçoit `SPUNTO_AGENT_QUESTIONS=1` (`QUESTIONS_ENV`). Le runner imprime alors la question (un
+événement `question`, `status: pending`) et **le tour attend** :
+
+- le cockpit la dessine en choix (`TaskQuestionCard`). Une seule question à choix unique se répond
+  d'un clic, sinon « Send answers » ;
+- la réponse passe par `POST /api/tasks/:id/answer` (`{ callId, answers: [{ question, selected,
+  text? }] }`). Elle est écrite dans le stdin vivant (verbe `answer` du contrat), et le runner
+  redit la question `answered`. On obtient un 409 si plus rien n'attend ce `callId` (déjà répondue,
+  ou le tour est fini) ou si la session est morte ;
+- **un message tapé pendant l'attente est la réponse**, en mots. La question passe `dismissed`, sans
+  double tour ;
+- `pendingQuestion` sur la tâche (`{ callId, question, header, count, since }`) vient des
+  événements et n'est jamais écrit : c'est la dernière ligne `question` de chaque appel, encore
+  `pending`, sans fin de tour après. Les listes en tirent le badge ambre **« Asks you »**.
+
+Le mode plan reste retiré, et Codex et Mistral ne posent pas de question. Une sous-tâche ne doit pas
+en poser non plus, parce que personne ne la regarde. Lite n'a pas encore de sous-tâches, mais
+`taskHarness` ne pose pas `QUESTIONS_ENV` sur une tâche qui a un parent.
+
+**Les sous-agents** de Claude Code (outil `Agent`, Cloud #841) sont rangés sous leur appel. Ce qu'ils
+font porte `parentCallId`, et une ligne `subagent` dit où ils en sont. Le cockpit les dessine en un
+bloc (« 3 subagents · 2 working »), et un clic ouvre le transcript d'un sous-agent. Côté serveur, le
+**contexte** de la session est celui de son dernier appel à elle (`usage` sans `parentCallId`). Les
+messages d'un sous-agent ne sont pas lus comme ceux de la conversation (`taskMessages`, les liens
+partagés).
+
+**La compaction et les skills** (Cloud #840). Quand Claude compacte son contexte, le résumé n'est
+plus un message de l'utilisateur mais un événement `context.compacted` (« Context compacted · 168k →
+25k tokens », résumé replié). Le SKILL.md qu'un appel `Skill` charge devient un `skill.loaded`,
+rangé dans le pli de son appel. Les deux viennent du runner, rien à faire côté Lite.
+
+**Les images annoncent leur taille** (Cloud #840) : `width`/`height` sur la référence d'une image
+affichée (PNG, JPEG, WebP, GIF), lues dans son en-tête quand elle est stockée
+(`lib/image-dimensions.ts`, le parseur de Cloud, orientation EXIF comprise). Elles sont stockées
+dans `task_attachments.width`/`height` (migration `0024`). La vignette réserve sa case avant
+l'arrivée des octets, et le fil ne saute plus. Une pièce stockée avant la migration n'a pas de
+taille.
 
 **Le modèle et les paramètres suivent le harnais.** Le projet a un modèle par défaut **par app**
 (`taskAgentModels`, vérifié contre le catalogue de l'app) ; le composer de délégation propose le
@@ -114,11 +170,11 @@ oublié après 5 minutes sans suite. `GET /api/tasks/:id/events` le rend dans `d
 dessine à la place de « working… » (`TaskEventStream`, prop `draft`) et sonde toutes les 700 ms
 tant qu'il y en a un. Un redémarrage de Lite ne perd que quelques secondes d'aperçu.
 
-**Les tâches d'avant les apps** (`agent_app_id` nul) finissent sur le CLI où elles ont commencé
-(`LEGACY_CLI`, avec la commande et le dialecte de l'ancienne colonne du projet) : une session
-vivante se parle dans son dialecte. Les colonnes `task_agent_command`, `task_agent_protocol`,
-`task_follow_up_command` et `task_reset_command` ne sont plus ni écrites ni exposées ; elles
-partiront quand plus aucune tâche ancienne ne vivra. La migration `0012` a passé chaque projet
+**Les tâches d'avant les apps** (`agent_app_id` nul) ne tournent plus : Lite ne lance plus le CLI
+de Claude Code. Elles se lisent encore, mais ne se relancent ni ne se rouvrent (`NO_AGENT_APP`,
+dans `taskAgentAppBlocker` et `reopenBlocker`) : il faut les redéléguer. La migration `0023` a
+supprimé les colonnes de ce temps-là : `task_agent_command`, `task_agent_protocol`,
+`task_follow_up_command`, `task_reset_command` et `task_agent_model`. La migration `0012` a passé chaque projet
 existant sur Claude Code, avec une nouvelle version (son image gagne le SDK), et rangé son ancien
 modèle par défaut dans `taskAgentModels` quand le catalogue le connaît.
 
@@ -449,11 +505,12 @@ Lite tourne sur des portables et des postes qu'on redémarre souvent ; ce n'est 
   `seq` dense par tâche, les lignes du harnais gardées en `source` ;
 - **répondre** (dans le stdin vivant si la session écoute, sinon reprise `--resume` sur l'id lu
   dans le flux), **interrompre** (`control_request/interrupt`), le **nom** que la session se
-  donne (demandé à la session, ou lu une fois dans son transcript), l'**usage** (contexte, tokens, coût venu du harnais),
+  donne (demandé à la session), l'**usage** (contexte, tokens, coût venu du harnais),
   les **pièces jointes** dans les deux sens (déposées dans le worker, affichées si ce sont des
   images raster, téléchargées sinon), le **diff** lu avec git dans la machine ;
 - les **apps d'agent** : mêmes runners, mêmes features, mêmes catalogues et même validation —
-  tout vient de `@spunto/build/agent-runners` ;
+  tout vient de `@spunto/agent-runners`, le contrat de `@spunto/build/agent-contract` ;
+- les **questions de l'agent**, les **sous-agents**, la **compaction** et les **skills** dans le fil ;
 - les **réglages** : mêmes noms de champs que Cloud et que la spec portable. La spec ne porte
   pas `agentAppIds` (l'export de Cloud non plus) : un projet importé démarre sur Claude Code.
 
@@ -544,6 +601,7 @@ GET    /api/tasks/:taskId/diff                  — ce que la tâche a changé d
 GET    /api/tasks/:taskId/diff/patch            — le patch d'un fichier (?path=&repo=&oldPath=&untracked=)
 POST   /api/tasks/:taskId/messages              — répond { prompt, files? } → 202
 POST   /api/tasks/:taskId/interrupt             — arrête le tour en cours sans tuer la session → 202
+POST   /api/tasks/:taskId/answer                — répond à la question qui fait attendre l'agent { callId, answers } → 202 (409 si rien n'attend)
 POST   /api/tasks/:taskId/validate              — Accept → 202
 POST   /api/tasks/:taskId/cancel                — Drop → 202
 POST   /api/tasks/:taskId/park                  — gare la machine d'une tâche en revue (409 sinon, ou pendant une action en vol)
@@ -572,7 +630,7 @@ GET    /api/agent-apps                          — les apps d'agent et leur cat
 | `services/task-shared.ts`, `lib/task-shared.ts`, `lib/claude-tile.ts` | ce qui a circulé (liens, fichiers), les PR parmi les liens, le bloc Claude Code |
 | `services/worker-metrics.ts`, `components/worker-metrics-history.tsx` | l'échantillonnage CPU / mémoire des workers et son graphique |
 | `lib/worker-commands.ts` | commandes foreground/background dans un worker (port de l'agent de nœud Cloud) |
-| `lib/agent-apps.ts` | les apps d'agent : `effectiveFeatures`, `resolveTaskAgentApp`, `resolveAgentOptions`, `taskHarness`, `LEGACY_CLI` |
+| `lib/agent-apps.ts` | les apps d'agent : `effectiveFeatures`, `resolveTaskAgentApp`, `resolveAgentOptions`, `taskHarness`, `protocolOf` — le seul module qui importe `@spunto/agent-runners` |
 | `app/(app)/agents/page.tsx` | le poste de pilotage |
 | `components/task-cockpit.tsx` | une conversation — les données ; tout ce qui dessine vient du design system |
 | `components/task-machine-controls.tsx` | Park / Wake / Keep awake (et le compte à rebours) sous la section Machine du cockpit |

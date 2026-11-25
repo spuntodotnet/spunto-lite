@@ -54,6 +54,23 @@ The task's page has three tabs:
 - **Terminal** — a shell in the task's machine, on the checkout as the agent left it. These are the
   same persistent sessions as the worker page's; the agent's own session is never one of them.
 
+### When the agent asks you
+
+Claude Code sometimes stops to ask a multiple-choice question, for example which library to use or
+which approach to take. The question appears in the conversation as a list of options, and the task
+shows an amber **Asks you** badge in the lists. Its turn waits for you:
+
+- click an option (a single question with a single choice is answered in one click), or pick
+  several and **Send answers**;
+- **Something else…** lets you write your own answer;
+- or just type a reply: the agent takes your message as the answer.
+
+By the API: `pendingQuestion` on the task, and `POST /api/tasks/:id/answer`.
+
+When Claude starts **subagents**, they are grouped under the call that started them
+(“3 subagents · 2 working”). Click one to read what it did. When Claude compacts its context, the
+conversation shows a discreet *Context compacted* marker instead of the summary.
+
 The details column holds the facts about the task: the machine (its page, its named ports, Park /
 Wake), the session's numbers (context, tokens, cost, turns), what Claude Code reports about itself
 (plan quota, MCP servers, skills…), the pull requests and links shared in the conversation, the

@@ -1,13 +1,15 @@
-// A stand-in for `@spunto/build`'s Claude runner (`agent-runners/claude.mjs`), with no SDK and no
+// A stand-in for `@spunto/agent-runners`' Claude runner (`claude.mjs`), with no SDK and no
 // API key: it speaks the runner contract on stdin — {"type":"user","text"} · {"type":"interrupt","id"}
-// · {"type":"title","id","description"} — and answers in the Spunto agent contract (`agent-v1`) on
+// · {"type":"title","id","description"} · {"type":"answer","callId","answers"} — and answers in the Spunto agent contract (`agent-v1`) on
 // stdout, like the real runner since `@spunto/build` 0.23: our vocabulary, one event per line, each
 // with the harness message it stands for as `source`. Under SPUNTO_AGENT_STREAM=1 it also prints its
 // replies piecemeal first (`message.delta`), the way the real runner forwards partial messages. It
 // stays alive between turns, honours an interrupt, commits and pushes for real — on a branch of its
 // own, cut the first time it finds itself on the base, since Lite no longer cuts one (RFC 0056) —
 // and names the
-// conversation when asked. Told "mcp", it lists the tools of every MCP server it was given
+// conversation when asked. Told "question" (under SPUNTO_AGENT_QUESTIONS=1), it asks one, the way
+// Claude's `AskUserQuestion` does, and waits: an `answer` closes it `answered`, a message
+// `dismissed` — the message is the answer, in words. Told "mcp", it lists the tools of every MCP server it was given
 // (SPUNTO_AGENT_MCP), through Lite's gateway, the way the real runner's SDK would reach them.
 //
 // Lite bundles and runs it instead of the real runner when started with
@@ -24,6 +26,8 @@ const stream = process.env.SPUNTO_AGENT_STREAM === "1"
 let turn = 0
 let started = false
 let slow = null
+/** The question the turn waits on: `{ callId, questions }`, or null. */
+let asked = null
 
 /** One finished assistant message — its tokens first when streaming, then the message itself. */
 function say(text) {
@@ -44,6 +48,14 @@ function handle(text) {
   turn++
   if (/\bmcp\b/i.test(text)) {
     listMcpTools().then((lines) => finish(lines.join("\n") || "No MCP server given."))
+    return
+  }
+  if (/\bquestion\b/i.test(text) && process.env.SPUNTO_AGENT_QUESTIONS === "1") {
+    const questions = [
+      { question: "Which colour?", header: "Colour", multiSelect: false, options: [{ label: "Red", description: "Warm" }, { label: "Blue", description: "Cold" }] },
+    ]
+    asked = { callId: `q${turn}`, questions }
+    out({ type: "question", callId: asked.callId, status: "pending", questions })
     return
   }
   if (/slow/.test(text)) {
@@ -105,6 +117,20 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   // What the real runner answers after `generateSessionTitle()`: the contract's own line.
   if (msg.type === "title") {
     out({ type: "session.title", title: "Fake session names itself" })
+    return
+  }
+  if (msg.type === "answer" && asked && msg.callId === asked.callId) {
+    const { callId, questions } = asked
+    asked = null
+    out({ type: "question", callId, status: "answered", questions, answers: msg.answers })
+    finish(`You picked ${msg.answers.map((a) => a.selected.join(", ") || a.text).join("; ")}.`)
+    return
+  }
+  if (msg.type === "user" && asked) {
+    const { callId, questions } = asked
+    asked = null
+    out({ type: "question", callId, status: "dismissed", questions })
+    finish(`Taken as the answer: ${msg.text}`)
     return
   }
   if (msg.type === "user") handle(msg.text)

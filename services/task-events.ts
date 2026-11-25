@@ -3,9 +3,6 @@ import {
   cleanTitle,
   foldDraft,
   parseLines,
-  parseSessionTitle,
-  readsTitleOutOfBand,
-  sessionTitleProbe,
   splitCompleteLines,
   summarizeUsage,
   type AgentDraft,
@@ -15,8 +12,8 @@ import {
 } from "@spunto/build/agent-stream"
 import { readContractObject } from "@spunto/build/agent-contract"
 import { db } from "../db/index"
-import { projects, taskEvents, tasks, workers, type Task, type TaskEvent } from "../db/schema"
-import { MAX_READ_BYTES, readCommandOutput, runCommand } from "../lib/worker-commands"
+import { taskEvents, tasks, workers, type Task, type TaskEvent } from "../db/schema"
+import { MAX_READ_BYTES, readCommandOutput } from "../lib/worker-commands"
 import { mayCarryFile, referenceAttachment, scanFileBlocks } from "../lib/task-attachments"
 import * as attachments from "./task-attachments"
 import { protocolOf } from "../lib/agent-apps"
@@ -80,13 +77,9 @@ export function taskDraft(task: { id: string; commandId: string | null }): (Agen
   return { ...entry.draft, updatedAt: new Date(entry.updatedAt).toISOString() }
 }
 
-/**
- * How a task's stream is read: the dialect its current session started on (`sessionProtocol`), or
- * — a session from before that column — its agent app's previous one, or its project's.
- */
-export function taskProtocol(task: Pick<Task, "projectId" | "agentAppId" | "sessionProtocol" | "commandId">): AgentProtocol {
-  const p = db.select({ taskAgentProtocol: projects.taskAgentProtocol }).from(projects).where(eq(projects.id, task.projectId)).get()
-  return protocolOf(task, p)
+/** How a task's stream is read: the dialect its current session started on (`sessionProtocol`). */
+export function taskProtocol(task: Pick<Task, "sessionProtocol">): AgentProtocol {
+  return protocolOf(task)
 }
 
 /**
@@ -182,44 +175,18 @@ export async function ingestTaskEvents(task: Task, protocol?: AgentProtocol): Pr
   if (stored > 0) {
     // The session spoke, so the task moved — a list ordered like a conversation list must hear it.
     db.update(tasks).set({ lastActivityAt: new Date() }).where(eq(tasks.id, task.id)).run()
-    await adoptSessionTitle(task, dialect, worker.containerId, named).catch((err) =>
-      console.warn(`[task:${task.id}] session title read failed: ${err}`),
-    )
+    if (named && task.autoTitle && renameFromSession(task.id, named.title)) {
+      console.log(`[task:${task.id}] named by its session: ${named.title}`)
+    }
   }
   return stored
 }
 
 /**
- * Let the **session** name a task nobody named — once. Claude Code writes the name in its
- * transcript rather than on stdout, so it is read out of band with one `grep` in the worker; a
- * `jsonl` harness says it in band. Either way `auto_title` is flipped by the same statement that
- * writes the name, so the first name to land is the task's name for good.
+ * Let the **session** name a task nobody named — once: the runner says it in band
+ * (`session.title`), and `auto_title` is flipped by the same statement that writes the name, so the
+ * first name to land is the task's name for good.
  */
-async function adoptSessionTitle(
-  task: Task,
-  dialect: AgentProtocol,
-  containerId: string,
-  inBand: { title: string; source: string } | null,
-): Promise<void> {
-  if (!task.autoTitle) return
-  if (inBand) {
-    renameFromSession(task.id, inBand.title)
-    return
-  }
-  if (!readsTitleOutOfBand(dialect)) return
-  const sessionId = latestSessionId(task.id)
-  if (!sessionId) return
-  const probe = sessionTitleProbe(dialect, sessionId)
-  if (!probe) return
-  const result = await runCommand({ containerId, command: probe, timeoutMs: 10_000, maxOutputBytes: 16 * 1024 })
-  const found = parseSessionTitle(dialect, result.stdout ?? "")
-  if (!found) return
-  if (renameFromSession(task.id, found.title)) {
-    appendPlatformEvent(task.id, task.commandId, "session.title", { title: found.title }, found.source)
-    console.log(`[task:${task.id}] named by its session: ${found.title}`)
-  }
-}
-
 function renameFromSession(taskId: string, title: string): boolean {
   const res = db
     .update(tasks)
@@ -229,26 +196,13 @@ function renameFromSession(taskId: string, title: string): boolean {
   return res.changes > 0
 }
 
-/** Parse a chunk line by line, taking inline files out of each line first (RFC 0022). */
+/** Parse a chunk, taking inline files out of it first (RFC 0022). Only the contract is read. */
 function parseWithFiles(taskId: string, commandId: string, dialect: AgentProtocol, lines: string[]): SourcedEvent[] {
-  if (dialect === "agent-v1") return parseContractWithFiles(taskId, commandId, lines)
-  const out: SourcedEvent[] = []
-  for (const line of lines) {
-    let captured: Captured = { line, files: [] }
-    try {
-      captured = captureFiles(taskId, commandId, line)
-    } catch (err) {
-      console.warn(`[task:${taskId}] could not store a file from the stream: ${err}`)
-    }
-    const events = parseLines(dialect, [captured.line], Infinity)
-    if (captured.files.length > 0) attachFiles(events, captured.files)
-    out.push(...events)
-  }
-  return out
+  return dialect === "agent-v1" ? parseContractWithFiles(taskId, commandId, lines) : []
 }
 
 /**
- * The same, for a session speaking the Spunto agent contract (`agent-v1`) — Cloud's
+ * A session speaking the Spunto agent contract (`agent-v1`), Cloud's
  * `parseContractWithFiles` (cf96aa07). The files are in each line's `source`: the harness's own
  * message, which the runner keeps whole next to the event it read it into.
  *
@@ -303,19 +257,6 @@ function parseContractWithFiles(taskId: string, commandId: string, lines: string
 }
 
 type CapturedFile = { file: attachments.StoredFile; callId: string | null }
-type Captured = { line: string; files: CapturedFile[] }
-
-function captureFiles(taskId: string, commandId: string, line: string): Captured {
-  if (!mayCarryFile(line)) return { line, files: [] }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(line.trim())
-  } catch {
-    return { line, files: [] }
-  }
-  const files = captureParsed(taskId, commandId, parsed)
-  return files.length === 0 ? { line, files: [] } : { line: JSON.stringify(parsed), files }
-}
 
 /** Store every inline file of a parsed line and swap each blob for its id, in place. */
 function captureParsed(taskId: string, commandId: string, parsed: unknown): CapturedFile[] {
@@ -502,6 +443,40 @@ export function hasEndedTurn(taskId: string): boolean {
   return lastTurnEnd(taskId) !== null
 }
 
+/** A question the agent is waiting on, as a list names it — the questions themselves are in the event. */
+export type PendingQuestion = { callId: string; question: string; header: string | null; count: number; since: string }
+
+/**
+ * The questions a task's agent is waiting on, oldest first — read from its events, never written
+ * down (Cloud #856): the latest `question` line of each call, still `pending`, with no turn end
+ * after it (a session that died mid-question asks nothing any more). A turn can ask two at once.
+ */
+export function waitingQuestions(taskId: string): PendingQuestion[] {
+  const rows = db.all<{ seq: number; ts: number; payload: string }>(sql`
+    SELECT q.seq, q.ts, q.payload FROM task_events q
+    WHERE q.task_id = ${taskId} AND q.type = 'question'
+      AND json_extract(q.payload, '$.status') = 'pending'
+      AND NOT EXISTS (
+        SELECT 1 FROM task_events l WHERE l.task_id = q.task_id AND l.type = 'question' AND l.seq > q.seq
+          AND json_extract(l.payload, '$.callId') = json_extract(q.payload, '$.callId')
+      )
+      AND NOT EXISTS (SELECT 1 FROM task_events e WHERE e.task_id = q.task_id AND e.type = 'session.ended' AND e.seq > q.seq)
+    ORDER BY q.seq
+  `)
+  return rows.map((row) => {
+    const payload = JSON.parse(row.payload) as Record<string, unknown>
+    const questions = Array.isArray(payload.questions) ? (payload.questions as Record<string, unknown>[]) : []
+    const first = questions[0] ?? {}
+    return {
+      callId: String(payload.callId),
+      question: typeof first.question === "string" ? first.question : "",
+      header: typeof first.header === "string" ? first.header : null,
+      count: questions.length,
+      since: new Date(row.ts).toISOString(),
+    }
+  })
+}
+
 /** The last *moment* of the stream, if it is a `session.ended`. */
 function lastTurnEnd(taskId: string): { seq: number } | null {
   const row = db
@@ -554,7 +529,8 @@ export function taskUsage(taskId: string): SessionUsage | null {
       cacheReadTokens: Number(row.cacheReadTokens) || 0,
       cacheCreationTokens: Number(row.cacheCreationTokens) || 0,
     },
-    latestCall: latest(sql`${taskEvents.type} = 'usage' AND json_extract(${taskEvents.payload}, '$.scope') = 'call'`),
+    // The session's context is its own last call's, not a subagent's (`parentCallId`, Cloud #841).
+    latestCall: latest(sql`${taskEvents.type} = 'usage' AND json_extract(${taskEvents.payload}, '$.scope') = 'call' AND json_extract(${taskEvents.payload}, '$.parentCallId') IS NULL`),
     latestSession: latest(sql`${taskEvents.type} = 'usage' AND json_extract(${taskEvents.payload}, '$.scope') = 'session'`),
     started: latest(sql`${taskEvents.type} = 'session.started'`),
   })

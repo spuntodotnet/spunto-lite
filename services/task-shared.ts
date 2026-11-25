@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNotNull, like } from "drizzle-orm"
+import { and, asc, desc, eq, isNotNull, like, sql } from "drizzle-orm"
 import type { TaskAppTile } from "@spunto/design-system/tasks"
 import { db } from "../db/index"
 import { taskAttachments, taskEvents, type Task } from "../db/schema"
@@ -27,13 +27,14 @@ export type SharedFile = {
 
 /**
  * Every `message` of a task, oldest first. Only `seq`, `ts` and `payload`, and only messages: a
- * long session is mostly tool calls and their output, which the thread does not read.
+ * long session is mostly tool calls and their output, which the thread does not read. Nor a
+ * subagent's (`parentCallId`): it spoke to the agent that started it, not in the conversation.
  */
 function taskMessages(taskId: string) {
   return db
     .select({ seq: taskEvents.seq, ts: taskEvents.ts, payload: taskEvents.payload })
     .from(taskEvents)
-    .where(and(eq(taskEvents.taskId, taskId), eq(taskEvents.type, "message")))
+    .where(and(eq(taskEvents.taskId, taskId), eq(taskEvents.type, "message"), sql`json_extract(${taskEvents.payload}, '$.parentCallId') IS NULL`))
     .orderBy(asc(taskEvents.seq))
     .all()
     .map((e) => ({ seq: e.seq, ts: e.ts.toISOString(), role: e.payload.role, text: e.payload.text }))
@@ -89,8 +90,6 @@ export function claudeSessionLines(taskId: string): SessionLines {
   }
 }
 
-const CLAUDE_PROTOCOLS = new Set(["claude-runner", "claude-stream", "claude-json"])
-
 /**
  * The pull requests the conversation talked about, recognised from their URL. Only the link: Lite
  * has no forge integration (the clone and the push go through the user's own SSH key), so there is
@@ -125,7 +124,7 @@ export function taskTiles(task: Pick<Task, "id" | "projectId" | "agentAppId" | "
   // On the contract (`agent-v1`) every app shares one protocol: the app says it is Claude, and each
   // event's `source` is still Claude's own message — the lines this tile reads.
   const protocol = taskProtocol(task)
-  if (CLAUDE_PROTOCOLS.has(protocol) || (protocol === "agent-v1" && task.agentAppId === "claude")) {
+  if (protocol === "agent-v1" && task.agentAppId === "claude") {
     const claude = claudeTile(claudeSessionLines(task.id))
     if (claude) tiles.push(claude)
   }

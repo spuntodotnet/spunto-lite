@@ -44,6 +44,8 @@ export function useTaskListActions() {
   }
 }
 
+type QuestionAnswer = { question: string; selected: string[]; text?: string | null }
+
 type TurnFile = { filename: string; mediaType: string; data: string }
 
 export function useTaskActions(taskId: string, task?: Pick<Task, "pendingAction" | "pendingSince"> | null) {
@@ -61,6 +63,13 @@ export function useTaskActions(taskId: string, task?: Pick<Task, "pendingAction"
     mutationFn: () => api.post<Task>(`/api/tasks/${taskId}/interrupt`),
     onSuccess: (data) => patchTask(queryClient, taskId, data),
     onError: (error) => toast.error((error as Error).message),
+  })
+  // The member's choice for a question the agent waits on: one line into the live stdin, like an
+  // interrupt. The card holds its own "sent" state until the session restates the question.
+  const answer = useMutation({
+    mutationFn: ({ callId, answers }: { callId: string; answers: QuestionAnswer[] }) => api.post<Task>(`/api/tasks/${taskId}/answer`, { callId, answers }),
+    onSuccess: (data) => patchTask(queryClient, taskId, data),
+    onError: () => invalidateTask(queryClient, taskId),
   })
   const rename = useMutation({
     mutationFn: (title: string) => api.patch<Task>(`/api/tasks/${taskId}`, { title }),
@@ -100,6 +109,10 @@ export function useTaskActions(taskId: string, task?: Pick<Task, "pendingAction"
     setOnHold: (onHold: boolean) => hold.mutate(onHold),
     holding: hold.isPending,
     interrupt: () => interrupt.mutate(),
+    /** Answer a question the agent is waiting on. Rejects with the API's reason, which the card shows. */
+    answer: async (callId: string, answers: QuestionAnswer[]) => {
+      await answer.mutateAsync({ callId, answers })
+    },
     replyError: followUp.error ? (followUp.error as Error).message : null,
     replyFailed: followUp.isError,
   }

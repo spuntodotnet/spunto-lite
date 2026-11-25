@@ -162,6 +162,20 @@
       "when": 1795291895944,
       "tag": "0022_project_ide",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1795609632061,
+      "tag": "0023_drop_cli_harness_columns",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1795609861612,
+      "tag": "0024_task_attachment_dimensions",
+      "breakpoints": true
     }
   ]
 }

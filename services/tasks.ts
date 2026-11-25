@@ -1,19 +1,20 @@
 import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
-import { MCP_ENV, STREAM_ENV } from "@spunto/build/agent-runners"
+import { MCP_ENV, STREAM_ENV } from "@spunto/build/agent-contract"
 import {
-  applyProtocol,
+  answerLine,
   interruptLine,
   isInteractive,
   sessionTitleRequestLine,
   userTurnLine,
   type AgentProtocol,
+  type QuestionAnswer,
 } from "@spunto/build/agent-stream"
 import { db } from "../db/index"
 import { projects, tasks, workers, type Project, type Task, type TaskCommand, type Worker } from "../db/schema"
 import { newId } from "../lib/id"
 import { shellQuote } from "../lib/shell"
 import { internalUrl } from "../lib/agent"
-import { AgentAppChoiceError, protocolOf, resolveAgentOptions, resolveTaskAgentApp, taskAgentAppBlocker, taskHarness, type Harness } from "../lib/agent-apps"
+import { AgentAppChoiceError, NO_AGENT_APP, protocolOf, resolveAgentOptions, resolveTaskAgentApp, taskAgentAppBlocker, taskHarness, type Harness } from "../lib/agent-apps"
 import { MAX_TASK_METADATA_KEYS, type CreateTaskInput, type UpdateTaskInput } from "../lib/validation"
 import { getProjectRow } from "./projects"
 import { resolveSecretsForSpawn } from "./secrets"
@@ -168,13 +169,12 @@ export function applyModel(command: string, model?: string | null): string {
 }
 
 /**
- * The command that runs the session — the harness's (`taskHarness`): an agent app's runner, or the
- * CLI for a task delegated before agent apps. One-shot: the prompt goes through a heredoc whose
+ * The command that runs the session — the harness's (`taskHarness`): its agent app's runner. One-shot: the prompt goes through a heredoc whose
  * delimiter carries the task id. Interactive: nothing is piped — the turn is written into the live
  * stdin.
  */
 export function sessionCommand(taskId: string, prompt: string, agentCommand: string, protocol: AgentProtocol = "none", model?: string | null): string {
-  const bin = applyModel(applyProtocol(agentCommand, protocol), model)
+  const bin = applyModel(agentCommand.trim(), model)
   if (isInteractive(protocol)) return bin
   const delimiter = `SPUNTO_TASK_${taskId.toUpperCase()}`
   return `cat <<'${delimiter}' | ${bin}\n${prompt}\n${delimiter}\n`
@@ -287,6 +287,9 @@ export function serializeTask(row: Task) {
     // deadline left on a row that moved on (an Accept landing, the container stopped by hand) is
     // never a countdown to show — and the floor would not act on it either (`parkDueTasks`).
     parkAt: row.state === "in-review" && machine === "awake" ? row.parkAt : null,
+    // The question the agent waits on, if any — the first it asked (Cloud #856). Only a running
+    // task's agent can be waiting: one in review has handed back.
+    pendingQuestion: row.state === "running" ? events.waitingQuestions(row.id)[0] ?? null : null,
   }
 }
 
@@ -488,11 +491,10 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
   }
   const cwd = repoPaths(project)[0]
 
-  const harness = await taskHarness(task, project)
+  const harness = await taskHarness(task)
   const protocol = harness.protocol
   // The dialect is written before the launch, not with the command id: a restart between the two
   // adopts the session (`findTaskCommand` above) and must read it in the dialect it was started in.
-  // A task launched by a Lite from before the contract has none, and is read in its app's previous one.
   db.update(tasks).set({ sessionProtocol: protocol }).where(and(eq(tasks.id, task.id), eq(tasks.state, "queued"))).run()
   const files = attachments.attachmentsByIds(task.id, fileIds)
   const attachmentPaths = await attachments.materialize(workerId, task.id, files)
@@ -915,15 +917,14 @@ async function refreshTask(row: Task): Promise<Task> {
   if (row.state !== "running") return row
   if (!row.workerId || !row.commandId) return row
 
-  const project = getProjectRow(row.projectId)
-  const protocol = protocolOf(row, project)
+  const protocol = protocolOf(row)
 
   // The machine before the session. A session is a process in that container, and its command is
   // only reconciled against a `ready` worker — so a container that went down under a running agent
   // left the task `running` for ever (Cloud #391). Cloud fails the task there; Lite runs on
   // computers that restart, and a reboot mid-turn is not a failure of the work: see `machineDown`.
   const worker = await getWorkerLive(row.workerId)
-  const down = machineDown(row, worker ?? null, project)
+  const down = machineDown(row, worker ?? null)
   if (down) {
     const now = new Date()
     const patch: Partial<Task> =
@@ -964,7 +965,7 @@ async function refreshTask(row: Task): Promise<Task> {
   }
   patch.lastRefreshedAt = new Date()
 
-  const verdict = session ? sessionState(row, protocol, session, project) : { state: row.state as TaskState }
+  const verdict = session ? sessionState(row, protocol, session) : { state: row.state as TaskState }
   const state = verdict.state
   if (state !== row.state) {
     lastLiveIngest.delete(row.id)
@@ -997,11 +998,10 @@ async function refreshTask(row: Task): Promise<Task> {
 }
 
 /**
- * Can a reply pick this conversation up again — is there a session id? A task delegated before
- * agent apps could also be resumed by a follow-up command of its project's own.
+ * Can a reply pick this conversation up again — is there a session id?
  */
-function canResumeSession(task: Task, project: Project | undefined): boolean {
-  return events.latestSessionId(task.id) !== null || (!task.agentAppId && !!project?.taskFollowUpCommand?.trim())
+function canResumeSession(task: Task): boolean {
+  return events.latestSessionId(task.id) !== null
 }
 
 /**
@@ -1014,15 +1014,15 @@ function canResumeSession(task: Task, project: Project | undefined): boolean {
  * wakes the machine and continues the conversation (`followUpTask`). Only a conversation nobody
  * can resume is a failure.
  */
-function machineDown(row: Task, worker: Worker | null, project: Project | undefined): { state: "in-review" | "failed"; note: string | null } | null {
+function machineDown(row: Task, worker: Worker | null): { state: "in-review" | "failed"; note: string | null } | null {
   if (!worker) return { state: "failed", note: "The task's machine was deleted while the agent was working." }
   const brokenSetup = worker.state === "error" && worker.setupStatus?.phase === "error"
   if (worker.state !== "stopped" && worker.state !== "error") return null
   if (brokenSetup) return { state: "failed", note: `The task's machine failed while the agent was working${worker.setupStatus?.error ? ` (${worker.setupStatus.error})` : ""}.` }
   const why = worker.state === "error" ? `stopped on its own${worker.error ? ` (${worker.error})` : ""}` : "was stopped (the computer or Docker restarted, or it was stopped by hand)"
   // The turn had already ended: there was nothing left to interrupt — it is plainly in review.
-  if (isInteractive(protocolOf(row, project)) && events.hasEndedTurn(row.id)) return { state: "in-review", note: null }
-  if (!canResumeSession(row, project)) {
+  if (isInteractive(protocolOf(row)) && events.hasEndedTurn(row.id)) return { state: "in-review", note: null }
+  if (!canResumeSession(row)) {
     return { state: "failed", note: `The task's machine ${why} while the agent was working, and this session cannot be resumed.` }
   }
   return {
@@ -1052,14 +1052,13 @@ function sessionState(
   row: Task,
   protocol: AgentProtocol,
   session: { status: string },
-  project: Project | undefined,
 ): { state: TaskState; note?: string } {
   if (session.status !== "running") {
     if (isInteractive(protocol) && events.hasEndedTurn(row.id)) {
       if (session.status !== "succeeded") console.log(`[task:${row.id}] session ${session.status} between turns — the last one ended, in review`)
       return { state: "in-review" }
     }
-    if (session.status === "lost" && canResumeSession(row, project)) {
+    if (session.status === "lost" && canResumeSession(row)) {
       return {
         state: "in-review",
         note: "The agent session was interrupted (its machine restarted) before it handed back. Reply to pick it up where it stopped.",
@@ -1571,7 +1570,7 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
   const current = getRawTask(taskId)
   if (!current) throw new TaskActionError("Not found", 404)
   const project = getProjectRow(current.projectId)
-  const protocol = protocolOf(current, project)
+  const protocol = protocolOf(current)
   // A failed task is answered too, as long as its conversation can be resumed: it is put back in
   // review first (`reopenTask`), then the turn goes the way any other does.
   const allowed: TaskState[] = isInteractive(protocol) ? ["running", "in-review", "failed"] : ["in-review", "failed"]
@@ -1595,7 +1594,7 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
   }
 
   if (task.state !== "in-review") throw new TaskActionError("The session is not listening right now — wait for it to hand back", 409)
-  if (!canResumeSession(task, project ?? undefined)) {
+  if (!canResumeSession(task)) {
     throw new TaskActionError("Nothing to resume: this task's session never said its id, so there is no conversation to pick up again.", 400)
   }
   // Same check as a first run: a harness the project dropped may no longer be in the image.
@@ -1621,9 +1620,8 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
         // branches themselves, in a machine they held alone).
         const sessionId = events.latestSessionId(taskId) ?? ""
         const turn = `${prompt}${attachments.attachmentPreamble(paths)}`
-        const harness = await taskHarness(row, proj)
-        // The new session's dialect, not the finished one's: a task whose last session began on an
-        // app's previous dialect resumes on the contract (RFC 0048 § 9), and is read in it from here.
+        const harness = await taskHarness(row)
+        // The new session's dialect, written with it: the finished one's may predate the contract.
         const sessionProtocol = harness.protocol
         const session = await startAgentSession(
           taskId,
@@ -1679,10 +1677,11 @@ export function reopenBlocker(
   project: Project | undefined,
 ): string | null {
   if (task.state !== "failed") return null
+  if (!task.agentAppId) return NO_AGENT_APP
   if (!task.workerId || !worker) return "its machine no longer exists."
   if (worker.state === "error" && worker.setupStatus?.phase === "error") return "its machine failed to set up — rebuild it from its page, then reply."
   if (!task.commandId) return "its agent session never started, so there is no conversation to resume."
-  if (!canResumeSession(task, project)) return "no session id was captured, so there is no conversation to resume."
+  if (!canResumeSession(task)) return "no session id was captured, so there is no conversation to resume."
   return project ? taskAgentAppBlocker(task, project) : null
 }
 
@@ -1713,20 +1712,39 @@ function reopenTask(task: Task, project: Project | undefined): Task {
  * The harness ends the turn and keeps listening; Drop is the one that kills.
  */
 export async function interruptTask(taskId: string): Promise<Task> {
-  const current = getRawTask(taskId)
-  if (!current) throw new TaskActionError("Not found", 404)
-  const protocol = protocolOf(current, getProjectRow(current.projectId))
-  const line = interruptLine(protocol, `spunto-${Date.now()}`)
+  // The state first: a task with no session yet has no dialect either, and is simply not running.
+  const task = await requireTask(taskId, ["running"])
+  const line = interruptLine(protocolOf(task), `spunto-${Date.now()}`)
   if (!line) {
     throw new TaskActionError(
-      "This project's session cannot be interrupted: it runs a one-shot harness, whose stdin closed with the prompt. Use Drop to stop the task entirely.",
+      "This session cannot be interrupted: it started before the agent contract. Use Drop to stop the task entirely.",
       400,
     )
   }
-  const task = await requireTask(taskId, ["running"])
   const live = await isSessionAlive(task)
   if (!live) throw new TaskActionError("The session is not running", 409)
   await commands.writeTaskStdin(live, line)
+  return task
+}
+
+/**
+ * The member's choice, for a question the agent asked and its turn is waiting on (`question`
+ * event, `pendingQuestion` on the task). Written into the live session as the contract's `answer`
+ * verb; the runner hands it to its harness and restates the question `answered`, which is what the
+ * timeline shows — nothing is recorded here. A plain reply (`followUpTask`) answers too, in words.
+ */
+export async function answerTask(taskId: string, callId: string, answers: QuestionAnswer[]): Promise<Task> {
+  const task = await requireTask(taskId, ["running"])
+  const line = answerLine(protocolOf(task), callId, answers)
+  if (!line) throw new TaskActionError("This session cannot be answered this way: reply in the conversation instead.", 400)
+  if (!events.waitingQuestions(taskId).some((q) => q.callId === callId)) {
+    throw new TaskActionError("The agent is not waiting on this question (answered already, or its turn ended)", 409)
+  }
+  const live = await isSessionAlive(task)
+  if (!live) throw new TaskActionError("The session is not running", 409)
+  await commands.writeTaskStdin(live, line)
+  db.update(tasks).set({ lastActivityAt: new Date() }).where(eq(tasks.id, taskId)).run()
+  console.log(`[task:${taskId}] answer to ${callId} sent to the live session`)
   return task
 }
 
