@@ -165,7 +165,8 @@ with their SDKs' install scripts and model catalogs) from
 [`@spunto/agent-runners`](https://www.npmjs.com/package/@spunto/agent-runners), and the contract
 they speak and its parsing from `@spunto/build/agent-contract` and `agent-stream`, all shared with
 Spunto Cloud. When Claude asks a multiple-choice question, the conversation shows it as options and
-the turn waits for your answer. Details, and what differs from the Cloud
+the turn waits for your answer. An agent can also **delegate sub-tasks** and follow them, through
+Lite's own MCP server (`spunto-tasks`), given to every session. Details, and what differs from the Cloud
 version: [`docs/taches.md`](docs/taches.md).
 
 What they consumed — cost, tokens, turns, tools, per day, task, project, agent and model — is on

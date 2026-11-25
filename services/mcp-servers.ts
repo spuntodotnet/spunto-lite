@@ -132,6 +132,8 @@ function checkUrl(raw: string): string {
 export async function createServer(input: CreateServerInput): Promise<McpServer> {
   const name = input.name.trim().toLowerCase()
   if (!MCP_SERVER_NAME.test(name)) throw new McpServerError("A name is lowercase letters, digits and dashes (up to 40)")
+  // Lite's own server, in every session (sub-tasks): a second one by that name would shadow it.
+  if (name === "spunto-tasks") throw new McpServerError(`"${name}" is Lite's own server — pick another name`, 409)
   const url = checkUrl(input.url.trim())
   const taken = () => {
     if (db.select({ id: mcpServers.id }).from(mcpServers).where(eq(mcpServers.name, name)).get()) {

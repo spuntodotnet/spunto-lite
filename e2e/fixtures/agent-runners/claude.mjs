@@ -9,7 +9,9 @@
 // and names the
 // conversation when asked. Told "question" (under SPUNTO_AGENT_QUESTIONS=1), it asks one, the way
 // Claude's `AskUserQuestion` does, and waits: an `answer` closes it `answered`, a message
-// `dismissed` — the message is the answer, in words. Told "mcp", it lists the tools of every MCP server it was given
+// `dismissed` — the message is the answer, in words. Told "delegate", it starts a sub-task through
+// Lite's own `spunto-tasks` server; told by Spunto that a sub-task handed back (« [Spunto] Sub-task
+// … in-review »), it reads its report and accepts it. Told "mcp", it lists the tools of every MCP server it was given
 // (SPUNTO_AGENT_MCP), through Lite's gateway, the way the real runner's SDK would reach them.
 //
 // Lite bundles and runs it instead of the real runner when started with
@@ -46,6 +48,20 @@ function handle(text) {
     out({ type: "session.started", harness: "claude-code", model, sessionId, cwd: process.cwd(), tools: ["Bash"], source: init })
   }
   turn++
+  const signal = /^\[Spunto\] Sub-task (\S+) .* is now in-review/.exec(text)
+  if (signal) {
+    const id = signal[1]
+    tasksTool("get_subtask", { taskId: id })
+      .then((sub) => tasksTool("validate_subtask", { taskId: id }).then(() => finish(`Accepted sub-task ${id}: ${sub.lastMessages?.[0] ?? "(no report)"}`)))
+      .catch((e) => finish(`Could not accept sub-task ${id}: ${e.message}`))
+    return
+  }
+  if (/\bdelegate\b/i.test(text)) {
+    tasksTool("create_subtask", { prompt: "Write a child note", title: "Child of " + process.env.SPUNTO_TASK_ID })
+      .then((sub) => finish(`Delegated sub-task ${sub.id}.`))
+      .catch((e) => finish(`Could not delegate: ${e.message}`))
+    return
+  }
   if (/\bmcp\b/i.test(text)) {
     listMcpTools().then((lines) => finish(lines.join("\n") || "No MCP server given."))
     return
@@ -76,6 +92,22 @@ function handle(text) {
   try { result = execSync(cmd, { encoding: "utf8" }) } catch (e) { result = String(e.stderr || e.message); isError = true }
   out({ type: "tool.result", callId: `t${turn}`, isError, output: result })
   finish(`Committed \`${file}\` on ${execSync("git branch --show-current", { encoding: "utf8" }).trim()}.`)
+}
+
+/** Call a tool of Lite's `spunto-tasks` server, the way the SDK would — and read its JSON answer. */
+async function tasksTool(name, args) {
+  const server = JSON.parse(process.env.SPUNTO_AGENT_MCP || "[]").find((s) => s.name === "spunto-tasks")
+  if (!server) throw new Error("no spunto-tasks server given")
+  const api = (process.env.SPUNTO_API_URL || "").replace(/\/$/, "")
+  const res = await fetch(api + server.path, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${process.env.SPUNTO_WORKER_TOKEN}` },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+  })
+  const json = await res.json()
+  const text = json.result?.content?.[0]?.text ?? JSON.stringify(json.error)
+  if (json.result?.isError || !json.result) throw new Error(text)
+  return JSON.parse(text)
 }
 
 async function listMcpTools() {

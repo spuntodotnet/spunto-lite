@@ -11,9 +11,16 @@ mêmes volumes, même clé, rien à migrer à la main.
 
 ## 2026-11-25
 
-**L’agent peut vous poser une question, et ses sous-agents ont leur bloc**
+**L’agent peut vous poser une question, déléguer des sous-tâches, et ses sous-agents ont leur bloc**
 
 ### Nouveau
+
+- **Les sous-tâches.** Un agent peut déléguer des parties de son travail à des sous-tâches, chacune
+  avec son worker et son agent, et les suivre : il est prévenu quand l’une rend la main, lit son
+  compte rendu et son diff, puis l’accepte, lui répond ou l’abandonne. Le parent les liste dans un
+  bloc **Sub-tasks**, et chacune renvoie à lui. [Détails](/fr/docs/agents#sous-tâches)
+- **Recommencer.** Une tâche qui a échoué avant que son agent ne démarre (son worker n’a jamais
+  démarré) se recommence : `POST /api/tasks/:id/retry`.
 
 - **Les questions de l’agent.** Quand Claude Code pose une question à choix, elle s’affiche dans la
   conversation sous forme d’options à cliquer, et la tâche porte **Asks you** dans les listes.

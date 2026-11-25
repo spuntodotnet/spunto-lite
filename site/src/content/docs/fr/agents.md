@@ -76,6 +76,18 @@ Quand Claude lance des **sous-agents**, ils sont regroupés sous l’appel qui l
 compacte son contexte, la conversation affiche un repère discret *Context compacted* au lieu du
 résumé.
 
+### Sous-tâches
+
+Un agent peut découper son travail : il **délègue des sous-tâches**, chacune avec son worker et son
+agent, et les suit jusqu’au bout. Il passe pour cela par le serveur MCP de Lite lui-même,
+`spunto-tasks`, que reçoit chaque session. Il est prévenu quand une sous-tâche rend la main ou
+échoue, lit son compte rendu et son diff, puis l’accepte, lui répond ou l’abandonne.
+
+Une sous-tâche est une tâche comme les autres. Sa page affiche **Delegated by task**, qui renvoie
+au parent. Le parent liste ses sous-tâches dans un bloc **Sub-tasks**, et les listes marquent l’un
+et l’autre. Par l’API : `parentTaskId` à la délégation, et `GET /api/tasks?parentTaskId=` pour
+lister une famille.
+
 La colonne de détails réunit les faits sur la tâche : la machine (sa page, ses ports nommés,
 Park / Wake), les chiffres de la session (contexte, tokens, coût, tours), ce que Claude Code
 rapporte sur lui-même (quota du forfait, serveurs MCP, skills…), les pull requests et liens partagés

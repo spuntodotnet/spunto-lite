@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm"
-import { MCP_ENV, STREAM_ENV } from "@spunto/build/agent-contract"
+import { MCP_ENV, STREAM_ENV, type AgentMcpServer } from "@spunto/build/agent-contract"
 import {
   answerLine,
   interruptLine,
@@ -10,7 +10,7 @@ import {
   type QuestionAnswer,
 } from "@spunto/build/agent-stream"
 import { db } from "../db/index"
-import { projects, tasks, workers, type Project, type Task, type TaskCommand, type Worker } from "../db/schema"
+import { projects, taskEvents, tasks, workers, type Project, type Task, type TaskCommand, type Worker } from "../db/schema"
 import { newId } from "../lib/id"
 import { shellQuote } from "../lib/shell"
 import { internalUrl } from "../lib/agent"
@@ -290,6 +290,7 @@ export function serializeTask(row: Task) {
     // The question the agent waits on, if any — the first it asked (Cloud #856). Only a running
     // task's agent can be waiting: one in review has handed back.
     pendingQuestion: row.state === "running" ? events.waitingQuestions(row.id)[0] ?? null : null,
+    subtaskCount: subtaskCount(row.id),
   }
 }
 
@@ -301,9 +302,11 @@ export function serializeTaskDetail(row: Task) {
   const blocker = row.state === "failed" ? reopenBlocker(row, row.workerId ? getWorkerRow(row.workerId) : null, getProjectRow(row.projectId)) : null
   return {
     ...serializeTask(row),
+    retryBlocker: row.state === "failed" ? retryBlocker(row) : null,
     canResume: events.latestSessionId(row.id) !== null,
     canReopen: row.state === "failed" && blocker === null,
     reopenBlocker: blocker,
+    parent: parentSummary(row),
   }
 }
 
@@ -321,6 +324,7 @@ export class TaskActionError extends Error {
 export function createTask(projectId: string, input: CreateTaskInput): Task {
   const project = getProjectRow(projectId)
   if (!project) throw new TaskActionError("Project not found", 404)
+  const parentTaskId = input.parentTaskId ? subtaskParent(input.parentTaskId).id : null
   // The harness, then what it runs: a model id and a parameter only mean something to their app.
   let agentAppId: string
   let model: string | null
@@ -373,12 +377,170 @@ export function createTask(projectId: string, input: CreateTaskInput): Task {
     completedAt: null,
     links: input.links ?? [],
     metadata: input.metadata ?? {},
+    parentTaskId,
+    parentSignalKey: null,
   }
   db.insert(tasks).values(row).run()
   // Stored now so they travel with the job: the worker they go into does not exist yet.
   const files = attachments.storeFiles(id, null, "user", input.files ?? [])
   void runJob(id, "run", () => runTask(id, files.map((f) => f.id)), (error) => failTask(id, error))
   return row
+}
+
+// ─── Sub-tasks (docs/taches.md § « Sous-tâches », Cloud #810, #817) ────────────
+
+/** How deep a family goes — a sub-task of a sub-task of a sub-task, and no further. */
+export const MAX_SUBTASK_DEPTH = 3
+/** How many sub-tasks one task may delegate. */
+export const MAX_SUBTASKS_PER_TASK = 20
+
+/**
+ * The task a new one is attached under, or a 400 saying why it cannot be: it must exist, not be
+ * too deep, and not already carry its share of sub-tasks. Any project: Lite is one organization.
+ */
+function subtaskParent(parentTaskId: string): Task {
+  const parent = getRawTask(parentTaskId)
+  if (!parent) throw new TaskActionError("Parent task not found", 400)
+  // Its depth: how many parents it has above it. A family is shallow, so walking it is a few reads.
+  let depth = 1
+  for (let up = parent.parentTaskId; up && depth <= MAX_SUBTASK_DEPTH; depth++) {
+    up = db.select({ parentTaskId: tasks.parentTaskId }).from(tasks).where(eq(tasks.id, up)).get()?.parentTaskId ?? null
+  }
+  if (depth > MAX_SUBTASK_DEPTH) throw new TaskActionError(`Sub-tasks go ${MAX_SUBTASK_DEPTH} levels deep at most`, 400)
+  const n = Number(db.select({ n: sql<number>`count(*)` }).from(tasks).where(eq(tasks.parentTaskId, parentTaskId)).get()?.n ?? 0)
+  if (n >= MAX_SUBTASKS_PER_TASK) throw new TaskActionError(`A task has ${MAX_SUBTASKS_PER_TASK} sub-tasks at most`, 400)
+  return parent
+}
+
+/** How many sub-tasks a task delegated — drawn as a count on its row. */
+function subtaskCount(taskId: string): number {
+  return Number(db.select({ n: sql<number>`count(*)` }).from(tasks).where(eq(tasks.parentTaskId, taskId)).get()?.n ?? 0)
+}
+
+/** The parent of a task, as its detail links back up to it. */
+function parentSummary(row: Task): { id: string; projectId: string; title: string; state: string } | null {
+  if (!row.parentTaskId) return null
+  return (
+    db
+      .select({ id: tasks.id, projectId: tasks.projectId, title: tasks.title, state: tasks.state })
+      .from(tasks)
+      .where(eq(tasks.id, row.parentTaskId))
+      .get() ?? null
+  )
+}
+
+/**
+ * The last messages a task's agent wrote — what it has to say about its work, newest last. Its
+ * own, not a subagent's (`parentCallId`): those are reports to the agent, not to whoever asks.
+ */
+export function lastAgentMessages(taskId: string, count: number): string[] {
+  return db
+    .select({ payload: taskEvents.payload })
+    .from(taskEvents)
+    .where(
+      and(
+        eq(taskEvents.taskId, taskId),
+        eq(taskEvents.type, "message"),
+        sql`json_extract(${taskEvents.payload}, '$.role') = 'assistant'`,
+        sql`json_extract(${taskEvents.payload}, '$.parentCallId') IS NULL`,
+      ),
+    )
+    .orderBy(desc(taskEvents.seq))
+    .limit(count)
+    .all()
+    .map((r) => String(r.payload.text ?? ""))
+    .filter(Boolean)
+    .reverse()
+}
+
+/** What a parent hears about: a sub-task handing back (its report is in), or failing (nothing more is coming). */
+export type HandBack = "in-review" | "failed"
+
+/** Marks the turn on the parent's timeline as the platform's, not a human's. */
+export const SUBTASK_SIGNAL_MARKER = "subtask-signal"
+
+/** How much of the sub-task's report goes into the message — enough to triage, `get_subtask` for the rest. */
+const SIGNAL_EXCERPT_CHARS = 800
+
+/**
+ * A sub-task just handed back or failed: tell its parent's session, rather than have it poll.
+ * Called on the transition itself, so never for the parent's own moves — a task only ever tells
+ * the one above it, and a family is a tree: no loop to close.
+ *
+ * **Once per passage.** The claim is a conditional write of `parent_signal_key`, keyed on the turn
+ * the sub-task is answering (the seq of its last human — or parent — turn): two reads deriving the
+ * same transition at once send one message, and the next round trip sends its own. Best effort, in
+ * the background — a parent not told is a parent that polls, never a failed refresh.
+ */
+export function signalParent(child: Pick<Task, "id" | "parentTaskId" | "startedAt">, state: HandBack): void {
+  if (!child.parentTaskId) return
+  try {
+    const turn = db
+      .select({ seq: sql<number | null>`max(${taskEvents.seq})` })
+      .from(taskEvents)
+      .where(and(eq(taskEvents.taskId, child.id), eq(taskEvents.type, "message"), sql`json_extract(${taskEvents.payload}, '$.role') = 'user'`))
+      .get()
+    const key = `${state}:${turn?.seq ?? 0}:${child.startedAt?.getTime() ?? ""}`
+    const { changes } = db
+      .update(tasks)
+      .set({ parentSignalKey: key })
+      .where(and(eq(tasks.id, child.id), or(isNull(tasks.parentSignalKey), ne(tasks.parentSignalKey, key))))
+      .run()
+    if (changes === 0) return
+    void tellParent(child.id, child.parentTaskId, state)
+  } catch (err) {
+    console.warn(`[task:${child.id}] could not signal parent ${child.parentTaskId}: ${(err as Error)?.message ?? err}`)
+  }
+}
+
+/** The message a parent's session reads — said by the platform, with what to call next. */
+export function subtaskSignalText(child: Pick<Task, "id" | "title" | "error">, state: HandBack, report: string | null): string {
+  const clip = (text: string) => (text.length > SIGNAL_EXCERPT_CHARS ? `${text.slice(0, SIGNAL_EXCERPT_CHARS).trimEnd()}…` : text)
+  const quote = (text: string) => clip(text.trim()).split("\n").map((l) => `> ${l}`).join("\n")
+  const head = `[Spunto] Sub-task ${child.id} « ${child.title} » `
+  if (state === "in-review") {
+    return [
+      `${head}is now in-review: its agent finished its turn and handed back.`,
+      report ? `Its last message (excerpt):\n${quote(report)}` : "It wrote no message.",
+      "Read its full report with `get_subtask`, then `validate_subtask` to accept it, `message_subtask` to answer it, or `cancel_subtask` to drop it.",
+    ].join("\n\n")
+  }
+  return [
+    `${head}failed${child.error ? `: ${clip(child.error)}` : "."}`,
+    report ? `Its last message (excerpt):\n${quote(report)}` : null,
+    "Nothing more will come from it on its own. `get_subtask` to read what it did, `retry_subtask` if it never got going, `message_subtask` to pick its conversation back up.",
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+}
+
+/** Lite's stand-in for Cloud's `task.signal-parent` job: a few tries while the parent is busy with another reply. */
+const SIGNAL_ATTEMPTS = 5
+const SIGNAL_RETRY_MS = 3_000
+
+async function tellParent(childId: string, parentTaskId: string, state: HandBack): Promise<void> {
+  for (let attempt = 1; attempt <= SIGNAL_ATTEMPTS; attempt++) {
+    const [child, parent] = [getRawTask(childId), getRawTask(parentTaskId)]
+    if (!child || !parent) return console.log(`[task:${childId}] signal to parent: parent or sub-task gone — skipping`)
+    // A parent that is over is not woken by its children: answering it would reopen it, which is a
+    // human's call. Still queued: no session yet.
+    if (parent.state === "done" || parent.state === "failed" || parent.state === "queued") {
+      return console.log(`[task:${childId}] signal to parent ${parent.id}: the parent is ${parent.state} — not sent`)
+    }
+    const report = lastAgentMessages(child.id, 1)[0] ?? null
+    const marker = { auto: SUBTASK_SIGNAL_MARKER, subtask: { id: child.id, title: child.title, state } }
+    try {
+      await followUpTask(parent.id, subtaskSignalText(child, state, report), [], marker)
+      return console.log(`[task:${childId}] parent ${parent.id} told: ${state}`)
+    } catch (err) {
+      // Another reply on its way to the parent (a sibling's signal, a human): try again once it is in.
+      const busy = err instanceof TaskActionError && err.status === 409
+      if (!busy || attempt === SIGNAL_ATTEMPTS) {
+        return console.log(`[task:${childId}] signal to parent ${parent.id}: not sent — ${(err as Error)?.message ?? err}`)
+      }
+      await new Promise((r) => setTimeout(r, SIGNAL_RETRY_MS))
+    }
+  }
 }
 
 /**
@@ -404,13 +566,16 @@ export function getRawTask(id: string): Task | undefined {
   return db.select().from(tasks).where(eq(tasks.id, id)).get()
 }
 
-function failTask(taskId: string, error: string): void {
+function failTask(taskId: string, error: string, opts: { signalParent?: boolean } = {}): void {
+  const before = getRawTask(taskId)
   const now = new Date()
   db.update(tasks)
     .set({ state: "failed", error: error.slice(0, 2000), completedAt: now, lastActivityAt: now })
     .where(eq(tasks.id, taskId))
     .run()
   releaseWorker(taskId)
+  // Dropped by its parent's own session (`cancel_subtask`): the parent knows, it is not told.
+  if (before && before.state !== "failed" && opts.signalParent !== false) signalParent(before, "failed")
 }
 
 function projectOf(task: Task): Project {
@@ -563,18 +728,26 @@ async function startAgentSession(
   recordedText: string,
   input: Omit<commands.RunInput, "stdin">,
   recordedFiles: StoredFile[] = [],
+  marker: Record<string, unknown> = {},
 ): Promise<TaskCommand> {
   const session = await commands.startTaskCommand(taskId, workerId, { ...input, stdin: isInteractive(protocol) })
-  recordUserTurn(taskId, session.id, protocol, recordedText, recordedFiles)
+  recordUserTurn(taskId, session.id, protocol, recordedText, recordedFiles, marker)
   if (isInteractive(protocol)) await commands.writeTaskStdin(session, userTurnLine(protocol, stdinText))
   return session
 }
 
 /** Put what the human said into the timeline — a harness does not echo its stdin. */
-function recordUserTurn(taskId: string, commandId: string, protocol: AgentProtocol, text: string, files: StoredFile[] = []): void {
+function recordUserTurn(
+  taskId: string,
+  commandId: string,
+  protocol: AgentProtocol,
+  text: string,
+  files: StoredFile[] = [],
+  marker: Record<string, unknown> = {},
+): void {
   if (protocol === "none") return
   try {
-    events.appendPlatformEvent(taskId, commandId, "message", { role: "user", text, ...(files.length > 0 ? { files } : {}) })
+    events.appendPlatformEvent(taskId, commandId, "message", { role: "user", text, ...marker, ...(files.length > 0 ? { files } : {}) })
   } catch (err) {
     console.warn(`[task:${taskId}] could not record the user's turn: ${err}`)
   }
@@ -773,29 +946,29 @@ function taskCommandEnv(row: Task, sessionStatus?: string): Record<string, strin
 
 /**
  * What a session's process gets on top of `taskCommandEnv`: its harness's (the runner's text and
- * the task's parameters), the token streaming switch and, when the project has MCP servers on, where to reach them (RFC 0049).
+ * the task's parameters), the token streaming switch, and its MCP servers (RFC 0049): the project's
+ * through Lite's gateway, plus Lite's own `spunto-tasks` (sub-tasks, `task-subtasks-mcp.ts`).
  * The runner resolves each server's `path` on `SPUNTO_API_URL` and calls it with
- * `SPUNTO_WORKER_TOKEN` — here a token minted for this task, which only the gateway accepts: the
- * machine never holds a vendor's token. Resolved at every session start, so a server connected
- * since the last turn is there at the next one. Best effort, like the secrets.
+ * `SPUNTO_WORKER_TOKEN` — here a token minted for this task, which only Lite accepts: the machine
+ * never holds a vendor's token. Resolved at every session start, so a server connected since the
+ * last turn is there at the next one. Best effort, like the secrets.
  */
 function sessionEnv(row: Task, harness: Harness): Record<string, string> {
-  let mcp: Record<string, string> = {}
-  if (harness.appId) {
-    try {
-      const servers = taskMcpServers(row.projectId)
-      if (servers.length) {
-        mcp = { [MCP_ENV]: JSON.stringify(servers), SPUNTO_API_URL: internalUrl(), SPUNTO_WORKER_TOKEN: mintMcpGatewayToken(row.id, row.projectId) }
-      }
-    } catch (err) {
-      console.warn(`[task:${row.id}] could not resolve MCP servers: ${err}`)
-    }
+  let servers: AgentMcpServer[] = [SUBTASKS_MCP_SERVER]
+  try {
+    servers = [...taskMcpServers(row.projectId).filter((s) => s.name !== SUBTASKS_MCP_SERVER.name), SUBTASKS_MCP_SERVER]
+  } catch (err) {
+    console.warn(`[task:${row.id}] could not resolve MCP servers: ${err}`)
   }
+  const mcp = { [MCP_ENV]: JSON.stringify(servers), SPUNTO_API_URL: internalUrl(), SPUNTO_WORKER_TOKEN: mintMcpGatewayToken(row.id, row.projectId) }
   // Every session streams the tokens of its messages (Cloud 0b31082b, no flag any more): a runner
   // then prints `message.delta` lines, folded into the draft the timeline shows while the agent
-  // writes (`taskDraft`). A CLI from before agent apps ignores it.
+  // writes (`taskDraft`).
   return { ...taskCommandEnv(row), ...harness.env, ...mcp, [STREAM_ENV]: "1" }
 }
+
+/** Lite's own MCP server, in every session: delegating sub-tasks and following them (Cloud's `SUBTASKS_MCP_SERVER`). */
+export const SUBTASKS_MCP_SERVER: AgentMcpServer = { name: "spunto-tasks", path: "/api/task-mcp" }
 
 // ─── Read paths: derive, don't poll ───────────────────────────────────────────
 
@@ -810,6 +983,8 @@ export type TaskQuery = {
    * lists only them. A lookup by `metadata` keeps both sides unless it says.
    */
   onHold?: boolean
+  /** Only the sub-tasks of this task — its family, on hold or not. */
+  parentTaskId?: string
   limit?: number
   offset?: number
 }
@@ -834,6 +1009,7 @@ export async function listAllTasks(q: TaskQuery = {}) {
   const filters = []
   if (q.projectId) filters.push(eq(tasks.projectId, q.projectId))
   if (q.metadata && Object.keys(q.metadata).length > 0) filters.push(metadataContains(q.metadata))
+  if (q.parentTaskId) filters.push(eq(tasks.parentTaskId, q.parentTaskId))
   // `LIKE` is case-insensitive for ASCII in SQLite — what a search box needs. `%`/`_` are escaped.
   if (q.query?.trim()) {
     const pattern = `%${q.query.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`
@@ -841,7 +1017,7 @@ export async function listAllTasks(q: TaskQuery = {}) {
   }
   // Counted under the same filters, whichever side is listed: what the « On hold » switch shows.
   const onHoldScope = and(...filters, ON_HOLD)
-  const byMetadata = !!q.metadata && Object.keys(q.metadata).length > 0
+  const byMetadata = (!!q.metadata && Object.keys(q.metadata).length > 0) || !!q.parentTaskId
   const onHold = q.onHold ?? (byMetadata ? undefined : false)
   if (onHold !== undefined) filters.push(onHold ? ON_HOLD : NOT_ON_HOLD)
   const scoped = filters.length > 0 ? and(...filters) : undefined
@@ -940,6 +1116,7 @@ async function refreshTask(row: Task): Promise<Task> {
     lastLiveIngest.delete(row.id)
     console.warn(`[task:${row.id}] ${down.note ?? "machine down after the turn ended"} (worker ${row.workerId}: ${worker?.state ?? "gone"}) → ${down.state}`)
     if (down.state === "failed") releaseWorker(row.id)
+    signalParent({ ...row, ...patch }, down.state)
     return { ...row, ...patch }
   }
 
@@ -991,6 +1168,8 @@ async function refreshTask(row: Task): Promise<Task> {
   if (patch.state === "in-review") void settleTask(row.id)
   // A session that died lands straight in `failed`: its machine goes back to the pool, parked.
   if (patch.state === "failed") releaseWorker(row.id)
+  // A sub-task handing back, or dying, is news its parent is waiting on: its session gets a message.
+  if (patch.state === "in-review" || patch.state === "failed") signalParent({ ...row, ...patch }, patch.state)
   const fresh = { ...row, ...patch }
   // The ingestion above may have renamed the task (the session named itself).
   const now = getRawTask(row.id)
@@ -1373,7 +1552,11 @@ export async function validateTask(taskId: string): Promise<Task> {
  * Drop: kill the session first (cleanup must not race an agent still committing), run the
  * project's cleanup if any, and fail the task with the reason — "cancelled" is not a sixth state.
  */
-export async function cancelTask(taskId: string): Promise<Task> {
+export async function cancelTask(
+  taskId: string,
+  /** Dropped by its parent's own session (`cancel_subtask`): the parent knows, it is not told. */
+  opts: { byParent?: boolean } = {},
+): Promise<Task> {
   await requireTask(taskId, ["queued", "running", "in-review"])
   const claimed = claimPending(taskId, "dropping")
   clearHold(taskId)
@@ -1396,13 +1579,13 @@ export async function cancelTask(taskId: string): Promise<Task> {
             note = `Cancelled — cleanup could not run: ${(err as Error).message}`
           }
         }
-        failTask(taskId, note)
+        failTask(taskId, note, { signalParent: !opts.byParent })
       } finally {
         clearPending(taskId, "dropping")
       }
     },
     // The reader asked for it to be over; a live task with a silent error would block the pool.
-    (error) => failTask(taskId, `Cancelled — the drop failed: ${error}`),
+    (error) => failTask(taskId, `Cancelled — the drop failed: ${error}`, { signalParent: !opts.byParent }),
   )
   return claimed
 }
@@ -1566,7 +1749,16 @@ async function isSessionAlive(task: Task): Promise<TaskCommand | null> {
  * the session holding the context gets it, even mid-turn. Otherwise a new turn resumes the
  * session in the same worker (woken first if parked), on whatever the checkout holds.
  */
-export async function followUpTask(taskId: string, prompt: string, files: InlineFile[] = []): Promise<Task> {
+export async function followUpTask(
+  taskId: string,
+  prompt: string,
+  files: InlineFile[] = [],
+  /**
+   * Written on the turn's timeline event, next to `role: "user"`: who other than a human spoke —
+   * `{ auto: "subtask-signal", subtask }` for the platform telling a parent (`signalParent`).
+   */
+  marker: Record<string, unknown> = {},
+): Promise<Task> {
   const current = getRawTask(taskId)
   if (!current) throw new TaskActionError("Not found", 404)
   const project = getProjectRow(current.projectId)
@@ -1583,7 +1775,7 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
   if (live) {
     const stored = attachments.storeFiles(task.id, live.id, "user", files)
     const paths = await attachments.materialize(task.workerId, task.id, attachments.attachmentsByIds(task.id, stored.map((f) => f.id)))
-    recordUserTurn(task.id, live.id, protocol, prompt, stored)
+    recordUserTurn(task.id, live.id, protocol, prompt, stored, marker)
     await commands.writeTaskStdin(live, userTurnLine(protocol, `${prompt}${attachments.attachmentPreamble(paths)}`))
     // Somebody answered: the countdown to a park is off. The next review starts its own.
     clearScheduledPark(taskId)
@@ -1637,6 +1829,7 @@ export async function followUpTask(taskId: string, prompt: string, files: Inline
             label: "Follow-up",
           },
           stored,
+          marker,
         )
         db.update(tasks)
           .set({ commandId: session.id, sessionProtocol, state: "running", error: null, completedAt: null, lastActivityAt: new Date() })
@@ -1746,6 +1939,57 @@ export async function answerTask(taskId: string, callId: string, answers: Questi
   db.update(tasks).set({ lastActivityAt: new Date() }).where(eq(tasks.id, taskId)).run()
   console.log(`[task:${taskId}] answer to ${callId} sent to the live session`)
   return task
+}
+
+/**
+ * Why a failed task cannot be started over — or null when it can (Cloud's `retryBlocker`).
+ * Retrying is for the task that **never got a conversation going**: its worker did not come up, the
+ * harness died before saying who it was. One whose session started is answered instead
+ * (`reopenBlocker`): starting it over would throw away a conversation.
+ */
+export function retryBlocker(task: Task): string | null {
+  if (task.state !== "failed") return "only a failed task can be retried."
+  if (!task.agentAppId) return NO_AGENT_APP
+  if (events.latestSessionId(task.id)) return "its agent session started — answer it to pick the conversation back up."
+  return null
+}
+
+/**
+ * Start a failed task over, from the top: same row, same prompt, same harness, the opening
+ * prompt's files — a worker from the pool and a fresh session, through the same run a new task
+ * goes through. Moved `failed` → `queued` by a guarded update, so two clicks start one run.
+ */
+export async function retryTask(taskId: string): Promise<Task> {
+  const task = await requireTask(taskId, ["failed"])
+  const blocked = retryBlocker(task)
+  if (blocked) throw new TaskActionError(`This task cannot be retried: ${blocked}`, 409)
+  if (task.pendingAction) throw new TaskActionError(`Cannot retry while ${task.pendingAction} this task`, 409)
+  const now = new Date()
+  const { changes } = db
+    .update(tasks)
+    .set({
+      state: "queued",
+      workerId: null,
+      commandId: null,
+      sessionProtocol: null,
+      error: null,
+      startedAt: null,
+      completedAt: null,
+      lastRefreshedAt: null,
+      lastActivityAt: now,
+      // The next session writes a new stdout from byte 0; `seq` keeps counting.
+      eventsOffset: 0,
+      eventsCommandId: null,
+      // A new attempt: how it ends is news to a parent again, even with no new turn in between.
+      parentSignalKey: null,
+    })
+    .where(and(eq(tasks.id, taskId), eq(tasks.state, "failed")))
+    .run()
+  if (changes === 0) throw new TaskActionError("The task moved meanwhile — reload it and try again", 409)
+  const fileIds = attachments.openingFileIds(taskId)
+  void runJob(taskId, "run", () => runTask(taskId, fileIds), (error) => failTask(taskId, error))
+  console.log(`[task:${taskId}] failed → retried from the top`)
+  return getRawTask(taskId)!
 }
 
 /** Delete a task and its history. The worker stays — it belongs to the pool. */

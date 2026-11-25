@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm"
-import { sqliteTable, text, integer, real, blob, primaryKey, index, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, real, blob, primaryKey, index, uniqueIndex, type AnySQLiteColumn } from "drizzle-orm/sqlite-core"
 import type { SharedVolume } from "../lib/shared-volumes"
 import type { PortsAttributes } from "../lib/ports"
 import type { BuildStep } from "@spunto/build/steps"
@@ -386,8 +386,24 @@ export const tasks = sqliteTable(
     // (string pairs nobody interprets, which a list can be filtered on — `?metadata[cardId]=…`).
     links: text("links", { mode: "json" }).$type<TaskLink[]>().notNull().default(sql`'[]'`),
     metadata: text("metadata", { mode: "json" }).$type<Record<string, string>>().notNull().default(sql`'{}'`),
+    // ---- Sub-tasks (docs/taches.md § « Sous-tâches », Cloud #810, #817) ----
+    /**
+     * The task that delegated this one — set at creation, never changed. Null = a task of its own.
+     * A parent's session delegates through the `spunto-tasks` MCP server; any project may hold
+     * the child. Gone with its parent? The child stays, unattached.
+     */
+    parentTaskId: text("parent_task_id").references((): AnySQLiteColumn => tasks.id, { onDelete: "set null" }),
+    /**
+     * The last hand-back the parent was told of (`signalParent`): `<state>:<seq of the last turn>:<startedAt>`.
+     * A conditional write of it is the claim, so one passage sends one message.
+     */
+    parentSignalKey: text("parent_signal_key"),
   },
-  (t) => [index("tasks_project_activity_idx").on(t.projectId, t.lastActivityAt), index("tasks_state_idx").on(t.state)],
+  (t) => [
+    index("tasks_project_activity_idx").on(t.projectId, t.lastActivityAt),
+    index("tasks_state_idx").on(t.state),
+    index("tasks_parent_idx").on(t.parentTaskId),
+  ],
 )
 
 /**

@@ -11,9 +11,16 @@ migrate by hand.
 
 ## 2026-11-25
 
-**The agent can ask you, and its subagents get their own block**
+**The agent can ask you, delegate sub-tasks, and its subagents get their own block**
 
 ### New
+
+- **Sub-tasks.** An agent can delegate parts of its work to sub-tasks, each with its own worker and
+  agent, and follow them: it is told when one hands back, reads its report and diff, then accepts,
+  answers or drops it. The parent lists them in a **Sub-tasks** block, and each links back to it.
+  [Details](/docs/agents#sub-tasks)
+- **Retry.** A task that failed before its agent got going (its worker never came up) can be
+  started over: `POST /api/tasks/:id/retry`.
 
 - **Questions from the agent.** When Claude Code asks a multiple-choice question, it appears in the
   conversation as options to click, and the task shows **Asks you** in the lists. Answer in a

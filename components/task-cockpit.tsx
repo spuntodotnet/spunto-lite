@@ -24,13 +24,14 @@ import {
   type TaskDraft,
   type TaskEvent,
   type TaskFilePatch,
+  type TaskRelative,
   type TaskSessionUsageData,
   type TaskSharedData,
 } from "@spunto/design-system/tasks"
 import type { WorkerStats } from "@spunto/design-system/workers"
 import { api } from "@/lib/api"
 import { nextLink } from "@/lib/link-render"
-import { patchTaskLists, taskKey, taskPollInterval, type Task } from "@/lib/task-cache"
+import { patchTaskLists, taskKey, taskPollInterval, type Task, type TasksPage } from "@/lib/task-cache"
 import type { Worker } from "@/lib/types"
 import { useTaskActions } from "@/hooks/use-task-actions"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -69,6 +70,41 @@ type EventsPage = {
  * — and only for as long as there is a draft, so a quiet session still costs one read every 2 s.
  */
 const DRAFT_POLL_MS = 700
+
+/** Where a task of the family opens: the agent cockpit, whatever project it lives in (Cloud #818). */
+const agentsTaskHref = (taskId: string) => `/agents?task=${taskId}`
+
+/**
+ * The tasks this one delegated (docs/taches.md § « Sous-tâches ») — the orchestrator's view of its
+ * threads. Only read when the task says it has some (`subtaskCount`), on a quick beat while one of
+ * them is still moving and a slow one while only the parent is, and not at all once everything is
+ * over: a family that finished cannot change.
+ */
+function useTaskSubtasks(task: Task | undefined): TaskRelative[] {
+  const parentLive = !!task && (task.state === "queued" || task.state === "running" || task.state === "in-review")
+  const { data } = useQuery({
+    queryKey: ["task-subtasks", task?.id],
+    queryFn: () => api.get<TasksPage>(`/api/tasks?parentTaskId=${encodeURIComponent(task!.id)}&limit=100`),
+    enabled: !!task && (task.subtaskCount ?? 0) > 0,
+    refetchInterval: (q) => {
+      const rows = q.state.data?.tasks ?? []
+      if (rows.some((t) => t.state === "queued" || t.state === "running")) return 5_000
+      return parentLive ? 30_000 : false
+    },
+  })
+  return (data?.tasks ?? [])
+    .slice()
+    // Delegation order: the family reads as the plan it was made from, not re-sorted by activity.
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+    .map((t) => ({
+      id: t.id,
+      title: t.title,
+      state: t.state,
+      machine: t.machine,
+      pendingAction: t.pendingAction,
+      href: agentsTaskHref(t.id),
+    }))
+}
 
 const fetchEvents = (taskId: string, query: string) => api.get<EventsPage>(`/api/tasks/${taskId}/events?${query}`)
 
@@ -287,6 +323,7 @@ export function TaskCockpit({
   const [view, setView] = useState<TaskCockpitView>("session")
   const diff = useTaskDiff(taskId, { open: view === "diff", live: !!live })
   const actions = useTaskActions(taskId, task)
+  const subtasks = useTaskSubtasks(task)
 
   // What was just sent, drawn before the round trip comes back; the composer hands its thumbnails'
   // object URLs over with it, released when the next turn replaces them.
@@ -415,6 +452,8 @@ export function TaskCockpit({
             protocol={stream.protocol}
             onDrop={isMobile ? actions.drop : undefined}
             pendingAction={actions.pendingAction}
+            parent={task.parent ? { ...task.parent, href: agentsTaskHref(task.parent.id) } : null}
+            subtasks={subtasks}
             machine={
               <div className="space-y-3">
                 {/* No `node`, `stats` or `editorHref` any more (deprecated in 0.72): where it runs and how

@@ -248,6 +248,68 @@ qu'une tâche n'éteigne pas la machine sous l'autre, aucun parquage (mode `stop
 tard », Park à la main) n'arrête un worker où une autre tâche travaille (`queued`, `running`, ou
 une action en vol), voir `workedOnByAnother`. Park à la main répond 409 dans ce cas.
 
+## Recommencer une tâche qui n'a jamais démarré
+
+Une tâche en échec **dont la session n'a jamais démarré** se recommence du début
+(`POST /api/tasks/:id/retry`, Cloud `retryTask`). C'est le cas quand son worker n'a pas pu
+démarrer, ou que son setup a échoué. On garde la même ligne, le même prompt et les fichiers du
+premier tour, mais elle repart avec un nouveau worker du pool, par le même chemin qu'une tâche
+neuve. La tâche passe de `failed` à `queued` par une écriture conditionnelle, donc deux clics ne
+lancent qu'une exécution. Une tâche dont la session a démarré ne se recommence pas : on lui répond
+(`retryBlocker`, sur `GET /api/tasks/:id`).
+
+## Sous-tâches
+
+Comme dans Cloud (#810, #817, #818), **une tâche peut en déléguer d'autres et les suivre**. Une
+sous-tâche reste une tâche comme les autres : son worker, sa session, son Accept et son Drop.
+
+**Le lien.** `tasks.parent_task_id` (migration `0025`) est posé à la création
+(`POST /api/projects/:id/tasks` avec `parentTaskId`) et ne change plus. Le parent doit exister, être
+au plus à 3 niveaux de profondeur, et avoir moins de 20 enfants. Sinon, la création répond 400. Le
+projet de l'enfant peut être n'importe lequel. Si le parent est supprimé, l'enfant reste, détaché.
+L'API expose aussi :
+
+- `subtaskCount` sur chaque tâche, et `parent` sur le détail ;
+- `GET /api/tasks?parentTaskId=` pour lister la famille, mises de côté comprises.
+
+**La session du parent : le serveur MCP `spunto-tasks`** (`/api/task-mcp`,
+`services/task-subtasks-mcp.ts`). C'est le serveur de Lite lui-même, présent dans
+`SPUNTO_AGENT_MCP` à **chaque** session, à côté des serveurs du projet. Il ne dépend d'aucun
+drapeau, puisque Lite n'a qu'un utilisateur. La session s'y présente avec son jeton de passerelle
+(`SPUNTO_WORKER_TOKEN`, émis pour **sa** tâche). Ses outils n'atteignent que les enfants de cette
+tâche :
+
+- `create_subtask`, `list_subtasks`, `get_subtask` (l'état, plus les derniers messages de l'agent :
+  son compte rendu) et `get_subtask_diff` ;
+- `message_subtask`, `validate_subtask`, `cancel_subtask`, `interrupt_subtask` et `retry_subtask`.
+
+Ce sont les mêmes que dans Cloud. Le nom `spunto-tasks` est réservé : on ne peut pas déclarer de
+serveur MCP de ce nom.
+
+**Prévenir le parent.** Quand une sous-tâche passe en revue ou échoue, la session du parent reçoit
+un message (`signalParent`) : « [Spunto] Sub-task … is now in-review », avec un extrait du compte
+rendu et les outils à appeler ensuite. C'est un tour comme une réponse, mais marqué
+`{ auto: "subtask-signal", subtask }` dans la timeline : c'est la plateforme qui parle, pas un
+humain.
+
+- **Un seul message par passage.** L'envoi est réservé par une écriture conditionnelle de
+  `parent_signal_key`, construite sur `<état>:<seq du dernier tour>:<startedAt>`.
+- **Pas de message à un parent fini** (`done`, `failed`) ni encore `queued`. Pas de message non plus
+  pour un enfant que le parent a lui-même abandonné (`cancel_subtask`).
+- Cloud fait l'envoi dans un job. Lite le fait en tâche de fond, et réessaie quelques fois tant que
+  le parent est occupé par une autre réponse (409).
+- La transition est relevée par une lecture **ou** par le plancher de fond, toutes les 30 s au
+  plus : le parent est prévenu même si personne ne regarde.
+
+Une sous-tâche ne pose pas de question à choix (`SPUNTO_AGENT_QUESTIONS` n'est pas posé) : personne
+ne la regarde, et son tour attendrait pour rien.
+
+**Le cockpit** dessine les sous-tâches dans le bloc **Sub-tasks**, juste sous Machine. On y voit
+l'état de chaque enfant, avec une relecture toutes les 5 s tant que l'un d'eux tourne. Un enfant
+affiche **Delegated by task**, qui renvoie au parent. Les lignes des listes portent une marque
+(↳ pour une sous-tâche, ☰ n pour un parent). Tous les liens ouvrent la conversation dans
+`/agents?task=`.
+
 ## Rendre la machine au pool
 
 Une tâche finie (Accept, Drop, échec) rend son worker au pool **garé** (Cloud #413, #398) : il
@@ -510,6 +572,8 @@ Lite tourne sur des portables et des postes qu'on redémarre souvent ; ce n'est 
   images raster, téléchargées sinon), le **diff** lu avec git dans la machine ;
 - les **apps d'agent** : mêmes runners, mêmes features, mêmes catalogues et même validation —
   tout vient de `@spunto/agent-runners`, le contrat de `@spunto/build/agent-contract` ;
+- les **sous-tâches** : le lien, les limites, le serveur `spunto-tasks` et ses outils, le message
+  au parent ;
 - les **questions de l'agent**, les **sous-agents**, la **compaction** et les **skills** dans le fil ;
 - les **réglages** : mêmes noms de champs que Cloud et que la spec portable. La spec ne porte
   pas `agentAppIds` (l'export de Cloud non plus) : un projet importé démarre sur Claude Code.
@@ -525,6 +589,8 @@ Lite tourne sur des portables et des postes qu'on redémarre souvent ; ce n'est 
 | Répondre à une tâche `failed` | la sandbox lui appartient seule | le worker a pu passer à une autre tâche : les deux conversations le partagent, et aucun parquage ne l'arrête sous celle qui travaille |
 | Machine arrêtée sous une session | `failed` | `in-review` si la conversation peut être reprise (voir « Un ordinateur qui redémarre ») |
 | Verrou du pool | advisory Postgres | chaîne de promesses par worker (un seul process) |
+| Sous-tâches | derrière le drapeau d'org `subtasks`, l'enfant est créé au nom du propriétaire du parent, avec ses préférences (machine, snapshot) | toujours proposées, pas de propriétaire ni de préférences : le harnais et le modèle par défaut du projet, sauf indication de l'agent |
+| Prévenir le parent | job `task.signal-parent` durable, trois essais | en tâche de fond dans le process, cinq essais espacés de 3 s tant que le parent est occupé |
 | Pool | par membre | par projet (un seul utilisateur) |
 | Consigne d'agent | celle de l'org + celle du projet | la phrase par défaut + celle du projet |
 | Consigne par défaut | « this sandbox is deleted once the task is accepted or dropped… » | « this worker goes to another task… and its checkout is reset then… » : la machine est recyclée, pas détruite |
@@ -589,9 +655,9 @@ tâche en porte), plus les secrets du projet **tels qu'ils sont maintenant**
 ## Routes
 
 ```
-GET    /api/tasks                               — toutes les tâches (?state=&q=&projectId=&metadata[clé]=&onHold=&limit=&offset=), compteurs par état hors filtre d'état, onHoldCount
+GET    /api/tasks                               — toutes les tâches (?state=&q=&projectId=&parentTaskId=&metadata[clé]=&onHold=&limit=&offset=), compteurs par état hors filtre d'état, onHoldCount
 GET    /api/projects/:id/tasks                  — celles d'un projet (?metadata[clé]=&onHold=)
-POST   /api/projects/:id/tasks                  — délègue { prompt, title?, baseBranch?, model?, agentAppId?, agentOptions?, files?, links?, metadata? } → 201, queued
+POST   /api/projects/:id/tasks                  — délègue { prompt, title?, baseBranch?, model?, agentAppId?, agentOptions?, files?, links?, metadata?, parentTaskId? } → 201, queued
 GET    /api/tasks/:taskId                       — détail, re-dérivé, + canResume
 PATCH  /api/tasks/:taskId                       — { title?, links?, metadata? } : renomme (rien d'autre ne bouge), remplace les liens, fusionne les métadonnées
 DELETE /api/tasks/:taskId                       — oublie une tâche finie (409 si vivante)
@@ -601,6 +667,8 @@ GET    /api/tasks/:taskId/diff                  — ce que la tâche a changé d
 GET    /api/tasks/:taskId/diff/patch            — le patch d'un fichier (?path=&repo=&oldPath=&untracked=)
 POST   /api/tasks/:taskId/messages              — répond { prompt, files? } → 202
 POST   /api/tasks/:taskId/interrupt             — arrête le tour en cours sans tuer la session → 202
+POST   /api/tasks/:taskId/retry                 — recommence une tâche en échec dont la session n'a jamais démarré → 202 (409 sinon)
+POST   /api/task-mcp                            — le serveur MCP `spunto-tasks` (sous-tâches), joint avec le jeton de session d'une tâche
 POST   /api/tasks/:taskId/answer                — répond à la question qui fait attendre l'agent { callId, answers } → 202 (409 si rien n'attend)
 POST   /api/tasks/:taskId/validate              — Accept → 202
 POST   /api/tasks/:taskId/cancel                — Drop → 202
@@ -623,6 +691,7 @@ GET    /api/agent-apps                          — les apps d'agent et leur cat
 |---|---|
 | `db/schema.ts` | tables `tasks`, `task_commands`, `task_events`, `task_attachments`, `worker_samples`, colonnes `projects.task_*` |
 | `services/tasks.ts` | création, allocation, remise à plat d'une machine recyclée, session, dérivation, plancher de fond, Accept/Drop/réponse/interruption |
+| `services/task-subtasks-mcp.ts`, `app/api/task-mcp/route.ts` | le serveur MCP `spunto-tasks` : les sous-tâches vues de la session du parent |
 | `services/task-commands.ts` | ce qui a tourné pour une tâche, et sa réconciliation avec le worker |
 | `services/task-events.ts` | ingestion par curseur, titre de session, usage, brouillon en mémoire |
 | `services/task-diff.ts`, `lib/task-diff.ts` | le diff lu avec git dans le worker (scripts et parseurs repris de Cloud) |
@@ -639,4 +708,4 @@ GET    /api/agent-apps                          — les apps d'agent et leur cat
 | `lib/task-cache.ts`, `hooks/use-task-actions.ts` | les trois caches d'une tâche gardés d'accord, et les actions |
 | `e2e/tests/tasks.spec.ts` | l'API sans Docker (validation, refus, formes) — tourne en CI |
 | `e2e/tests/tasks-lifecycle.spec.ts` | bout en bout sur vrai conteneur, sans forge ni clé d'API (`E2E_DOCKER=1`) |
-| `e2e/fixtures/fake-claude.js` | un faux Claude Code qui parle le vrai `stream-json` interactif |
+| `e2e/fixtures/agent-runners/claude.mjs` | un faux runner Claude qui parle le contrat (`AGENT_RUNNERS_DIR`) : questions, sous-tâches par `spunto-tasks`, MCP |

@@ -7,10 +7,10 @@ export const runtime = "nodejs"
 
 /**
  * Every task of the install, filtered and paged — the agent cockpit's list.
- * `?state=running,in-review&q=login&projectId=…&metadata[key]=value&onHold=true&limit=40&offset=0`.
+ * `?state=running,in-review&q=login&projectId=…&parentTaskId=…&metadata[key]=value&onHold=true&limit=40&offset=0`.
  * The counts ignore `state`; `metadata[key]` (repeatable) keeps the tasks carrying every given pair;
  * `onHold` picks a side of « On hold » (the default leaves the tasks on hold out) and `onHoldCount`
- * counts them under the same filters.
+ * counts them under the same filters. `parentTaskId` lists a task's sub-tasks, on hold or not.
  */
 export async function GET(req: Request) {
   const url = new URL(req.url)
@@ -31,6 +31,7 @@ export async function GET(req: Request) {
       states,
       query: url.searchParams.get("q") ?? undefined,
       projectId: url.searchParams.get("projectId") ?? undefined,
+      parentTaskId: url.searchParams.get("parentTaskId") ?? undefined,
       limit: int("limit"),
       offset: int("offset"),
     }),
