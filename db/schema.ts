@@ -553,6 +553,10 @@ export const settings = sqliteTable("settings", {
   // (`amber`, `plum`…) or one of the design system's palette ids (`lagoon-amber`…). Null = Lite's
   // own blue. Read by the root layout on every render, so the HTML arrives already dressed in it.
   dashboardColor: text("dashboard_color"),
+  // The project the agent cockpit's "New" opens on (Settings → Agents), like Spunto Cloud's
+  // organization default. No foreign key — SQLite can't add one to an existing table — so a
+  // project's deletion clears it (services/projects.ts) and the view drops one that is gone.
+  defaultProjectId: text("default_project_id"),
 })
 
 export type Project = typeof projects.$inferSelect

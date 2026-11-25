@@ -1,4 +1,4 @@
-import { getSettingsView, updateSettings, normalizeGcpKey } from "@/services/settings"
+import { getSettingsView, updateSettings, normalizeGcpKey, projectExists } from "@/services/settings"
 import { SettingsSchema } from "@/lib/validation"
 import { json, parseBody, badRequest } from "@/lib/http"
 
@@ -12,7 +12,8 @@ export async function GET() {
 export async function PATCH(req: Request) {
   const parsed = await parseBody(req, SettingsSchema)
   if ("response" in parsed) return parsed.response
-  const { gcpRegistryKey } = parsed.data
+  const { gcpRegistryKey, defaultProjectId } = parsed.data
+  if (defaultProjectId && !projectExists(defaultProjectId)) return badRequest("Unknown project")
   // Reject a non-empty key that is neither raw JSON nor base64 JSON, so the user
   // gets immediate feedback instead of a silently-ignored (cleared) credential.
   if (typeof gcpRegistryKey === "string" && gcpRegistryKey.trim() && normalizeGcpKey(gcpRegistryKey) === null) {

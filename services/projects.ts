@@ -2,6 +2,7 @@ import { eq, desc } from "drizzle-orm"
 import { db } from "../db/index"
 import {
   projects,
+  settings,
   projectImageBuilds,
   projectVersions,
   tasks,
@@ -369,6 +370,8 @@ export async function deleteProject(id: string): Promise<boolean> {
   await removeProjectImages(id)
 
   db.delete(projects).where(eq(projects.id, id)).run()
+  // No foreign key to do it (db/schema.ts): the agent cockpit's default project goes with it.
+  db.update(settings).set({ defaultProjectId: null }).where(eq(settings.defaultProjectId, id)).run()
   return true
 }
 

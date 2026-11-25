@@ -19,6 +19,8 @@ migrate by hand.
   agent, and follow them: it is told when one hands back, reads its report and diff, then accepts,
   answers or drops it. The parent lists them in a **Sub-tasks** block, and each links back to it.
   [Details](/docs/agents#sub-tasks)
+- **A default project for Agents.** Pick one in **Settings → Agents**: **New** on the Agents page
+  opens straight on it, as on Spunto Cloud. [Details](/docs/configuration)
 - **Settings → Statistics.** How long your workers take to be usable, and where that time goes:
   one chart per kind of start and per phase of the setup, over 24 h to 90 days.
   [Details](/docs/workers#watching-a-worker)

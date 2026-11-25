@@ -11,7 +11,7 @@ import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { nextLink } from "@/lib/link-render"
 import { ALL_TASKS_KEY, PROJECT_TASKS_KEY, insertTask, type Task } from "@/lib/task-cache"
-import type { AgentAppInfo, Project } from "@/lib/types"
+import type { AgentAppInfo, Project, Settings } from "@/lib/types"
 import { buttonVariants } from "@/components/ui/button"
 
 /** The agent apps and their catalogs — static per release, so read once. */
@@ -77,7 +77,6 @@ export function NewTask({
 }) {
   const queryClient = useQueryClient()
   const [picked, setPicked] = useState("")
-  const target = projectId ?? picked
   // What is being written survives leaving the page: one draft per place a task is started from.
   const draftKey = `new:${projectId ?? "all"}`
 
@@ -86,6 +85,15 @@ export function NewTask({
     queryFn: () => api.get<Project[]>("/api/projects"),
     staleTime: 60_000,
   })
+  // With no project in scope, the composer starts on the default one (Settings → Agents) until
+  // another is picked — the composer does the same on its side, so its chip and this agree.
+  const { data: settings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => api.get<Settings>("/api/settings"),
+    enabled: !projectId,
+  })
+  const defaultProjectId = settings?.defaultProjectId ?? null
+  const target = projectId ?? (picked || (projects.some((p) => p.id === defaultProjectId) ? defaultProjectId! : ""))
   const { data: apps = [] } = useAgentApps()
   const project = projects.find((p) => p.id === target)
 
@@ -192,6 +200,7 @@ export function NewTask({
   return (
     <NewTaskComposer
       projects={projectId ? undefined : projects.map((p) => ({ id: p.id, name: p.name }))}
+      defaultProjectId={projectId ? undefined : defaultProjectId}
       onProjectChange={(id) => {
         setPicked(id)
         setHarnessPick(null)

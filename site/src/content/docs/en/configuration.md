@@ -74,6 +74,8 @@ tests use from inside containers.
   ([SSH keys and git](/docs/ssh-and-git)).
 - **Settings → MCP servers** — see [MCP servers](/docs/mcp-servers).
 - **Settings → Container registry** — above.
+- **Settings → Agents** — the default project: **New** on the Agents page opens on it, ready to
+  delegate (you can still pick another one in the composer). None set: it asks every time.
 - **Settings → Appearance** — the dashboard's colour: Lite's own blue, another Spunto product's
   pair, or one of the design system's palettes. Light and dark themes from the header.
 - **⌘K** (Ctrl+K elsewhere) — jumps to any project, workspace, service, port, image build, secret
