@@ -47,6 +47,9 @@ type Task = {
   reopenBlocker?: string | null
   onHoldAt?: string | null
   pendingQuestion?: { callId: string; question: string; header: string | null; count: number } | null
+  parentTaskId?: string | null
+  subtaskCount?: number
+  parent?: { id: string; title: string; state: string } | null
 }
 
 async function workerState(request: APIRequestContext, id: string): Promise<string> {
@@ -375,5 +378,46 @@ test.describe("task lifecycle on a real worker", () => {
     expect((await task(request, first.id)).reopenBlocker).toContain("no longer exists")
     const refused = await request.post(`/api/tasks/${first.id}/messages`, { data: { prompt: "Again" } })
     expect(refused.status()).toBe(409)
+  })
+
+  test("a task delegates a sub-task through spunto-tasks, is told when it hands back, and accepts it", async ({ request }) => {
+    test.setTimeout(15 * 60_000)
+    // The parent's agent calls `create_subtask` on Lite's own MCP server (the fake does on "delegate").
+    const parent = await (await request.post(`/api/projects/${projectId}/tasks`, { data: { title: "Orchestrator", prompt: "Please delegate" } })).json()
+    let p = await until(request, parent.id, (x) => x.state === "in-review" || x.state === "failed", 10 * 60_000)
+    expect(p.state, p.error ?? "").toBe("in-review")
+    if (p.workerId) workers.add(p.workerId)
+    const said = (await events(request, parent.id)).events.filter((e) => e.type === "message" && e.payload.role === "assistant")
+    const delegated = /Delegated sub-task (\S+)\./.exec(String(said.at(-1)?.payload.text))
+    expect(delegated, String(said.at(-1)?.payload.text)).toBeTruthy()
+    const childId = delegated![1]!
+
+    // The family, both ways.
+    expect(p.subtaskCount).toBe(1)
+    const family = (await (await request.get(`/api/tasks?parentTaskId=${parent.id}`)).json()) as { tasks: Task[] }
+    expect(family.tasks.map((t) => t.id)).toEqual([childId])
+    let child = await task(request, childId)
+    expect(child.parentTaskId).toBe(parent.id)
+    expect(child.parent).toMatchObject({ id: parent.id, title: "Orchestrator" })
+
+    // The child works and hands back; the parent is told — a turn of the platform's, not a human's
+    // — reads its report and accepts it, from its own session.
+    child = await until(request, childId, (x) => x.state === "done" || x.state === "failed", 10 * 60_000)
+    expect(child.state, child.error ?? "").toBe("done")
+    if (child.workerId) workers.add(child.workerId)
+    const log = (await events(request, parent.id)).events
+    const signal = log.find((e) => e.type === "message" && e.payload.auto === "subtask-signal")
+    expect(signal?.payload.subtask).toMatchObject({ id: childId, state: "in-review" })
+    expect(String(signal?.payload.text)).toContain(`[Spunto] Sub-task ${childId}`)
+    p = await until(request, parent.id, (x) => x.state === "in-review", 3 * 60_000)
+    const last = (await events(request, parent.id)).events.filter((e) => e.type === "message" && e.payload.role === "assistant").at(-1)
+    expect(String(last?.payload.text)).toBe(`Accepted sub-task ${childId}: Committed \`TASK-${childId}-1.md\` on fake/${childId}.`)
+    // Told once: a later read of the same hand-back sends nothing more.
+    expect(log.filter((e) => e.type === "message" && e.payload.auto === "subtask-signal")).toHaveLength(1)
+
+    for (const id of [parent.id]) {
+      expect((await request.post(`/api/tasks/${id}/cancel`)).status()).toBe(202)
+      await until(request, id, (x) => x.state === "failed", 60_000)
+    }
   })
 })

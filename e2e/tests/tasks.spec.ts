@@ -14,6 +14,46 @@ async function project(request: import("@playwright/test").APIRequestContext, ov
 }
 
 test.describe("tasks API", () => {
+  test("sub-tasks: under an existing parent, three levels at most, listed by parent, and their MCP server wants a session's token", async ({ request }) => {
+    const p = await project(request)
+    const post = (data: Record<string, unknown>) => request.post(`/api/projects/${p.id}/tasks`, { data: { prompt: "Work", ...data } })
+
+    expect((await post({ parentTaskId: "no-such-task" })).status()).toBe(400)
+    const root = await (await post({})).json()
+    const child = await (await post({ parentTaskId: root.id })).json()
+    expect(child.parentTaskId).toBe(root.id)
+    const grandchild = await (await post({ parentTaskId: child.id })).json()
+    const third = await post({ parentTaskId: grandchild.id })
+    expect(third.status()).toBe(201)
+    const fourth = await post({ parentTaskId: (await third.json()).id })
+    expect(fourth.status()).toBe(400)
+    expect((await fourth.json()).error).toContain("levels deep")
+
+    const detail = await (await request.get(`/api/tasks/${child.id}`)).json()
+    expect(detail.parent).toMatchObject({ id: root.id, projectId: p.id })
+    expect(detail.subtaskCount).toBe(1)
+    expect((await (await request.get(`/api/tasks/${root.id}`)).json()).subtaskCount).toBe(1)
+    const family = await (await request.get(`/api/tasks?parentTaskId=${root.id}`)).json()
+    expect(family.tasks.map((t: { id: string }) => t.id)).toEqual([child.id])
+
+    // Lite's own MCP server answers a task session's gateway token only.
+    const rpc = { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }
+    const headers = { accept: "application/json, text/event-stream" }
+    expect((await request.post("/api/task-mcp", { data: rpc, headers })).status()).toBe(403)
+    expect((await request.post("/api/task-mcp", { data: rpc, headers: { ...headers, authorization: "Bearer lmg_nope" } })).status()).toBe(403)
+    // And its name is taken.
+    const taken = await request.post("/api/mcp-servers", { data: { name: "spunto-tasks", url: "https://mcp.example.com/mcp" } })
+    expect(taken.status()).toBe(409)
+
+    // A failed task whose session never started can be retried; the whole family goes with the project.
+    await expect.poll(async () => (await (await request.get(`/api/tasks/${root.id}`)).json()).state, { timeout: 60_000 }).toBe("failed")
+    expect((await (await request.get(`/api/tasks/${root.id}`)).json()).retryBlocker).toBeNull()
+    const retried = await request.post(`/api/tasks/${root.id}/retry`)
+    expect(retried.status(), await retried.text()).toBe(202)
+    expect((await retried.json()).state).toBe("queued")
+    await request.delete(`/api/projects/${p.id}`)
+  })
+
   test("a project starts on Claude Code, and its task settings save without a new version", async ({ request }) => {
     const p = await project(request)
     expect(p.agentAppIds).toEqual(["claude"])

@@ -32,6 +32,11 @@ export interface Task extends TaskItem {
   canReopen?: boolean
   /** Only on `GET /api/tasks/:id`: why a failed task can't be picked back up, or null. */
   reopenBlocker?: string | null
+  /** Only on `GET /api/tasks/:id`: why a failed task can't be started over (`POST …/retry`), or null. */
+  retryBlocker?: string | null
+  /** Only on `GET /api/tasks/:id`: the task that delegated this one (docs/taches.md § « Sous-tâches »). */
+  parent?: { id: string; projectId: string; title: string; state: TaskItem["state"] } | null
+  createdAt: string
 }
 
 /** A row of the agent cockpit's list: a task and the name of its project. */

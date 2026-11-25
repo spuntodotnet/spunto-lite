@@ -71,6 +71,17 @@ When Claude starts **subagents**, they are grouped under the call that started t
 (“3 subagents · 2 working”). Click one to read what it did. When Claude compacts its context, the
 conversation shows a discreet *Context compacted* marker instead of the summary.
 
+### Sub-tasks
+
+An agent can split its work: it **delegates sub-tasks**, each with its own worker and its own agent,
+and follows them to the end. It does so through Lite's own MCP server, `spunto-tasks`, which every
+session gets. It is told when a sub-task hands back or fails, reads its report and its diff, then
+accepts it, answers it or drops it.
+
+A sub-task is a task like any other. Its page shows **Delegated by task**, which links to the
+parent. The parent lists its sub-tasks in a **Sub-tasks** block, and the lists mark both. By the
+API: `parentTaskId` when delegating, and `GET /api/tasks?parentTaskId=` to list a family.
+
 The details column holds the facts about the task: the machine (its page, its named ports, Park /
 Wake), the session's numbers (context, tokens, cost, turns), what Claude Code reports about itself
 (plan quota, MCP servers, skills…), the pull requests and links shared in the conversation, the

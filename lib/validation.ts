@@ -322,6 +322,8 @@ export const CreateTaskSchema = z.object({
   agentAppId: z.string().max(100).nullable().optional(),
   /** The app's own parameters (`{ effort: "high" }`), checked against its catalog. */
   agentOptions: z.record(z.string(), z.string().max(200)).nullable().optional(),
+  /** The task delegating this one (docs/taches.md § « Sous-tâches »): drawn under it, and its session is told when this one hands back. */
+  parentTaskId: z.string().trim().min(1).max(100).optional(),
 })
 
 export const TaskMessageSchema = z.object({

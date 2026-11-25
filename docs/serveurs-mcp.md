@@ -57,6 +57,10 @@ a le serveur éteint.
 - `SPUNTO_WORKER_TOKEN` — un jeton `lmg_…` frais, `mintMcpGatewayToken(taskId, projectId)` ;
 - `SPUNTO_API_URL` — l'URL par laquelle un worker joint Lite (`internalUrl()`, `lib/agent.ts`).
 
+`SPUNTO_AGENT_MCP` contient toujours, en plus, le serveur de Lite lui-même : `spunto-tasks`
+(`/api/task-mcp`, les sous-tâches, [taches.md § Sous-tâches](taches.md#sous-tâches)). Il se joint
+avec le même jeton, et son nom est réservé.
+
 Les runners de `@spunto/build` traduisent, sans rien savoir de Lite : Claude →
 `mcpServers[name] = { type: "http", url, headers: { Authorization: "Bearer $SPUNTO_WORKER_TOKEN" } }`,
 Codex → `mcp_servers[name] = { url, bearer_token_env_var: "SPUNTO_WORKER_TOKEN" }`,
