@@ -19,6 +19,9 @@ mêmes volumes, même clé, rien à migrer à la main.
   avec son worker et son agent, et les suivre : il est prévenu quand l’une rend la main, lit son
   compte rendu et son diff, puis l’accepte, lui répond ou l’abandonne. Le parent les liste dans un
   bloc **Sub-tasks**, et chacune renvoie à lui. [Détails](/fr/docs/agents#sous-tâches)
+- **Settings → Statistics.** Combien de temps vos workers mettent à être utilisables, et où passe
+  ce temps : un graphe par sorte de démarrage et par phase du setup, sur 24 h à 90 jours.
+  [Détails](/fr/docs/workers#surveiller-un-worker)
 - **Recommencer.** Une tâche qui a échoué avant que son agent ne démarre (son worker n’a jamais
   démarré) se recommence : `POST /api/tasks/:id/retry`.
 

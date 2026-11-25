@@ -88,6 +88,12 @@ memory** (with a short history), and the git status of each repository. The **Re
 lists every container, image and volume Lite owns, with its size — the place to see what is taking
 the disk.
 
+**Settings → Statistics** shows how long your workers take to be usable, and where that time goes,
+over 24 hours to 90 days, for every project or one. It charts each kind of start separately (a new
+worker, a rebuild, a stopped worker started again), then each phase of a setup: the image, the
+container, the boot, the clone, `postCreate`, `postStart`… Each point is a start, the line is the
+median. Lite keeps these measures itself, and sends nothing anywhere.
+
 ## Tags
 
 Workers can carry tags. Lite uses one itself: `task` marks the workers that make up a project's

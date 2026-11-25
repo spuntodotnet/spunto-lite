@@ -283,8 +283,37 @@ export const projectImageBuilds = sqliteTable("project_image_builds", {
   // since it has no clock in it. Nullable, and stays null for every build recorded before this
   // column existed: those are redrawn from their log alone. Shape owned by @spunto/build/steps.
   steps: text("steps", { mode: "json" }).$type<BuildStep[] | null>(),
+  /** How long the build took, written when it ends (ready or error) — what Settings → Statistics charts. */
+  durationMs: integer("duration_ms"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 })
+
+/**
+ * One start of a worker, timed phase by phase (`services/start-timings.ts`) — what Settings →
+ * Statistics reads (Cloud #802, #803, where they come back from OpenObserve; Lite keeps them
+ * itself). Written when the start settles (`ready` or `error`). No foreign key on purpose: a
+ * worker or a project deleted keeps its history, like `worker_samples`.
+ */
+export const workerStarts = sqliteTable(
+  "worker_starts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workerId: text("worker_id").notNull(),
+    projectId: text("project_id").notNull(),
+    /** `spawn` (a new worker), `rebuild` (a new container for the same worker), `start` (a stopped one again). */
+    kind: text("kind").notNull(),
+    /** Where its image came from: `built` for it, found `cached`, or its own `disk` (a start). */
+    origin: text("origin").notNull(),
+    /** `ready` | `error` */
+    outcome: text("outcome").notNull(),
+    /** When it settled (ms). */
+    at: integer("at").notNull(),
+    totalMs: integer("total_ms").notNull(),
+    /** Each phase's duration, Lite's (`image`, `container`, `boot`, `recipe`) then the container's own. */
+    phases: text("phases", { mode: "json" }).$type<Record<string, number>>().notNull(),
+  },
+  (t) => [index("worker_starts_at_idx").on(t.at), index("worker_starts_project_idx").on(t.projectId, t.at)],
+)
 
 // ─── Delegated work (docs/tasks.md) ──────────────────────────────────────────
 

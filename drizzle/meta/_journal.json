@@ -183,6 +183,13 @@
       "when": 1795616872582,
       "tag": "0025_task_parent",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1795617776474,
+      "tag": "0026_worker_starts",
+      "breakpoints": true
     }
   ]
 }
