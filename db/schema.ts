@@ -156,17 +156,6 @@ export const projects = sqliteTable("projects", {
   // ── Delegated work (docs/tasks.md) ──
   // How a task runs in this project. Not part of a version snapshot: none of it goes into the
   // image (the harness itself is `agentAppIds`, above).
-  /**
-   * Deprecated with agent apps (RFC 0048): no longer written nor offered. Read only for a task
-   * delegated before them (`agentAppId` null), which finishes on the CLI it began on.
-   */
-  taskAgentCommand: text("task_agent_command"),
-  /** Deprecated, as above: the dialect of a task delegated before agent apps. */
-  taskAgentProtocol: text("task_agent_protocol").notNull().default("claude-stream"),
-  /** Deprecated, as above. */
-  taskFollowUpCommand: text("task_follow_up_command"),
-  /** Deprecated (Cloud removed it on 2026-10-26): no longer run nor offered. */
-  taskResetCommand: text("task_reset_command"),
   /** What Accept runs. Exit 0 ⇒ done. Null = Accept just closes the task. */
   taskValidateCommand: text("task_validate_command"),
   /** Cleanup run by Drop, after the session is killed. */
@@ -178,8 +167,6 @@ export const projects = sqliteTable("projects", {
    * 0 = at once (docs/taches.md § « Garer plus tard »). Ignored with `keep`.
    */
   taskReviewParkAfterMinutes: integer("task_review_park_after_minutes").notNull().default(0),
-  /** Deprecated: the single default model before agent apps, moved into `taskAgentModels`. */
-  taskAgentModel: text("task_agent_model"),
   /** The default model of a task, per agent app (`{ claude: "claude-opus-5-5" }`). */
   taskAgentModels: text("task_agent_models", { mode: "json" }).$type<Record<string, string>>().notNull().default(sql`'{}'`),
   /** Appended to the standing instruction every task of this project is given. */
@@ -338,7 +325,7 @@ export const tasks = sqliteTable(
     model: text("model"),
     /**
      * The agent app the task runs under (RFC 0048), fixed at creation like the model. Null for a
-     * task delegated before agent apps: it finishes on the CLI it began on (`LEGACY_CLI`).
+     * task delegated before agent apps: it cannot run any more (`NO_AGENT_APP`), only be read.
      */
     agentAppId: text("agent_app_id"),
     /** The app's own parameters the task picked (`{ effort: "high" }`), checked against its catalog. */
@@ -349,9 +336,8 @@ export const tasks = sqliteTable(
     /**
      * The dialect the session `commandId` speaks (`@spunto/build` → `AGENT_PROTOCOLS`), fixed when
      * it starts: `agent-v1`, the Spunto agent contract, for every session started since the runners
-     * print it (RFC 0048 § 9). Null = a session started before — read with its app's previous
-     * dialect, or its project's for a task delegated before agent apps — so a conversation keeps the
-     * dialect it began on until it ends (Cloud cf96aa07, `protocolOf`).
+     * print it (RFC 0048 § 9). Null = a session started before the contract: nothing to read
+     * (`protocolOf` → `none`), its history is already stored.
      */
     sessionProtocol: text("session_protocol"),
     // queued | running | in-review | done | failed
@@ -473,6 +459,13 @@ export const taskAttachments = sqliteTable(
     bytes: integer("bytes").notNull(),
     sha256: text("sha256").notNull(),
     data: blob("data", { mode: "buffer" }).notNull(),
+    /**
+     * An image's size as drawn, read from its header when it is stored (`lib/image-dimensions.ts`),
+     * so a reader reserves its box before the bytes arrive. Null for anything not drawn inline, or
+     * whose header could not be read (Cloud #840).
+     */
+    width: integer("width"),
+    height: integer("height"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [uniqueIndex("task_attachments_task_sha_idx").on(t.taskId, t.sha256)],

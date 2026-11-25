@@ -2,19 +2,9 @@ import { existsSync } from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { build } from "esbuild"
-import {
-  AGENT_CATALOGS,
-  AGENT_HARNESSES,
-  OPTIONS_ENV,
-  RUNNER_ENV,
-  agentOptionsError,
-  runnerCommand,
-  type AgentCatalog,
-  type AgentHarness,
-  type AgentHarnessId,
-} from "@spunto/build/agent-runners"
+import { AGENT_CATALOGS, AGENT_HARNESSES, agentFeature, type AgentHarness, type AgentHarnessId } from "@spunto/agent-runners"
+import { OPTIONS_ENV, QUESTIONS_ENV, RUNNER_ENV, agentOptionsError, runnerCommand, type AgentCatalog } from "@spunto/build/agent-contract"
 import { AGENT_PROTOCOLS, type AgentProtocol } from "@spunto/build/agent-stream"
-import { AVAILABLE_FEATURES } from "@spunto/build/catalogs"
 import { AGENT_RUNNERS_DIR } from "./env"
 
 /**
@@ -30,11 +20,13 @@ import { AGENT_RUNNERS_DIR } from "./env"
  *  - **the session**: `taskHarness` says how a task's next session is started and continued — its
  *    app's runner, which speaks the Spunto agent contract (`agent-v1`, docs/agent-contract.md of
  *    coderhammer/spunto) whatever the app. `protocolOf` says how the *current* session is read: the
- *    dialect it started on, kept on the task (`tasks.session_protocol`). A task delegated before
- *    agent apps (no app) finishes on the CLI it began on.
+ *    dialect it started on, kept on the task (`tasks.session_protocol`).
  *
  * Same module as Cloud's `agent-apps.ts`, minus installations: Lite has no organization to
- * authorise an app, so every builtin is always offered.
+ * authorise an app, so every builtin is always offered. And Lite is its own agent app too: where
+ * Cloud reads the feature and the runner off an app's manifest, Lite takes them straight from
+ * `@spunto/agent-runners` — the package Cloud's apps serve them from. `@spunto/build`, the
+ * platform side, carries no harness.
  */
 
 export type AgentApp = {
@@ -135,23 +127,30 @@ export function allowedAgentApps(project: { agentAppIds?: string[] | null } | nu
   return (project?.agentAppIds ?? []).map(getAgentApp).filter((a): a is AgentApp => !!a)
 }
 
-type Feature = { id: string; options?: Record<string, string>; ociRef?: string; localScript?: string }
+type Feature = { id: string; options?: Record<string, string>; ociRef?: string; script?: string }
 
 /**
  * The features an image is built from: the project's own, then each allowed agent app's — after,
  * because an app's feature installs a private Node and an SDK under /opt/spunto/agents and depends
- * on nothing the project adds. Never duplicated. An injected feature is a catalog entry like any
- * other (`injected: true`, hidden from the picker), so its `localScript` comes from there.
+ * on nothing the project adds. Never duplicated: a project that also lists one by hand (hidden from
+ * the picker, but a spec file can name it) gets it once, where it is, installed the app's way. The
+ * feature is the app's own (`agentFeature`): its id and its install script, written into the recipe
+ * as an inline feature — what Cloud's apps declare in their manifest.
  */
 export function effectiveFeatures<F extends Feature>(project: { features: F[]; agentAppIds?: string[] | null }): (F | Feature)[] {
   const out: (F | Feature)[] = [...project.features]
   for (const app of allowedAgentApps(project)) {
-    const featureId = harnessOf(app).featureId
-    if (out.some((f) => f.id === featureId)) continue
-    const cat = AVAILABLE_FEATURES.find((c) => c.id === featureId)
-    out.push({ id: featureId, options: { ...cat?.defaultOptions }, ociRef: cat?.ociRef, localScript: cat?.localScript })
+    const feature = agentFeature(harnessOf(app))
+    const listed = out.findIndex((f) => f.id === feature.id)
+    if (listed >= 0) out[listed] = { ...out[listed]!, ...feature }
+    else out.push({ ...feature })
   }
   return out
+}
+
+/** Whether a feature id is an agent app's — added by `effectiveFeatures`, never picked by hand. */
+export function isAgentFeature(featureId: string): boolean {
+  return Object.values(AGENT_HARNESSES).some((h) => h.featureId === featureId)
 }
 
 /**
@@ -172,7 +171,7 @@ export function resolveTaskAgentApp(project: { agentAppIds?: string[] | null } |
 
 /** Why a task may not start under its app — the project dropped it since, and its image may no longer carry it. */
 export function taskAgentAppBlocker(task: { agentAppId?: string | null }, project: { agentAppIds?: string[] | null }): string | null {
-  if (!task.agentAppId) return null
+  if (!task.agentAppId) return `This task cannot run: ${NO_AGENT_APP}`
   if (!getAgentApp(task.agentAppId)) return `"${task.agentAppId}" is not an agent app.`
   if (!(project.agentAppIds ?? []).includes(task.agentAppId)) {
     return `This project no longer runs tasks under ${getAgentApp(task.agentAppId)?.name ?? task.agentAppId} — its image may not carry it any more.`
@@ -182,29 +181,21 @@ export function taskAgentAppBlocker(task: { agentAppId?: string | null }, projec
 
 /** How a task's next session is started and continued. */
 export type Harness = {
-  /** The app running it, or null for a task delegated before agent apps (`LEGACY_CLI`). */
-  appId: string | null
+  /** The app running it. */
+  appId: AgentHarnessId
   /** The dialect a session started now speaks — written on the task with it (`sessionProtocol`). */
   protocol: AgentProtocol
   command: string
   /** Resumes the session read off the stream (`$SPUNTO_TASK_SESSION_ID`). */
   followUpCommand: string
-  /** Added to the session's environment — the runner's text and the task's parameters, for an app. */
+  /** Added to the session's environment — the runner's text and the task's parameters. */
   env: Record<string, string>
 }
 
-/**
- * What ran a task delegated **before agent apps** (agent_app_id null): Claude Code's CLI, with the
- * project's own command if it had one. Kept only so those conversations can go on to their end: a
- * live session is written to in its own dialect, and a reply resumes it with the CLI it started on.
- */
-export const LEGACY_CLI = {
-  command: "claude --dangerously-skip-permissions -p",
-  followUpCommand: 'claude --dangerously-skip-permissions -p --resume "$SPUNTO_TASK_SESSION_ID"',
-} as const
+/** Why a task delegated before agent apps (no `agent_app_id`) cannot start a session any more. */
+export const NO_AGENT_APP = "it was delegated before agent apps, on a CLI Lite no longer runs — delegate it again."
 
-type HarnessProject = { taskAgentProtocol?: string | null; taskAgentCommand?: string | null; taskFollowUpCommand?: string | null }
-type HarnessTask = { agentAppId?: string | null; agentOptions?: Record<string, string> | null; sessionProtocol?: string | null; commandId?: string | null }
+type HarnessTask = { agentAppId?: string | null; agentOptions?: Record<string, string> | null; sessionProtocol?: string | null; parentTaskId?: string | null }
 
 /**
  * Bundled runners, by entry file: one esbuild pass per runner and per process, like Cloud. On
@@ -233,7 +224,7 @@ function bundle(entry: string): Promise<string> {
 }
 
 /**
- * The runner's text, bundled. Not baked in the image: the runner ships with Lite's `@spunto/build`,
+ * The runner's text, bundled. Not baked in the image: the runner ships with Lite's `@spunto/agent-runners`,
  * and a fix reaches the first session after an update, without a rebuild.
  *
  * The package's runners are bundled once per process and kept; a failed bundle is not, so the next
@@ -266,52 +257,42 @@ export function runnerPayload(harness: Pick<AgentHarness, "id" | "runnerFile">):
 function packageRunnerEntry(harness: Pick<AgentHarness, "id" | "runnerFile">): string {
   const fromUrl = harness.runnerFile.protocol === "file:" ? fileURLToPath(harness.runnerFile) : null
   if (fromUrl && existsSync(path.join(path.dirname(fromUrl), harness.id))) return fromUrl
-  return path.resolve(process.cwd(), "node_modules/@spunto/build/src/agent-runners", `${harness.id}.mjs`)
+  return path.resolve(process.cwd(), "node_modules/@spunto/agent-runners/src", `${harness.id}.mjs`)
 }
 
 /**
- * The harness a task's **next** session starts with: its agent app's runner, speaking the contract
- * — or, delegated before agent apps, the CLI it began on. Whatever dialect its current session
- * speaks: a follow-up starts a session of its own, and records the dialect it starts with.
+ * The harness a task's **next** session starts with: its agent app's runner, speaking the contract.
+ * A task with no app (delegated before agent apps) has none any more: `NO_AGENT_APP`.
+ *
+ * `QUESTIONS_ENV` lets Claude ask its multiple-choice questions (`AskUserQuestion`) and wait for
+ * the answer — only for a task someone watches: a sub-task's parent is not told of a question, and
+ * the turn would wait on no one (Cloud #856).
  */
-export async function taskHarness(task: HarnessTask | null | undefined, project: HarnessProject | null | undefined): Promise<Harness> {
+export async function taskHarness(task: HarnessTask | null | undefined): Promise<Harness> {
   const app = getAgentApp(task?.agentAppId)
-  if (app) {
-    const harness = harnessOf(app)
-    return {
-      appId: app.id,
-      protocol: harness.protocol,
-      command: runnerCommand(harness),
-      followUpCommand: runnerCommand(harness, { resume: true }),
-      env: { [RUNNER_ENV]: await runnerPayload(harness), [OPTIONS_ENV]: JSON.stringify(task?.agentOptions ?? {}) },
-    }
-  }
+  if (!app) throw new Error(task?.agentAppId ? `The agent app "${task.agentAppId}" is not available.` : `This task cannot run: ${NO_AGENT_APP}`)
+  const harness = harnessOf(app)
   return {
-    appId: null,
-    protocol: legacyProtocol(project),
-    command: project?.taskAgentCommand?.trim() || LEGACY_CLI.command,
-    followUpCommand: project?.taskFollowUpCommand?.trim() || LEGACY_CLI.followUpCommand,
-    env: {},
+    appId: app.id,
+    protocol: harness.protocol,
+    command: runnerCommand(harness),
+    followUpCommand: runnerCommand(harness, { resume: true }),
+    env: {
+      [RUNNER_ENV]: await runnerPayload(harness),
+      [OPTIONS_ENV]: JSON.stringify(task?.agentOptions ?? {}),
+      ...(task?.parentTaskId ? {} : { [QUESTIONS_ENV]: "1" }),
+    },
   }
-}
-
-function legacyProtocol(project: HarnessProject | null | undefined): AgentProtocol {
-  return (project?.taskAgentProtocol ?? "claude-stream") as AgentProtocol
 }
 
 /**
  * How a task's **current** session is read and written to: the dialect it started on
- * (`tasks.session_protocol`). A session started before that column — still running at the update,
- * or picked back up later — keeps its app's previous dialect (`claude-runner`, `codex-runner`), or
- * its project's for a task delegated before agent apps: a conversation is never read in a dialect
- * it does not speak. Its next session, a reply's resume, starts on the contract. A task with no
- * session yet (no `commandId`) has no past to keep: it will start on its app's current dialect.
+ * (`tasks.session_protocol`), written when it starts. None recorded is a session from before the
+ * contract: its history is already stored, there is nothing to read.
  */
-export function protocolOf(task: HarnessTask | null | undefined, project: HarnessProject | null | undefined): AgentProtocol {
+export function protocolOf(task: HarnessTask | null | undefined): AgentProtocol {
   if (task?.sessionProtocol && (AGENT_PROTOCOLS as readonly string[]).includes(task.sessionProtocol)) {
     return task.sessionProtocol as AgentProtocol
   }
-  const app = getAgentApp(task?.agentAppId)
-  if (!app) return legacyProtocol(project)
-  return task?.commandId ? harnessOf(app).legacyProtocol : harnessOf(app).protocol
+  return "none"
 }

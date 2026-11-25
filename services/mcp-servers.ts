@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto"
 import { and, eq, lt } from "drizzle-orm"
-import type { AgentMcpServer } from "@spunto/build/agent-runners"
+import type { AgentMcpServer } from "@spunto/build/agent-contract"
 import { db } from "../db/index"
 import { mcpConnections, mcpGatewayTokens, mcpOauthStates, mcpServers, projectMcpSettings, type McpConnection, type McpServer } from "../db/schema"
 import { decrypt, encrypt } from "../lib/crypto"

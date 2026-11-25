@@ -85,8 +85,9 @@ test.describe("tasks API", () => {
     const codex = await (await post({ agentAppId: "codex", agentOptions: { webSearch: "live" } })).json()
     expect(codex).toMatchObject({ agentAppId: "codex", model: "gpt-5.5", agentOptions: { webSearch: "live" } })
 
+    // No session yet, so no dialect: it is written when the session starts (`sessionProtocol`).
     const events = await (await request.get(`/api/tasks/${codex.id}/events?tail=true`)).json()
-    expect(events.protocol).toBe("agent-v1")
+    expect(events.protocol).toBe("none")
     await request.delete(`/api/projects/${p.id}`)
   })
 
@@ -166,8 +167,9 @@ test.describe("tasks API", () => {
     const renamed = await (await request.patch(`/api/tasks/${task.id}`, { data: { title: "Safari login" } })).json()
     expect(renamed).toMatchObject({ title: "Safari login", autoTitle: false, branch: null })
 
+    // Failed before any session: there is no dialect to read it in.
     const events = await (await request.get(`/api/tasks/${task.id}/events?tail=true`)).json()
-    expect(events).toMatchObject({ protocol: "agent-v1", hasMore: false, draft: null })
+    expect(events).toMatchObject({ protocol: "none", hasMore: false, draft: null })
     const diff = await (await request.get(`/api/tasks/${task.id}/diff`)).json()
     expect(diff).toMatchObject({ available: false, reason: "no-machine" })
 

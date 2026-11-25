@@ -9,6 +9,29 @@ What changed in Lite, newest first. Everything listed here is in the `latest` im
 it is dated: to get it, [upgrade](/docs/installation#upgrade) — same volumes, same key, nothing to
 migrate by hand.
 
+## 2026-11-25
+
+**The agent can ask you, and its subagents get their own block**
+
+### New
+
+- **Questions from the agent.** When Claude Code asks a multiple-choice question, it appears in the
+  conversation as options to click, and the task shows **Asks you** in the lists. Answer in a
+  click, write your own answer, or simply reply. [Details](/docs/agents#when-the-agent-asks-you)
+
+### Improved
+
+- **Subagents** started by Claude are grouped under their call, one row each, and open on a click.
+  Their messages no longer look like the agent's, and the context shown is the session's own.
+- **Context compaction** is a discreet marker instead of a long message, and a loaded **skill**
+  sits under the call that loaded it.
+- **Images in a conversation** keep their place while they load: the timeline no longer jumps.
+
+### Removed
+
+- **Tasks delegated before agent apps** (from before 2026-11, on Claude Code's CLI) can still be
+  read, but no longer be resumed: delegate them again.
+
 ## 2026-11-21
 
 **On hold, project tags, and Lite without the IDE**

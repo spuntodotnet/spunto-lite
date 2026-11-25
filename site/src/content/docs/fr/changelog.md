@@ -9,6 +9,32 @@ Ce qui change dans Lite, du plus récent au plus ancien. Tout ce qui est listé 
 `latest` à partir du jour indiqué : pour l’avoir, [mettez Lite à jour](/fr/docs/installation#mettre-à-jour),
 mêmes volumes, même clé, rien à migrer à la main.
 
+## 2026-11-25
+
+**L’agent peut vous poser une question, et ses sous-agents ont leur bloc**
+
+### Nouveau
+
+- **Les questions de l’agent.** Quand Claude Code pose une question à choix, elle s’affiche dans la
+  conversation sous forme d’options à cliquer, et la tâche porte **Asks you** dans les listes.
+  Répondez d’un clic, écrivez votre propre réponse, ou répondez simplement.
+  [Détails](/fr/docs/agents#quand-lagent-vous-pose-une-question)
+
+### Amélioré
+
+- **Les sous-agents** lancés par Claude sont regroupés sous leur appel, une ligne chacun, et
+  s’ouvrent d’un clic. Leurs messages ne passent plus pour ceux de l’agent, et le contexte affiché
+  est celui de la session.
+- **La compaction du contexte** devient un repère discret au lieu d’un long message, et un **skill**
+  chargé se range sous l’appel qui l’a chargé.
+- **Les images d’une conversation** gardent leur place pendant leur chargement : le fil ne saute
+  plus.
+
+### Retiré
+
+- **Les tâches déléguées avant les apps d’agent** (d’avant novembre 2026, sur le CLI de Claude
+  Code) se lisent encore, mais ne se reprennent plus : déléguez-les à nouveau.
+
 ## 2026-11-21
 
 **On hold, des tags de projet, et Lite sans l’IDE**

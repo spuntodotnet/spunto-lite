@@ -77,18 +77,10 @@ function createVersion(projectId: string, version: number, config: ProjectVersio
  * its public half, so there was no way to register it on a host, so it could only ever clone a
  * public repository. A private one failed with a key the user could not see, let alone install.
  */
-export type SerializedProject = Omit<Project, (typeof DEPRECATED_COLUMNS)[number]>
-
-/**
- * Columns agent apps replaced (RFC 0048): still on the row so that a task delegated before them can
- * finish on the CLI it began on, but neither written nor exposed any more.
- */
-const DEPRECATED_COLUMNS = ["taskAgentCommand", "taskAgentProtocol", "taskFollowUpCommand", "taskResetCommand", "taskAgentModel"] as const
+export type SerializedProject = Project
 
 export function serializeProject(p: Project): SerializedProject {
-  const out: Partial<Project> = { ...p }
-  for (const key of DEPRECATED_COLUMNS) delete out[key]
-  return out as SerializedProject
+  return p
 }
 
 export function listProjects(): SerializedProject[] {
@@ -215,15 +207,10 @@ export function createProject(input: CreateProjectInput): SerializedProject {
     agentAppIds,
     currentVersion: 1,
     favorite: false,
-    taskAgentCommand: null,
-    taskAgentProtocol: "claude-stream",
-    taskFollowUpCommand: null,
-    taskResetCommand: null,
     taskValidateCommand: null,
     taskCancelCommand: null,
     taskReviewMode: "keep",
     taskReviewParkAfterMinutes: 0,
-    taskAgentModel: null,
     taskAgentModels: {},
     taskAgentInstructions: null,
     ...taskSettingsColumns(input),

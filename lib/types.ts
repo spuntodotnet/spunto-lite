@@ -1,4 +1,4 @@
-import type { AgentCatalog } from "@spunto/build/agent-runners"
+import type { AgentCatalog } from "@spunto/build/agent-contract"
 import type { BuildStep } from "@spunto/build/steps"
 import type { PortsAttributes } from "./ports"
 export type { PortsAttributes }

@@ -330,6 +330,25 @@ export const TaskMessageSchema = z.object({
 })
 
 /**
+ * `POST /api/tasks/:id/answer`: the member's choice for a question the agent waits on (Cloud #856)
+ * — per question, the `label` of each option picked and/or their own words (« Other »).
+ */
+export const TaskAnswerSchema = z.object({
+  callId: z.string().min(1).max(200),
+  answers: z
+    .array(
+      z.object({
+        question: z.string().min(1).max(2_000),
+        selected: z.array(z.string().max(500)).max(20),
+        text: z.string().trim().max(20_000).nullish(),
+      }),
+    )
+    .min(1)
+    .max(10)
+    .refine((answers) => answers.some((a) => a.selected.length > 0 || !!a.text), "Pick an option or write an answer"),
+})
+
+/**
  * `PATCH /api/tasks/:id`: rename (final — the session no longer renames it; the branch keeps its
  * name), replace the links as a whole, merge the metadata key by key (`null` or `""` removes one).
  */

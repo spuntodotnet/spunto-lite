@@ -6,6 +6,7 @@ import { taskAttachments, workers, type TaskAttachment } from "../db/schema"
 import { shellQuote } from "../lib/shell"
 import { runCommand } from "../lib/worker-commands"
 import { MAX_FILES_PER_TURN, MAX_TURN_BYTES, cleanFilename, decodeAttachment, workerFilename } from "../lib/task-attachments"
+import { imageDimensions } from "../lib/image-dimensions"
 
 /**
  * The files of a task's conversation (RFC 0022): storing them, serving them, and putting the
@@ -24,7 +25,8 @@ import { MAX_FILES_PER_TURN, MAX_TURN_BYTES, cleanFilename, decodeAttachment, wo
 const newAttachmentId = customAlphabet("0123456789abcdefghijklmnopqrstuvwxyz", 21)
 
 export type InlineFile = { filename?: string | null; mediaType: string; data: string }
-export type StoredFile = { id: string; filename: string | null; mediaType: string; bytes: number }
+/** A stored file as an event's payload and the API carry it — `width`/`height` only on an image whose header was read. */
+export type StoredFile = { id: string; filename: string | null; mediaType: string; bytes: number; width?: number; height?: number }
 
 /**
  * `MAX_ARG_STRLEN` caps a single `execve` argument at 128 KiB, so base64 goes over in chunks that
@@ -33,8 +35,14 @@ export type StoredFile = { id: string; filename: string | null; mediaType: strin
 const CHUNK_CHARS = 96 * 1024
 const CHUNKS_PER_TRIP = 8
 
-export function serializeFile(row: Pick<TaskAttachment, "id" | "filename" | "mediaType" | "bytes">): StoredFile {
-  return { id: row.id, filename: row.filename, mediaType: row.mediaType, bytes: row.bytes }
+export function serializeFile(row: Pick<TaskAttachment, "id" | "filename" | "mediaType" | "bytes"> & Partial<Pick<TaskAttachment, "width" | "height">>): StoredFile {
+  return {
+    id: row.id,
+    filename: row.filename,
+    mediaType: row.mediaType,
+    bytes: row.bytes,
+    ...(row.width && row.height ? { width: row.width, height: row.height } : {}),
+  }
 }
 
 /**
@@ -61,16 +69,20 @@ export function storeFiles(taskId: string, commandId: string | null, origin: "us
       stored.push(serializeFile(existing))
       continue
     }
+    const mediaType = file.mediaType || "application/octet-stream"
+    const dims = imageDimensions(buf, mediaType)
     const row: TaskAttachment = {
       id: `att_${newAttachmentId()}`,
       taskId,
       commandId,
       origin,
       filename: cleanFilename(file.filename),
-      mediaType: file.mediaType || "application/octet-stream",
+      mediaType,
       bytes: buf.length,
       sha256,
       data: buf,
+      width: dims?.width ?? null,
+      height: dims?.height ?? null,
       createdAt: new Date(),
     }
     db.insert(taskAttachments).values(row).onConflictDoNothing().run()

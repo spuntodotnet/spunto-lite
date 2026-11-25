@@ -333,6 +333,7 @@ export function TaskCockpit({
           olderError={stream.olderError}
           onLoadOlder={stream.loadOlder}
           pending={actions.replyFailed ? null : pending}
+          onAnswer={actions.answer}
           draft={stream.draft}
           // No session yet is not an empty stream, it is a machine being built.
           emptyState={task && !task.startedAt ? <TaskBoot task={task} worker={worker} commands={commands} /> : undefined}

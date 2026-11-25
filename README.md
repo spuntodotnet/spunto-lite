@@ -160,8 +160,12 @@ use (a new project starts with Claude Code), each puts its official SDK in the p
 and each task picks one — with that app's models and its own parameters (effort, reasoning…).
 All it needs is the app's key as a secret (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `MISTRAL_API_KEY`). The
 harnesses, the default models, what Accept and Drop run and whether the worker stays up during
-review are the project's *Delegated work* settings. The screens come from `@spunto/design-system/tasks` and the session parsing from
-`@spunto/build/agent-stream`, shared with Spunto Cloud. Details, and what differs from the Cloud
+review are the project's *Delegated work* settings. The screens come from `@spunto/design-system/tasks`, the runners (Claude Code, Codex, Mistral Vibe,
+with their SDKs' install scripts and model catalogs) from
+[`@spunto/agent-runners`](https://www.npmjs.com/package/@spunto/agent-runners), and the contract
+they speak and its parsing from `@spunto/build/agent-contract` and `agent-stream`, all shared with
+Spunto Cloud. When Claude asks a multiple-choice question, the conversation shows it as options and
+the turn waits for your answer. Details, and what differs from the Cloud
 version: [`docs/taches.md`](docs/taches.md).
 
 What they consumed — cost, tokens, turns, tools, per day, task, project, agent and model — is on

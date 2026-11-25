@@ -46,6 +46,7 @@ type Task = {
   canReopen?: boolean
   reopenBlocker?: string | null
   onHoldAt?: string | null
+  pendingQuestion?: { callId: string; question: string; header: string | null; count: number } | null
 }
 
 async function workerState(request: APIRequestContext, id: string): Promise<string> {
@@ -182,7 +183,7 @@ test.describe("task lifecycle on a real worker", () => {
   })
 
   test("the next task recycles the pool worker, parks it for review, wakes it for a reply, and drops", async ({ request }) => {
-    test.setTimeout(8 * 60_000)
+    test.setTimeout(12 * 60_000)
     await request.patch(`/api/projects/${projectId}`, { data: { taskReviewMode: "stop" } })
     const created = await (await request.post(`/api/projects/${projectId}/tasks`, { data: { title: "Second", prompt: "Another note" } })).json()
     let t = await until(request, created.id, (x) => x.state === "in-review" || x.state === "failed", 5 * 60_000)
@@ -213,6 +214,36 @@ test.describe("task lifecycle on a real worker", () => {
     expect(t.error).toBeNull()
     const labels = (await (await request.get(`/api/tasks/${created.id}/commands`)).json()).map((c: { label: string }) => c.label)
     expect(labels).toContain("Follow-up")
+
+    // The agent asks a question (Claude's `AskUserQuestion`) and its turn waits on the answer: the
+    // task says so (`pendingQuestion`), the answer goes into the live session, and it carries on.
+    t = await until(request, created.id, (x) => x.state === "in-review", 60_000)
+    expect((await request.post(`/api/tasks/${created.id}/messages`, { data: { prompt: "Ask me a question" } })).status()).toBe(202)
+    t = await until(request, created.id, (x) => !!x.pendingQuestion, 3 * 60_000)
+    expect(t.state).toBe("running")
+    expect(t.pendingQuestion).toMatchObject({ question: "Which colour?", header: "Colour", count: 1 })
+    const callId = t.pendingQuestion!.callId
+    const answer = { callId, answers: [{ question: "Which colour?", selected: ["Blue"] }] }
+    expect((await request.post(`/api/tasks/${created.id}/answer`, { data: { callId: "nope", answers: answer.answers } })).status()).toBe(409)
+    const answered = await request.post(`/api/tasks/${created.id}/answer`, { data: answer })
+    expect(answered.status(), await answered.text()).toBe(202)
+    t = await until(request, created.id, (x) => x.state === "in-review", 60_000)
+    expect(t.pendingQuestion).toBeNull()
+    let questions = (await events(request, created.id)).events.filter((e) => e.type === "question")
+    expect(questions.map((e) => e.payload.status)).toEqual(["pending", "answered"])
+    expect(questions[1]!.payload.answers).toEqual([{ question: "Which colour?", selected: ["Blue"] }])
+    // Answered already: nothing waits on it any more.
+    expect((await request.post(`/api/tasks/${created.id}/answer`, { data: answer })).status()).toBe(409)
+
+    // A plain reply while it waits *is* the answer, in words.
+    expect((await request.post(`/api/tasks/${created.id}/messages`, { data: { prompt: "Another question" } })).status()).toBe(202)
+    t = await until(request, created.id, (x) => !!x.pendingQuestion, 3 * 60_000)
+    expect((await request.post(`/api/tasks/${created.id}/messages`, { data: { prompt: "Green, neither of those" } })).status()).toBe(202)
+    t = await until(request, created.id, (x) => x.state === "in-review", 60_000)
+    questions = (await events(request, created.id)).events.filter((e) => e.type === "question")
+    expect(questions.map((e) => e.payload.status)).toEqual(["pending", "answered", "pending", "dismissed"])
+    const last = (await events(request, created.id)).events.filter((e) => e.type === "message" && e.payload.role === "assistant").at(-1)
+    expect(String(last?.payload.text)).toBe("Taken as the answer: Green, neither of those")
 
     // Drop: the task ends failed, with the reason.
     expect((await request.post(`/api/tasks/${created.id}/cancel`)).status()).toBe(202)
