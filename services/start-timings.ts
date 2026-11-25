@@ -1,4 +1,5 @@
-import type { SetupStatus } from "../db/schema"
+import { db } from "../db/index"
+import { workerStarts, type SetupStatus } from "../db/schema"
 import type { BuildStep } from "../lib/types"
 import { track } from "../lib/telemetry"
 
@@ -98,6 +99,24 @@ export function settleWorkerStart(workerId: string, outcome: "ready" | "error", 
     outcome === "error" ? "WARN" : "INFO",
   )
   phases.forEach((p, i) => track("worker.start_phase", { ...common, phase: p.phase, order: i, duration_ms: p.ms }))
+
+  // Kept here too, telemetry or not: Settings → Statistics reads them (services/statistics.ts).
+  try {
+    db.insert(workerStarts)
+      .values({
+        workerId,
+        projectId: run.projectId,
+        kind: run.kind,
+        origin: run.kind === "start" ? "disk" : run.attrs.image_built ? "built" : "cached",
+        outcome,
+        at: now,
+        totalMs: total,
+        phases: Object.fromEntries(phases.map((p) => [p.phase, p.ms])),
+      })
+      .run()
+  } catch (err) {
+    console.warn(`[worker:${workerId}] could not record its start: ${err}`)
+  }
 }
 
 // ─── Image builds ────────────────────────────────────────────────────────────

@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { toast } from "@spunto/design-system"
-import { KeyRound, User, FileCode2, Trash2, CheckCircle2, Lock } from "lucide-react"
+import Link from "next/link"
+import { KeyRound, User, FileCode2, Trash2, CheckCircle2, Lock, BarChart3, ChevronRight } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Settings, HostKey } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -87,6 +88,19 @@ export default function SettingsPage() {
           Git identity and SSH key injected into every worker, plus private registry access for base images.
         </p>
       </div>
+
+      <Link
+        href="/settings/statistics"
+        className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-sm transition-colors hover:bg-muted/40"
+        data-slot="settings-statistics-link"
+      >
+        <BarChart3 className="size-4 text-muted-foreground" />
+        <span className="flex-1">
+          <span className="font-medium">Statistics</span>
+          <span className="block text-xs text-muted-foreground">How long your workers take to be usable, and where that time goes.</span>
+        </span>
+        <ChevronRight className="size-4 text-muted-foreground" />
+      </Link>
 
       <Card>
         <CardHeader>

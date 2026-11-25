@@ -171,6 +171,8 @@ version: [`docs/taches.md`](docs/taches.md).
 
 What they consumed — cost, tokens, turns, tools, per day, task, project, agent and model — is on
 the **Usage** page, read straight from the sessions' events: [`docs/usage.md`](docs/usage.md).
+How long workers take to be usable — per kind of start and per phase of the setup — is on
+**Settings → Statistics**, from what Lite keeps of each start (`worker_starts`, `services/statistics.ts`).
 
 MCP servers (Notion, Linear…) are declared once in **Settings → MCP servers**, connected in OAuth
 from there, and given to each project's tasks through Lite's gateway — the worker never holds the

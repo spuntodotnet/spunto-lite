@@ -92,6 +92,13 @@ conteneur, le **CPU et la mémoire** en direct (avec un court historique), et l�
 dépôt. La page **Resources** liste chaque conteneur, image et volume que possède Lite, avec sa
 taille — c’est là qu’on voit ce qui occupe le disque.
 
+**Settings → Statistics** montre combien de temps vos workers mettent à être utilisables, et où
+passe ce temps, sur 24 heures à 90 jours, pour tous les projets ou un seul. Chaque sorte de
+démarrage a son graphe (un nouveau worker, un rebuild, un worker arrêté qu’on redémarre), puis
+chaque phase d’un setup : l’image, le conteneur, le boot, le clone, `postCreate`, `postStart`…
+Chaque point est un démarrage, la ligne est la médiane. Lite garde ces mesures lui-même et n’envoie
+rien nulle part.
+
 ## Étiquettes
 
 Les workers peuvent porter des étiquettes (*tags*). Lite en utilise une lui-même : `task` marque les

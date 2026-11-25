@@ -60,6 +60,14 @@ test.describe("worker lifecycle (Docker)", () => {
     )
     expect(ready, "worker should reach ready, not error").toBe("ready")
 
+    // Settings → Statistics kept the start, phase by phase: Lite's side, then the setup script's.
+    const stats = await (await request.get(`/api/statistics?range=24h&projectId=${projectId}`)).json()
+    expect(stats.startPoints.length).toBeGreaterThanOrEqual(1)
+    expect(stats.starts[0]).toMatchObject({ kind: "spawn" })
+    expect(stats.setupRuns[0].totalMs).toBeGreaterThan(0)
+    expect(stats.phases.map((p: { phase: string }) => p.phase)).toEqual(expect.arrayContaining(["image", "container", "boot", "recipe", "initializing"]))
+    expect(stats.projects[0]).toMatchObject({ projectId, setups: 1 })
+
     // Stop.
     const stop = await request.post(`/api/workers/${workerId}/stop`)
     expect(stop.status()).toBe(200)

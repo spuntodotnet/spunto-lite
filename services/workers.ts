@@ -161,7 +161,7 @@ export async function ensureProjectImage(
   const persist = (state?: "ready" | "error") => {
     db
       .update(projectImageBuilds)
-      .set({ logs, steps: tracker.steps, ...(state ? { state } : {}) })
+      .set({ logs, steps: tracker.steps, ...(state ? { state, durationMs: Date.now() - buildStarted } : {}) })
       .where(eq(projectImageBuilds.id, buildId))
       .run()
   }
