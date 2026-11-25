@@ -26,4 +26,22 @@ test.describe("settings", () => {
     expect(res.status()).toBe(400)
     expect((await res.json()).error).toContain("Invalid GCP service-account key")
   })
+
+  test("default project: set, refused when unknown, cleared when the project is deleted", async ({ request }) => {
+    const unknown = await request.patch("/api/settings", { data: { defaultProjectId: "no-such-project" } })
+    expect(unknown.status()).toBe(400)
+
+    const created = await request.post("/api/projects", {
+      data: { name: `e2e-default-${Date.now()}`, image: "mcr.microsoft.com/devcontainers/base:ubuntu" },
+    })
+    expect(created.status()).toBe(201)
+    const { id } = await created.json()
+
+    const set = await request.patch("/api/settings", { data: { defaultProjectId: id } })
+    expect(set.status()).toBe(200)
+    expect((await set.json()).defaultProjectId).toBe(id)
+
+    expect((await request.delete(`/api/projects/${id}`)).status()).toBe(204)
+    expect((await (await request.get("/api/settings")).json()).defaultProjectId).toBeNull()
+  })
 })

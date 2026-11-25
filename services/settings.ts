@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm"
 import { db } from "../db/index"
-import { settings, type Settings } from "../db/schema"
+import { projects, settings, type Settings } from "../db/schema"
 import { encrypt, decrypt } from "../lib/crypto"
 
 const SINGLETON = "singleton"
@@ -19,6 +19,7 @@ export function getSettings(): Settings {
     dotfilesRepo: null,
     gcpRegistryKey: null,
     dashboardColor: null,
+    defaultProjectId: null,
   }
   db.insert(settings).values(fresh).run()
   return fresh
@@ -26,8 +27,17 @@ export function getSettings(): Settings {
 
 /** Public projection — strips the encrypted key, exposes only a "configured" flag. */
 export function getSettingsView(): SettingsView {
-  const { gcpRegistryKey, ...rest } = getSettings()
-  return { ...rest, gcpRegistryConfigured: !!gcpRegistryKey }
+  const { gcpRegistryKey, defaultProjectId, ...rest } = getSettings()
+  return {
+    ...rest,
+    // A default whose project is gone reads as none.
+    defaultProjectId: defaultProjectId && projectExists(defaultProjectId) ? defaultProjectId : null,
+    gcpRegistryConfigured: !!gcpRegistryKey,
+  }
+}
+
+export function projectExists(id: string): boolean {
+  return !!db.select({ id: projects.id }).from(projects).where(eq(projects.id, id)).get()
 }
 
 /**

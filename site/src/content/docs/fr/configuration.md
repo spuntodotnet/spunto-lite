@@ -77,6 +77,9 @@ en fabrique un pour un wildcard ; le script `local-https/generate-certs.sh` du
   passe ([Clés SSH et git](/fr/docs/ssh-and-git)).
 - **Settings → MCP servers** — voir [Serveurs MCP](/fr/docs/mcp-servers).
 - **Settings → Container registry** — ci-dessus.
+- **Settings → Agents** — le projet par défaut : **New** sur la page Agents s’ouvre dessus, prêt à
+  déléguer (vous pouvez toujours en choisir un autre dans le composer). Aucun : il le demande à
+  chaque fois.
 - **Settings → Appearance** — la couleur du tableau de bord : le bleu propre à Lite, la paire d’un
   autre produit Spunto, ou l’une des palettes du design system. Thèmes clair et sombre depuis
   l’en-tête.

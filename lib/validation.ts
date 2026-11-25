@@ -255,6 +255,8 @@ export const SettingsSchema = z.object({
   gcpRegistryKey: z.string().nullable().optional(),
   /** Settings → Appearance (lib/appearance.ts): a colour name or a palette id; null = Lite's blue. */
   dashboardColor: z.string().refine(isDashboardColor, "Unknown dashboard colour").nullable().optional(),
+  /** Settings → Agents: the project the agent cockpit's "New" opens on; null = it asks. */
+  defaultProjectId: z.string().nullable().optional(),
 })
 
 export type CreateProjectInput = z.infer<typeof CreateProjectSchema>

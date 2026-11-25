@@ -19,6 +19,8 @@ mêmes volumes, même clé, rien à migrer à la main.
   avec son worker et son agent, et les suivre : il est prévenu quand l’une rend la main, lit son
   compte rendu et son diff, puis l’accepte, lui répond ou l’abandonne. Le parent les liste dans un
   bloc **Sub-tasks**, et chacune renvoie à lui. [Détails](/fr/docs/agents#sous-tâches)
+- **Un projet par défaut pour Agents.** Choisissez-le dans **Settings → Agents** : **New** sur la
+  page Agents s’ouvre directement dessus, comme sur Spunto Cloud. [Détails](/fr/docs/configuration)
 - **Settings → Statistics.** Combien de temps vos workers mettent à être utilisables, et où passe
   ce temps : un graphe par sorte de démarrage et par phase du setup, sur 24 h à 90 jours.
   [Détails](/fr/docs/workers#surveiller-un-worker)

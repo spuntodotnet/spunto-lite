@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `default_project_id` text;
