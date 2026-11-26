@@ -19,7 +19,7 @@ export const github: IntegrationDefinition = {
   pullRequestPath: (repo, number) => `/${repo}/pull/${number}`,
   newTokenUrl: (origin) =>
     `${origin}/settings/personal-access-tokens/new?name=Spunto+Lite&description=Pull+request+status+in+Spunto+Lite`,
-  tokenScopes: "Pull requests, Commit statuses and Checks — read-only (fine-grained); repo (classic)",
+  tokenScopes: "Metadata, Pull requests, Commit statuses and Checks — read-only (fine-grained); repo (classic)",
   tokenEnvVar: "GH_TOKEN",
 }
 

@@ -27,6 +27,14 @@ test.describe("integrations", () => {
     expect(empty.status()).toBe(400)
   })
 
+  test("GET /repositories answers its shape, even with nothing connected", async ({ request }) => {
+    const res = await request.get("/api/integrations/repositories")
+    expect(res.status()).toBe(200)
+    const body = await res.json()
+    expect(Array.isArray(body.sources)).toBe(true)
+    expect(Array.isArray(body.repositories)).toBe(true)
+  })
+
   test("DELETE of an unknown or environment connection is a 404", async ({ request }) => {
     expect((await request.delete("/api/integrations/no-such-connection")).status()).toBe(404)
     expect((await request.delete("/api/integrations/env:github")).status()).toBe(404)

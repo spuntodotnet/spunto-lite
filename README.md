@@ -175,8 +175,8 @@ How long workers take to be usable — per kind of start and per phase of the se
 **Settings → Statistics**, from what Lite keeps of each start (`worker_starts`, `services/statistics.ts`).
 
 Forges (GitHub, GitLab — public or self-hosted) can be connected with a token in **Settings →
-Integrations**: the pull requests a task talks about then say where they stand — open or merged,
-checks, review. Clone and push still go through your SSH key, and the token never reaches a
+Integrations**: the project form then lists your repositories instead of asking for a clone URL,
+and the pull requests a task talks about say where they stand — open or merged, checks, review. Clone and push still go through your SSH key, and the token never reaches a
 worker: [`docs/integrations.md`](docs/integrations.md).
 
 MCP servers (Notion, Linear…) are declared once in **Settings → MCP servers**, connected in OAuth

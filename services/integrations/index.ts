@@ -124,6 +124,7 @@ export async function connect(input: { kind: IntegrationKind; host?: string; tok
   if (existing) db.update(integrationConnections).set(row).where(eq(integrationConnections.id, existing.id)).run()
   else db.insert(integrationConnections).values({ id: newId(), ...row, createdAt: new Date() }).run()
   forgetPullRequests(origin)
+  repositoriesCache = null
   return listConnections().find((c) => c.origin === origin && c.source === "settings")!
 }
 
@@ -132,6 +133,7 @@ export function disconnect(id: string): boolean {
   if (!row) return false
   db.delete(integrationConnections).where(eq(integrationConnections.id, id)).run()
   forgetPullRequests(row.origin)
+  repositoriesCache = null
   return true
 }
 
@@ -164,5 +166,63 @@ export function pullRequestState(ref: PullRequestRef): Promise<PullRequestState 
   cache.set(key, { at: Date.now(), value })
   // Bounded by what the conversations name; dropping the stale entries keeps it so.
   if (cache.size > 500) for (const [k, v] of cache) if (Date.now() - v.at >= TTL_MS) cache.delete(k)
+  return value
+}
+
+// ── Repositories ──────────────────────────────────────────────────────────────────────────────
+
+/** A connection that can list its repositories, as the project form offers it. */
+export type RepositorySource = {
+  /** The connection's id — what a picked row's `provider` holds until it becomes a clone URL. */
+  id: string
+  kind: IntegrationKind
+  origin: string
+  account: string | null
+  /** Why it listed nothing, when the forge refused: the form says it rather than an empty list. */
+  error?: string
+}
+
+export type RepositoryChoice = {
+  /** `RepositorySource.id`. */
+  source: string
+  fullName: string
+  /** What the project will store: Lite clones with the SSH key, whatever lists the repository. */
+  cloneUrl: string
+  private: boolean
+}
+
+/**
+ * Listing is a few pages per forge: kept a couple of minutes, so opening the form twice does not
+ * list twice, and dropped when a connection changes.
+ */
+const REPOSITORIES_TTL_MS = 2 * 60_000
+let repositoriesCache: { at: number; value: Promise<{ sources: RepositorySource[]; repositories: RepositoryChoice[] }> } | null = null
+
+/** The repositories every connection reaches, for the project form's picker. Never throws. */
+export function listRepositories(): Promise<{ sources: RepositorySource[]; repositories: RepositoryChoice[] }> {
+  if (repositoriesCache && Date.now() - repositoriesCache.at < REPOSITORIES_TTL_MS) return repositoriesCache.value
+  const value = (async () => {
+    const listed = await Promise.all(
+      listConnections().map(async (c) => {
+        const list = drivers[c.kind]?.listRepositories
+        const token = list ? tokenFor(c.kind, c.origin) : null
+        if (!list || !token) return null
+        const source: RepositorySource = { id: c.id, kind: c.kind, origin: c.origin, account: c.account }
+        try {
+          const repos = await list(c.origin, token)
+          return { source, repos: repos.map((r) => ({ source: c.id, fullName: r.fullName, cloneUrl: r.sshUrl, private: r.private })) }
+        } catch (err) {
+          return { source: { ...source, error: (err as Error).message }, repos: [] }
+        }
+      }),
+    )
+    const ok = listed.filter((l) => l !== null)
+    return { sources: ok.map((l) => l.source), repositories: ok.flatMap((l) => l.repos) }
+  })()
+  repositoriesCache = { at: Date.now(), value }
+  // A refusal is worth asking again on the next open, not two minutes later.
+  void value.then((v) => {
+    if (v.sources.some((s) => s.error) && repositoriesCache?.value === value) repositoriesCache = null
+  })
   return value
 }

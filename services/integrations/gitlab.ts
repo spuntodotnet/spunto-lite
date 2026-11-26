@@ -1,5 +1,5 @@
 import type { PullRequestState } from "../../lib/integrations"
-import { forgeFetch, IntegrationError, type IntegrationDriver } from "./types"
+import { forgeFetch, IntegrationError, REPOSITORY_PAGES, type ForgeRepository, type IntegrationDriver } from "./types"
 
 const headers = (token: string) => ({ "private-token": token, "user-agent": "spunto-lite" })
 
@@ -59,5 +59,22 @@ export const gitlabDriver: IntegrationDriver = {
       review,
       conflicts: mr.has_conflicts || mr.detailed_merge_status === "conflict" || undefined,
     }
+  },
+
+  /** The projects the account is a member of — not every public project of the instance. */
+  async listRepositories(origin, token) {
+    const repos: ForgeRepository[] = []
+    for (let page = 1; page <= REPOSITORY_PAGES; page++) {
+      const batch = (await forgeFetch(
+        "GitLab",
+        `${origin}/api/v4/projects?membership=true&simple=true&archived=false&order_by=last_activity_at&per_page=100&page=${page}`,
+        { headers: headers(token) },
+      )) as { path_with_namespace: string; ssh_url_to_repo: string; visibility: string }[]
+      repos.push(
+        ...batch.map((r) => ({ fullName: r.path_with_namespace, sshUrl: r.ssh_url_to_repo, private: r.visibility !== "public" })),
+      )
+      if (batch.length < 100) break
+    }
+    return repos
   },
 }

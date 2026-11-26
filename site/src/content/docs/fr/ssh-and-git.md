@@ -80,10 +80,10 @@ Une URL HTTPS clone sans clé quand le dépôt est public. Pour un dépôt priv�
 jeton dans les identifiants de l’URL ou passez à l’URL SSH — la clé SSH est la voie autour de
 laquelle Lite est conçu.
 
-## Intégrations : où en sont vos pull requests
+## Intégrations : vos dépôts, vos pull requests
 
-Cloner et pousser ne demandent jamais plus que la clé. Pour voir où en sont les pull requests dont
-parle une tâche — ouverte ou fusionnée, checks, revue, conflits — connectez leur forge dans
+Cloner et pousser ne demandent jamais plus que la clé. Pour choisir vos dépôts dans une liste dans
+le formulaire projet, et voir où en sont les pull requests dont parle une tâche — ouverte ou fusionnée, checks, revue, conflits — connectez leur forge dans
 **Settings → Integrations** avec un jeton personnel : GitHub (`github.com` ou Enterprise) ou GitLab
 (`gitlab.com` ou auto-hébergé). Le jeton reste dans Lite, chiffré ; aucun espace de travail ne le
 voit. Lite lit aussi `GH_TOKEN` ou `GITLAB_TOKEN` dans son propre environnement, pour les instances

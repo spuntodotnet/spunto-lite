@@ -74,10 +74,10 @@ An HTTPS URL clones without a key when the repository is public. For a private o
 put a token in the URL's credentials or switch to the SSH URL — the SSH key is the path Lite is
 built around.
 
-## Integrations: where your pull requests stand
+## Integrations: your repositories, your pull requests
 
-Cloning and pushing never need more than the key. To see where the pull requests a task talks about
-stand — open or merged, checks, review, conflicts — connect their forge in **Settings →
-Integrations** with a personal token: GitHub (`github.com` or Enterprise) or GitLab (`gitlab.com`
+Cloning and pushing never need more than the key. To pick repositories from a list in the project
+form, and to see where the pull requests a task talks about stand — open or merged, checks, review,
+conflicts — connect their forge in **Settings → Integrations** with a personal token: GitHub (`github.com` or Enterprise) or GitLab (`gitlab.com`
 or self-hosted). The token stays in Lite, encrypted; no workspace ever sees it. Lite can also read
 `GH_TOKEN` or `GITLAB_TOKEN` from its own environment, for the public instances.

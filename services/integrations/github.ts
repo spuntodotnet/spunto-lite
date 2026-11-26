@@ -1,6 +1,6 @@
 import { githubApiBase } from "../../lib/integrations/github"
 import type { PullRequestState } from "../../lib/integrations"
-import { forgeFetch, IntegrationError, type IntegrationDriver } from "./types"
+import { forgeFetch, IntegrationError, REPOSITORY_PAGES, type ForgeRepository, type IntegrationDriver } from "./types"
 
 const headers = (token: string) => ({
   authorization: `Bearer ${token}`,
@@ -69,5 +69,20 @@ export const githubDriver: IntegrationDriver = {
       review: pr.reviewDecision ? REVIEW[pr.reviewDecision] : undefined,
       conflicts: pr.mergeable === "CONFLICTING" || undefined,
     }
+  },
+
+  /** Owned, collaborated on and through an organization — what a fine-grained token was granted. */
+  async listRepositories(origin, token) {
+    const repos: ForgeRepository[] = []
+    for (let page = 1; page <= REPOSITORY_PAGES; page++) {
+      const batch = (await forgeFetch(
+        "GitHub",
+        `${githubApiBase(origin).rest}/user/repos?per_page=100&sort=pushed&page=${page}`,
+        { headers: headers(token) },
+      )) as { full_name: string; ssh_url: string; private: boolean }[]
+      repos.push(...batch.map((r) => ({ fullName: r.full_name, sshUrl: r.ssh_url, private: r.private })))
+      if (batch.length < 100) break
+    }
+    return repos
   },
 }

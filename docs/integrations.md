@@ -1,8 +1,13 @@
 # Intégrations
 
 On **connecte une forge** (GitHub, GitLab, en ligne ou auto-hébergée) avec un **jeton** dans
-**Settings → Integrations**, et les **pull requests** dont parle une tâche disent où elles en
-sont : ouverte, brouillon, fusionnée, fermée ; leurs checks ; leur revue ; un conflit. Clone et
+**Settings → Integrations**. Deux choses en profitent :
+
+- le **formulaire projet** propose les dépôts du compte (« Add repository ») au lieu d'une URL à
+  taper ;
+- les **pull requests** dont parle une tâche disent où elles en sont : ouverte, brouillon,
+  fusionnée, fermée ; leurs checks ; leur revue ; un conflit.
+ Clone et
 push ne changent pas : ils passent toujours par la clé SSH ([ssh-and-git](../site/src/content/docs/fr/ssh-and-git.md)).
 Le jeton reste dans Lite, chiffré : aucun worker ne le voit.
 
@@ -17,7 +22,7 @@ Chaque forge, ce sont **deux fichiers** :
 | | Où | Quoi |
 |---|---|---|
 | **Définition** | `lib/integrations/<forge>.ts` | Pure, importable par le navigateur : la route d'une PR dans une URL, ce que la forge l'appelle (`PR`/`MR`, `#12`/`!12`), son hôte public, sa page de création de jeton, la variable d'environnement de son jeton. |
-| **Pilote** | `services/integrations/<forge>.ts` | Serveur seulement : ce qu'on peut demander à la forge avec un jeton. `whoami` est obligatoire (c'est ainsi qu'un jeton est vérifié avant d'être enregistré) ; **chaque capacité ensuite est optionnelle** — `pullRequest` aujourd'hui. |
+| **Pilote** | `services/integrations/<forge>.ts` | Serveur seulement : ce qu'on peut demander à la forge avec un jeton. `whoami` est obligatoire (c'est ainsi qu'un jeton est vérifié avant d'être enregistré) ; **chaque capacité ensuite est optionnelle** — `pullRequest` et `listRepositories` aujourd'hui. |
 
 `lib/integrations/index.ts` tient le registre des définitions, dans l'ordre où une URL les essaie
 (GitLab d'abord : sa route `/-/merge_requests/` ne se confond avec aucune autre, alors que celle
@@ -45,6 +50,29 @@ est lue avec la connexion dont l'origine est `https://gitlab.example.com`, si el
 GitLab. Les projets restent portables (l'export n'a rien de plus), une intégration n'est jamais
 requise, et un hôte qu'on n'a pas connecté marche exactement comme avant.
 
+## Choisir un dépôt
+
+Avec au moins une connexion qui sait lister (`listRepositories`), la section *Repositories* du
+formulaire projet reçoit les connexions comme `gitProviders` du design system : il dessine alors
+son bouton **Add repository** à côté de **Add Git URL**. Le champ de la ligne est
+`components/repository-picker-field.tsx` (le slot `renderRepoField`) : une recherche par
+sous-chaîne dans les dépôts de toutes les connexions, avec un cadenas pour les privés et la forge
+quand il y en a plusieurs.
+
+**Une ligne choisie redevient aussitôt une ligne « Git URL »** (`pickRepository`,
+`lib/project-form-value.ts`) avec l'URL SSH que la forge donne (`ssh_url`, `ssh_url_to_repo` :
+le bon port sur une instance qui en a un autre). Le projet ne stocke donc toujours qu'une URL de
+clonage, clonée avec la clé SSH ; l'intégration a seulement servi à la trouver. Un `owner/repo`
+**tapé** sans être choisi est résolu à l'enregistrement (`resolvePickedRepositories`) : l'URL du
+dépôt listé s'il en est un, sinon `git@<hôte>:<owner/repo>.git` ; un nom sans `/` est refusé avec
+un message plutôt que perdu.
+
+Listage : GitHub `GET /user/repos?sort=pushed` (ce que le jeton atteint : les siens, ceux où il
+collabore, ceux de ses organisations), GitLab `GET /projects?membership=true` (les projets dont
+le compte est membre, pas tous les projets publics de l'instance). Au plus 5 pages de 100, gardé
+2 minutes côté serveur, oublié quand une connexion change ; une forge qui refuse ne vide que sa
+part.
+
 ## D'où vient le jeton
 
 Pour une origine, dans cet ordre :
@@ -60,7 +88,7 @@ Pas d'OAuth : sur un outil local à un seul utilisateur, un jeton personnel suff
 
 | Forge | Jeton |
 |---|---|
-| GitHub | fine-grained : *Pull requests*, *Commit statuses*, *Checks* en lecture ; ou classique `repo` |
+| GitHub | fine-grained : *Metadata* (par défaut), *Pull requests*, *Commit statuses*, *Checks* en lecture ; ou classique `repo` |
 | GitLab | `read_api` |
 
 ## Ce qu'on demande, et à quel rythme
@@ -89,6 +117,7 @@ encore être fusionnée — des badges *Checks passing / failing / running*, *Ap
 
 ```
 GET    /api/integrations        — { offers: les forges connectables, connections: les comptes (jamais le jeton) }
+GET    /api/integrations/repositories — { sources: les connexions qui listent, repositories: [{ source, fullName, cloneUrl, private }] }
 POST   /api/integrations        — { kind: "github"|"gitlab", host?, token } → 201, après whoami ; 400 si la forge refuse
 DELETE /api/integrations/:id    — oublie un jeton enregistré ; 404 pour une connexion `env:…`
 ```
@@ -97,7 +126,7 @@ DELETE /api/integrations/:id    — oublie un jeton enregistré ; 404 pour une c
 
 Dans l'ordre prévu, chaque étape étant une capacité de plus du pilote :
 
-1. ~~État des PR dans la tuile~~ (fait) ;
+1. ~~État des PR dans la tuile~~, ~~choix du dépôt dans le formulaire projet~~ (faits) ;
 2. des outils `pull_request_*` et `ci_logs` dans `spunto-tasks` (`/api/task-mcp`), exécutés par
    Lite avec le jeton — l'agent ouvre et lit ses PR sans jamais tenir le jeton, comme pour la
    passerelle MCP ;

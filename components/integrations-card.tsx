@@ -18,7 +18,7 @@ export const INTEGRATIONS_QUERY_KEY = ["integrations"]
 type IntegrationsData = { offers: IntegrationOffer[]; connections: IntegrationConnectionView[] }
 
 /** The forge's glyph: the design system has GitHub's mark, not GitLab's. */
-function ForgeMark({ kind }: { kind: IntegrationKind }) {
+export function ForgeMark({ kind }: { kind: IntegrationKind }) {
   return kind === "github" ? <StackMark name="github" className="size-4" /> : <GitMerge className="size-4" />
 }
 
@@ -42,8 +42,8 @@ export function IntegrationsCard() {
           <Waypoints className="size-4" /> Integrations
         </CardTitle>
         <CardDescription>
-          Connect a forge with a token, and the pull requests a task talks about say where they stand: open or merged, their
-          checks, their review. Clone and push still go through your SSH key; the token stays here, never in a worker.
+          Connect a forge with a token: the project form lists your repositories, and the pull requests a task talks about
+          say where they stand — open or merged, their checks, their review. Clone and push still go through your SSH key; the token stays here, never in a worker.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

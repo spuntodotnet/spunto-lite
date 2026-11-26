@@ -12,7 +12,21 @@ export type IntegrationDriver = {
   whoami(origin: string, token: string): Promise<string>
   /** Where a pull request stands: state, checks, review. */
   pullRequest?(ref: PullRequestRef, token: string): Promise<PullRequestState>
+  /** The repositories the token reaches, most recently active first — the project form's picker. */
+  listRepositories?(origin: string, token: string): Promise<ForgeRepository[]>
 }
+
+/** A repository a token reaches, with the SSH URL Lite clones it by. */
+export type ForgeRepository = {
+  /** `owner/repo` — for GitLab, the whole group path. */
+  fullName: string
+  /** As the forge gives it: `git@github.com:owner/repo.git`, or `ssh://git@host:2222/…` on a custom port. */
+  sshUrl: string
+  private: boolean
+}
+
+/** How many pages of 100 a listing reads: enough for anyone's own repositories, bounded for an admin's. */
+export const REPOSITORY_PAGES = 5
 
 export class IntegrationError extends Error {
   constructor(
