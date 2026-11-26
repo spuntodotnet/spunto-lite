@@ -43,6 +43,8 @@ export type IntegrationDefinition = {
   tokenScopes?: string
   /** The variable of the control plane's environment read as the public instance's token. */
   tokenEnvVar?: string
+  /** The user name git sends with the token over HTTPS. Absent: the token does not clone. */
+  gitUsername?: string
 }
 
 /** Where a pull request stands, as a driver read it. Each field the forge did not say is absent. */

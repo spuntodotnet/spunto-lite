@@ -79,8 +79,8 @@ export const githubDriver: IntegrationDriver = {
         "GitHub",
         `${githubApiBase(origin).rest}/user/repos?per_page=100&sort=pushed&page=${page}`,
         { headers: headers(token) },
-      )) as { full_name: string; ssh_url: string; private: boolean }[]
-      repos.push(...batch.map((r) => ({ fullName: r.full_name, sshUrl: r.ssh_url, private: r.private })))
+      )) as { full_name: string; clone_url: string; private: boolean }[]
+      repos.push(...batch.map((r) => ({ fullName: r.full_name, httpsUrl: r.clone_url, private: r.private })))
       if (batch.length < 100) break
     }
     return repos

@@ -35,6 +35,16 @@ test.describe("integrations", () => {
     expect(Array.isArray(body.repositories)).toBe(true)
   })
 
+  test("a worker's git credential helper is refused without a worker's token", async ({ request }) => {
+    const none = await request.post("/api/workers/git-credential", { data: { protocol: "https", host: "github.com" } })
+    expect(none.status()).toBe(401)
+    const forged = await request.post("/api/workers/git-credential", {
+      headers: { authorization: `Bearer lgc_nosuchworker_${"0".repeat(40)}` },
+      data: { protocol: "https", host: "github.com" },
+    })
+    expect(forged.status()).toBe(401)
+  })
+
   test("DELETE of an unknown or environment connection is a 404", async ({ request }) => {
     expect((await request.delete("/api/integrations/no-such-connection")).status()).toBe(404)
     expect((await request.delete("/api/integrations/env:github")).status()).toBe(404)

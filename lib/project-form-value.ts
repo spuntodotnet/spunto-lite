@@ -10,8 +10,9 @@
 // cloned with the one mounted SSH key (see the `Repository` type). So every row this module
 // produces is a `git` row. The package's picker is fed by the integrations (docs/integrations.md)
 // only as a way to *find* a repository: a row picked there carries a connection's id as its
-// provider for as long as it is being typed, and becomes a `git` row with the repository's SSH
-// URL as soon as it is picked (`pickRepository`), or on submit (`resolvePickedRepositories`).
+// provider for as long as it is being typed, and becomes a `git` row with the repository's HTTPS
+// URL as soon as it is picked (`pickRepository`), or on submit (`resolvePickedRepositories`) —
+// cloned and pushed with the connection's token, through the worker's credential helper.
 
 import {
   toProjectFormValue,
@@ -320,8 +321,8 @@ export function pickRepository(repos: ProjectRepo[], id: string, pick: Repositor
 
 /**
  * Rows still on a forge at submit — an `owner/repo` typed rather than picked — resolved to clone
- * URLs: the listed repository's when the name is one, else `git@<host>:<owner/repo>.git` on the
- * row's connection, which is what the forge's SSH URL is everywhere but on a custom port. What
+ * URLs: the listed repository's when the name is one, else `<origin>/<owner/repo>.git` on the
+ * row's connection — HTTPS, like a picked one, cloned with the connection's token. What
  * cannot be resolved is named in `unresolved`, for the form to say rather than drop.
  */
 export function resolvePickedRepositories(
@@ -341,8 +342,7 @@ export function resolvePickedRepositories(
       unresolved.push(name)
       return r
     }
-    const host = new URL(source.origin).hostname
-    return pickRepository([r], r.id, { source: source.id, fullName: name, cloneUrl: `git@${host}:${name}.git` })[0]
+    return pickRepository([r], r.id, { source: source.id, fullName: name, cloneUrl: `${source.origin}/${name}.git` })[0]
   })
   return { repositories, unresolved }
 }

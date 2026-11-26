@@ -76,15 +76,17 @@ Les chemins se changent avec `SSH_AGENT_DIR` (par défaut `/run/spunto-ssh-agent
 
 ## URL de clonage HTTPS
 
-Une URL HTTPS clone sans clé quand le dépôt est public. Pour un dépôt privé en HTTPS, mettez un
-jeton dans les identifiants de l’URL ou passez à l’URL SSH — la clé SSH est la voie autour de
-laquelle Lite est conçu.
+Une URL HTTPS clone sans clé quand le dépôt est public. Pour un dépôt privé en HTTPS, connectez
+sa forge dans **Settings → Integrations** (plus bas) : les espaces de travail le clonent et le
+poussent alors avec ce jeton. Sinon, passez à l’URL SSH.
 
 ## Intégrations : vos dépôts, vos pull requests
 
-Cloner et pousser ne demandent jamais plus que la clé. Pour choisir vos dépôts dans une liste dans
-le formulaire projet, et voir où en sont les pull requests dont parle une tâche — ouverte ou fusionnée, checks, revue, conflits — connectez leur forge dans
-**Settings → Integrations** avec un jeton personnel : GitHub (`github.com` ou Enterprise) ou GitLab
-(`gitlab.com` ou auto-hébergé). Le jeton reste dans Lite, chiffré ; aucun espace de travail ne le
-voit. Lite lit aussi `GH_TOKEN` ou `GITLAB_TOKEN` dans son propre environnement, pour les instances
+Connectez une forge dans **Settings → Integrations** avec un jeton personnel — GitHub
+(`github.com` ou Enterprise) ou GitLab (`gitlab.com` ou auto-hébergé) — et le formulaire projet
+liste vos dépôts ; les espaces de travail clonent et poussent ceux que vous choisissez en HTTPS avec
+ce jeton, sans clé SSH à enregistrer chez la forge ; et les pull requests dont parle une tâche
+disent où elles en sont — ouverte ou fusionnée, checks, revue, conflits. Le jeton reste dans Lite,
+chiffré : un espace de travail le demande à chaque opération git, seulement pour l’hôte que git
+contacte, et ne le garde jamais. Lite lit aussi `GH_TOKEN` ou `GITLAB_TOKEN` dans son propre environnement, pour les instances
 publiques.

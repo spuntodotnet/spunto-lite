@@ -186,7 +186,7 @@ export type RepositoryChoice = {
   /** `RepositorySource.id`. */
   source: string
   fullName: string
-  /** What the project will store: Lite clones with the SSH key, whatever lists the repository. */
+  /** What the project will store: the HTTPS URL, cloned and pushed with the connection's token. */
   cloneUrl: string
   private: boolean
 }
@@ -210,7 +210,7 @@ export function listRepositories(): Promise<{ sources: RepositorySource[]; repos
         const source: RepositorySource = { id: c.id, kind: c.kind, origin: c.origin, account: c.account }
         try {
           const repos = await list(c.origin, token)
-          return { source, repos: repos.map((r) => ({ source: c.id, fullName: r.fullName, cloneUrl: r.sshUrl, private: r.private })) }
+          return { source, repos: repos.map((r) => ({ source: c.id, fullName: r.fullName, cloneUrl: r.httpsUrl, private: r.private })) }
         } catch (err) {
           return { source: { ...source, error: (err as Error).message }, repos: [] }
         }
@@ -225,4 +225,20 @@ export function listRepositories(): Promise<{ sources: RepositorySource[]; repos
     if (v.sources.some((s) => s.error) && repositoriesCache?.value === value) repositoriesCache = null
   })
   return value
+}
+
+// ── Git over HTTPS ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The credential git sends to `origin`, for a worker's helper (lib/git-credential.ts): the
+ * connection's token under the user name its forge expects. Null when no connection is for that
+ * exact origin, or its forge does not clone with a token — the helper then stays silent.
+ */
+export function gitCredentialFor(origin: string): { username: string; password: string } | null {
+  const row = db.select().from(integrationConnections).where(eq(integrationConnections.origin, origin)).get()
+  const kind = row?.kind ?? envConnections([]).find((c) => c.origin === origin)?.kind
+  if (!kind) return null
+  const username = definitionOf(kind).gitUsername
+  const password = tokenFor(kind, origin)
+  return username && password ? { username, password } : null
 }

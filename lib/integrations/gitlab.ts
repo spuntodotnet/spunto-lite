@@ -14,7 +14,9 @@ export const gitlab: IntegrationDefinition = {
     return m ? { repo: m[1], number: Number(m[2]) } : null
   },
   pullRequestPath: (repo, number) => `/${repo}/-/merge_requests/${number}`,
-  newTokenUrl: (origin) => `${origin}/-/user_settings/personal_access_tokens?name=Spunto+Lite&scopes=read_api`,
-  tokenScopes: "read_api",
+  newTokenUrl: (origin) =>
+    `${origin}/-/user_settings/personal_access_tokens?name=Spunto+Lite&scopes=read_api,read_repository,write_repository`,
+  tokenScopes: "read_api, plus read_repository and write_repository to clone and push",
   tokenEnvVar: "GITLAB_TOKEN",
+  gitUsername: "oauth2",
 }

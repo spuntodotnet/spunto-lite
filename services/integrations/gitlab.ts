@@ -69,9 +69,9 @@ export const gitlabDriver: IntegrationDriver = {
         "GitLab",
         `${origin}/api/v4/projects?membership=true&simple=true&archived=false&order_by=last_activity_at&per_page=100&page=${page}`,
         { headers: headers(token) },
-      )) as { path_with_namespace: string; ssh_url_to_repo: string; visibility: string }[]
+      )) as { path_with_namespace: string; http_url_to_repo: string; visibility: string }[]
       repos.push(
-        ...batch.map((r) => ({ fullName: r.path_with_namespace, sshUrl: r.ssh_url_to_repo, private: r.visibility !== "public" })),
+        ...batch.map((r) => ({ fullName: r.path_with_namespace, httpsUrl: r.http_url_to_repo, private: r.visibility !== "public" })),
       )
       if (batch.length < 100) break
     }

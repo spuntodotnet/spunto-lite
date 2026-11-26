@@ -71,13 +71,15 @@ The paths can be changed with `SSH_AGENT_DIR` (default `/run/spunto-ssh-agent`) 
 ## HTTPS clone URLs
 
 An HTTPS URL clones without a key when the repository is public. For a private one over HTTPS,
-put a token in the URL's credentials or switch to the SSH URL — the SSH key is the path Lite is
-built around.
+connect its forge in **Settings → Integrations** (below): workspaces then clone and push it with
+that token. Otherwise, switch to the SSH URL.
 
 ## Integrations: your repositories, your pull requests
 
-Cloning and pushing never need more than the key. To pick repositories from a list in the project
-form, and to see where the pull requests a task talks about stand — open or merged, checks, review,
-conflicts — connect their forge in **Settings → Integrations** with a personal token: GitHub (`github.com` or Enterprise) or GitLab (`gitlab.com`
-or self-hosted). The token stays in Lite, encrypted; no workspace ever sees it. Lite can also read
+Connect a forge in **Settings → Integrations** with a personal token — GitHub (`github.com` or
+Enterprise) or GitLab (`gitlab.com` or self-hosted) — and the project form lists your repositories;
+workspaces clone and push the ones you pick over HTTPS with that token, so no SSH key has to be
+registered on the forge; and the pull requests a task talks about say where they stand — open or
+merged, checks, review, conflicts. The token stays in Lite, encrypted: a workspace asks for it at
+each git operation, only for the host git is talking to, and never keeps it. Lite can also read
 `GH_TOKEN` or `GITLAB_TOKEN` from its own environment, for the public instances.

@@ -20,8 +20,8 @@ export type IntegrationDriver = {
 export type ForgeRepository = {
   /** `owner/repo` — for GitLab, the whole group path. */
   fullName: string
-  /** As the forge gives it: `git@github.com:owner/repo.git`, or `ssh://git@host:2222/…` on a custom port. */
-  sshUrl: string
+  /** `https://github.com/owner/repo.git` — what Lite stores, cloned with the connection's token. */
+  httpsUrl: string
   private: boolean
 }
 

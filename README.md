@@ -176,8 +176,10 @@ How long workers take to be usable — per kind of start and per phase of the se
 
 Forges (GitHub, GitLab — public or self-hosted) can be connected with a token in **Settings →
 Integrations**: the project form then lists your repositories instead of asking for a clone URL,
-and the pull requests a task talks about say where they stand — open or merged, checks, review. Clone and push still go through your SSH key, and the token never reaches a
-worker: [`docs/integrations.md`](docs/integrations.md).
+workers clone and push them over HTTPS with that token (no SSH key to register on the forge), and
+the pull requests a task talks about say where they stand — open or merged, checks, review. A
+worker never keeps the token: its git credential helper asks Lite for it, for the host git is
+talking to, at each operation: [`docs/integrations.md`](docs/integrations.md).
 
 MCP servers (Notion, Linear…) are declared once in **Settings → MCP servers**, connected in OAuth
 from there, and given to each project's tasks through Lite's gateway — the worker never holds the

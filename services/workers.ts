@@ -1,4 +1,5 @@
 import { and, eq, desc } from "drizzle-orm"
+import { gitCredentialSetup } from "../lib/git-credential"
 import { db } from "../db/index"
 import { workers, projectImageBuilds, type Worker, type Project, type SetupStatus } from "../db/schema"
 import { newId, newShortId } from "../lib/id"
@@ -36,6 +37,7 @@ import {
   agentVolumeLayout,
   bootstrapScript,
   dropAgent,
+  internalUrl,
   newAgentToken,
   runnerScript,
   setAgentHooks,
@@ -264,7 +266,8 @@ function buildFullScript(project: Project, workerId: string, branch?: string | n
   })
 
   return buildWorkerScript({
-    setupScript: encryptedKeyPublicHalf(settings.sshKeyPath, userSshPrivateKey) + setup,
+    // The HTTPS credential helper first (lib/git-credential.ts): the clones below may need it.
+    setupScript: gitCredentialSetup(workerId, internalUrl()) + encryptedKeyPublicHalf(settings.sshKeyPath, userSshPrivateKey) + setup,
     startScript: start,
     project: {
       postCreateCommand: project.postCreateCommand,
