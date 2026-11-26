@@ -1,10 +1,12 @@
 import { and, asc, desc, eq, isNotNull, like, sql } from "drizzle-orm"
-import type { TaskAppTile } from "@spunto/design-system/tasks"
+import type { TaskAppTile, TaskAppTileItem } from "@spunto/design-system/tasks"
 import { db } from "../db/index"
 import { taskAttachments, taskEvents, type Task } from "../db/schema"
 import { linkThread, pullRequests, type SharedLink } from "../lib/task-shared"
 import { claudeTile, type SessionLines } from "../lib/claude-tile"
 import { taskProtocol } from "./task-events"
+import { pullRequestState } from "./integrations"
+import type { PullRequestState } from "../lib/integrations"
 
 /**
  * What circulated in a conversation, and what can be said about it — the reads behind the
@@ -90,26 +92,54 @@ export function claudeSessionLines(taskId: string): SessionLines {
   }
 }
 
+const STATE_CHIP: Record<PullRequestState["state"], NonNullable<TaskAppTileItem["status"]>> = {
+  open: { label: "Open", tone: "info" },
+  draft: { label: "Draft", tone: "neutral" },
+  merged: { label: "Merged", tone: "success" },
+  closed: { label: "Closed", tone: "muted" },
+}
+
+/** What is left to do before it can merge — said only while it can still be merged. */
+function pendingBadges(state: PullRequestState): TaskAppTileItem["badges"] {
+  if (state.state !== "open" && state.state !== "draft") return undefined
+  const badges: NonNullable<TaskAppTileItem["badges"]> = []
+  if (state.checks === "success") badges.push({ label: "Checks passing", tone: "success" })
+  if (state.checks === "failure") badges.push({ label: "Checks failing", tone: "danger" })
+  if (state.checks === "pending") badges.push({ label: "Checks running", tone: "warning" })
+  if (state.review === "approved") badges.push({ label: "Approved", tone: "success" })
+  if (state.review === "changes_requested") badges.push({ label: "Changes requested", tone: "warning" })
+  if (state.review === "required") badges.push({ label: "Review required", tone: "neutral" })
+  if (state.conflicts) badges.push({ label: "Conflicts", tone: "danger" })
+  return badges.length ? badges : undefined
+}
+
 /**
- * The pull requests the conversation talked about, recognised from their URL. Only the link: Lite
- * has no forge integration (the clone and the push go through the user's own SSH key), so there is
- * nothing to ask GitHub where a PR stands — no state, no checks, no review, as Cloud's GitHub app
- * draws them.
+ * The pull requests the conversation talked about, recognised from their URL — and, for a forge
+ * connected in Settings → Integrations (docs/integrations.md), where each stands: open, merged,
+ * its checks, its review. Without a connection (or when the forge does not answer) a row is its
+ * link only, as before: a forge that hangs holds the block for its timeout at most (`forgeFetch`).
  */
-function pullRequestTile(links: SharedLink[]): TaskAppTile | null {
+async function pullRequestTile(links: SharedLink[]): Promise<TaskAppTile | null> {
   const prs = pullRequests(links)
   if (prs.length === 0) return null
+  const states = await Promise.all(prs.map((pr) => pullRequestState(pr)))
   return {
     appId: "pull-requests",
     appName: "Pull requests",
     title: "Pull requests",
-    items: prs.map((pr) => ({
-      url: pr.url,
-      // The link's text is usually the PR's title; a bare URL only gives its repository.
-      title: pr.title ?? pr.repo,
-      label: pr.label,
-      subtitle: pr.title ? pr.repo : pr.host === "github.com" ? undefined : pr.host,
-    })),
+    items: prs.map((pr, i) => {
+      const state = states[i]
+      // The forge's title first; then the link's text, usually the PR's title; a bare URL only gives its repository.
+      const title = state?.title ?? pr.title
+      return {
+        url: pr.url,
+        title: title ?? pr.repo,
+        label: pr.label,
+        subtitle: title ? pr.repo : pr.host === "github.com" ? undefined : pr.host,
+        status: state ? STATE_CHIP[state.state] : undefined,
+        badges: state ? pendingBadges(state) : undefined,
+      }
+    }),
   }
 }
 
@@ -117,9 +147,9 @@ function pullRequestTile(links: SharedLink[]): TaskAppTile | null {
  * What Lite can say about a task beyond its own facts, in the design system's tile vocabulary
  * (Cloud: `GET .../tiles`, drawn by the org's apps). Two, both read from the task's own events: the
  * harness's view of its session (Claude Code only — Codex writes none of these lines), and the
- * pull requests among the shared links.
+ * pull requests among the shared links, with their state when their forge is connected.
  */
-export function taskTiles(task: Pick<Task, "id" | "projectId" | "agentAppId" | "sessionProtocol" | "commandId">): TaskAppTile[] {
+export async function taskTiles(task: Pick<Task, "id" | "projectId" | "agentAppId" | "sessionProtocol" | "commandId">): Promise<TaskAppTile[]> {
   const tiles: TaskAppTile[] = []
   // On the contract (`agent-v1`) every app shares one protocol: the app says it is Claude, and each
   // event's `source` is still Claude's own message — the lines this tile reads.
@@ -128,7 +158,7 @@ export function taskTiles(task: Pick<Task, "id" | "projectId" | "agentAppId" | "
     const claude = claudeTile(claudeSessionLines(task.id))
     if (claude) tiles.push(claude)
   }
-  const prs = pullRequestTile(linkThread(taskMessages(task.id)))
+  const prs = await pullRequestTile(linkThread(taskMessages(task.id)))
   if (prs) tiles.push(prs)
   return tiles
 }

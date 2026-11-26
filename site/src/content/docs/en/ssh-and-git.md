@@ -5,7 +5,7 @@ group: use
 order: 3
 ---
 
-Lite has no forge integration. A repository is a clone URL, and **your SSH key is the only
+Cloning needs no forge integration. A repository is a clone URL, and **your SSH key is the only
 credential**: it is the identity your commits are pushed with, and the only thing that clones. That
 is also why any host works — GitHub, GitLab, Bitbucket, a self-hosted Gitea, a bare repository on a
 NAS. Authorise the key once, wherever, and every project clones and pushes.
@@ -73,3 +73,11 @@ The paths can be changed with `SSH_AGENT_DIR` (default `/run/spunto-ssh-agent`) 
 An HTTPS URL clones without a key when the repository is public. For a private one over HTTPS,
 put a token in the URL's credentials or switch to the SSH URL — the SSH key is the path Lite is
 built around.
+
+## Integrations: where your pull requests stand
+
+Cloning and pushing never need more than the key. To see where the pull requests a task talks about
+stand — open or merged, checks, review, conflicts — connect their forge in **Settings →
+Integrations** with a personal token: GitHub (`github.com` or Enterprise) or GitLab (`gitlab.com`
+or self-hosted). The token stays in Lite, encrypted; no workspace ever sees it. Lite can also read
+`GH_TOKEN` or `GITLAB_TOKEN` from its own environment, for the public instances.

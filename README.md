@@ -58,7 +58,7 @@ HTTPS with a local mkcert certificate. See
 - **SQLite** (via Drizzle) for projects/workers/secrets, in a Docker volume.
 - **`~/.ssh` mounted read-only** and injected into each worker — it is both the git
   identity and the *only* clone credential. A repository is declared as a **clone
-  URL**, never as a host plus an `owner/repo`: there is no forge integration here,
+  URL**, never as a host plus an `owner/repo`: cloning needs no forge integration,
   no app to install and no token to mint, so any host your key reaches works the
   same way — a hosted forge, a self-hosted GitLab, a bare repo on a NAS. Authorize
   the key once, wherever, and every project clones and pushes. A key protected by a
@@ -173,6 +173,11 @@ What they consumed — cost, tokens, turns, tools, per day, task, project, agent
 the **Usage** page, read straight from the sessions' events: [`docs/usage.md`](docs/usage.md).
 How long workers take to be usable — per kind of start and per phase of the setup — is on
 **Settings → Statistics**, from what Lite keeps of each start (`worker_starts`, `services/statistics.ts`).
+
+Forges (GitHub, GitLab — public or self-hosted) can be connected with a token in **Settings →
+Integrations**: the pull requests a task talks about then say where they stand — open or merged,
+checks, review. Clone and push still go through your SSH key, and the token never reaches a
+worker: [`docs/integrations.md`](docs/integrations.md).
 
 MCP servers (Notion, Linear…) are declared once in **Settings → MCP servers**, connected in OAuth
 from there, and given to each project's tasks through Lite's gateway — the worker never holds the

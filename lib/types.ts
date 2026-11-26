@@ -16,8 +16,8 @@ export type { BuildStep }
  * already on disk — not only what today's generator emits. `pending` and `features` are Lite-era
  * phases older workers still report; everything else is identical, and `timings` comes along.
  *
- * `Repository` stays local, and narrower than the package's: Lite clones URLs with one SSH key
- * and knows nothing of forges, so `provider` is pinned rather than open (see the type's note).
+ * `Repository` stays local, and narrower than the package's: Lite clones URLs with one SSH key,
+ * so `provider` is pinned rather than open (see the type's note).
  */
 import type { ProjectFeature, SetupStatus as SharedSetupStatus } from "@spunto/build/types"
 
@@ -30,11 +30,13 @@ export type SetupStatus = Omit<SharedSetupStatus, "phase"> & {
 /**
  * A repository to clone into a worker's workspace: a URL, and a path to put it at.
  *
- * **No hosting provider, and that is the design.** Lite has no forge integration — no app to
- * install, no token to mint, no API to ask what repositories you own. Every repository is cloned
- * over SSH with the one key you mounted (Settings → SSH key), which behaves the same against any
- * host. A provider field would only be somewhere to keep an assumption about a host we never talk
- * to, and it is exactly the assumption that made `owner/repo` mean one company's domain.
+ * **No hosting provider, and that is the design.** Cloning needs no forge integration — no app
+ * to install, no token to mint, no API to ask what repositories you own. Every repository is
+ * cloned over SSH with the one key you mounted (Settings → SSH key), which behaves the same
+ * against any host. A provider field would only be somewhere to keep an assumption about a host,
+ * and it is exactly the assumption that made `owner/repo` mean one company's domain. The
+ * integrations (lib/integrations, docs/integrations.md) find their forge from a URL's host, never
+ * from here.
  *
  * `provider` survives as a constant because the shared package still carries it — Spunto Cloud
  * reaches forges through integrations, and the generated clone command branches on it. `git` is
