@@ -4,6 +4,7 @@ import { relayCapability, type LiteCapability } from "../lib/lite-relay"
 import { localRequestUrl } from "../lib/lite-relay-url"
 import { setLiteTunnel, type LiteTunnelStatus } from "../lib/lite-connect-hooks"
 import { liteVersion } from "./telemetry"
+import { sendMachineSummary, startLiveEvents } from "./lite-events"
 import {
   capabilitiesOf,
   forgetLiteConnect,
@@ -23,6 +24,7 @@ import {
  *   ← { type: "request", id, method, path, query, contentType?, body? }      body: utf-8 text
  *   → { type: "response", id, status, contentType, body }                    body: base64
  *   → { type: "event", event: "task.state", … }                              (services/tasks.ts)
+ *   → { type: "event", event: "task.progress" | "machine.summary", … }      (services/lite-events.ts)
  *
  * Every request is checked again against the list (lib/lite-relay.ts) and the capabilities this
  * hello announced — Lite has the last word — then served by Lite's own listener on loopback,
@@ -181,6 +183,8 @@ async function dial(s: State, generation: number, forceRefresh: boolean): Promis
       recordWelcome(msg.connectionId)
       setStatus(s, { state: "online" })
       log(`online as ${msg.connectionId} (${capabilities.join(", ") || "no capability"})`)
+      // A Cloud that restarted, or a Lite back online, starts again from the machine as it is.
+      sendMachineSummary()
     } else if (msg.type === "request" && typeof msg.id === "string") {
       const id = msg.id
       void serve(s.localBase, capabilities, msg).then((res) => {
@@ -269,11 +273,13 @@ function emit(message: Record<string, unknown>): boolean {
 
 /**
  * At boot (server.ts): registers the controls and dials if a link is stored — and only then: the
- * relay is off until someone connects it in Settings. `localBase` is for the tests.
+ * relay is off until someone connects it in Settings. Starts the tick of the Live Activities'
+ * events too (services/lite-events.ts), idle while offline. `localBase`, `liveTickMs` are for the tests.
  */
-export function startLiteTunnel(opts: { localBase?: string } = {}): void {
+export function startLiteTunnel(opts: { localBase?: string; liveTickMs?: number } = {}): void {
   const s = state()
   if (opts.localBase) s.localBase = opts.localBase
   setLiteTunnel({ restart, stop, revoking: () => void (state().revoking = true), status: () => state().status, emit })
+  startLiveEvents(opts.liveTickMs)
   restart()
 }

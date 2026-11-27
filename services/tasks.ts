@@ -25,6 +25,7 @@ import * as events from "./task-events"
 import * as attachments from "./task-attachments"
 import type { InlineFile, StoredFile } from "./task-attachments"
 import { mintMcpGatewayToken, taskMcpServers } from "./mcp-servers"
+import { eventText } from "./lite-events"
 
 /**
  * Delegated work (docs/taches.md): a prompt handed to an agent, in a worker of the project, with
@@ -382,6 +383,7 @@ export function createTask(projectId: string, input: CreateTaskInput): Task {
     parentSignalKey: null,
   }
   db.insert(tasks).values(row).run()
+  emitTaskState(row, "queued")
   // Stored now so they travel with the job: the worker they go into does not exist yet.
   const files = attachments.storeFiles(id, null, "user", input.files ?? [])
   void runJob(id, "run", () => runTask(id, files.map((f) => f.id)), (error) => failTask(id, error))
@@ -494,24 +496,34 @@ export function signalParent(child: Pick<Task, "id" | "parentTaskId" | "startedA
   }
 }
 
-/** How much of the agent's last message a `task.state` event carries — a notification's worth. */
-const EVENT_EXCERPT_CHARS = 200
-
 /**
- * A task just handed back or failed: tell Spunto Cloud through the Lite Connect tunnel, which makes
- * it a push notification on the member's phone (docs/lite-connect.md § « Événements »). Called on
- * the transition itself, after the conditional write that made it — so once per passage, never on
- * a mere refresh. Dropped when the tunnel is not online: a notification is not worth a queue.
- * Best effort, never in the way of the transition.
+ * A task just changed state: tell Spunto Cloud through the Lite Connect tunnel — a push
+ * notification on the member's phone for `in-review` / `failed`, and its Live Activity for every
+ * state (docs/lite-connect.md § « Événements »). Called on the transition itself, after the
+ * conditional write that made it — so once per passage, never on a mere refresh — and not for the
+ * member's own moves that are not news (a Drop, a failed task picked back up). Dropped when the
+ * tunnel is not online: a notification is not worth a queue. Best effort, never in the way of the
+ * transition. Its progress and the machine's summary are services/lite-events.ts's.
  */
-export function emitTaskState(task: Pick<Task, "id" | "projectId" | "title" | "error">, state: HandBack): void {
+export function emitTaskState(task: Pick<Task, "id" | "projectId" | "title" | "error" | "startedAt">, state: TaskState): void {
   const tunnel = liteTunnel()
   if (!tunnel || tunnel.status().state !== "online") return
   try {
-    const said = lastAgentMessages(task.id, 1)[0] ?? (state === "failed" ? task.error : null)
-    const text = said?.replace(/\s+/g, " ").trim()
-    const lastMessage = text ? (text.length > EVENT_EXCERPT_CHARS ? `${text.slice(0, EVENT_EXCERPT_CHARS - 1).trimEnd()}…` : text) : undefined
-    tunnel.emit({ type: "event", event: "task.state", taskId: task.id, projectId: task.projectId, state, title: task.title, ...(lastMessage ? { lastMessage } : {}) })
+    // What the agent last said, for a task that stopped — or why it failed, if it said nothing.
+    const stopped = state === "in-review" || state === "failed" || state === "done"
+    const said = stopped ? (lastAgentMessages(task.id, 1)[0] ?? (state === "failed" ? task.error : null)) : null
+    const lastMessage = eventText(said)
+    tunnel.emit({
+      type: "event",
+      event: "task.state",
+      taskId: task.id,
+      projectId: task.projectId,
+      state,
+      title: task.title,
+      ...(lastMessage ? { lastMessage } : {}),
+      ...(task.startedAt ? { startedAt: task.startedAt.toISOString() } : {}),
+      at: new Date().toISOString(),
+    })
   } catch (err) {
     console.warn(`[task:${task.id}] could not emit task.state: ${(err as Error)?.message ?? err}`)
   }
@@ -645,10 +657,12 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
     // then runs already, and starting a second one in the same worker is the one thing not to do.
     const launched = commands.findTaskCommand(task.id, "Agent session")
     if (launched) {
-      db.update(tasks)
+      const { changes } = db
+        .update(tasks)
         .set({ commandId: launched.id, state: "running", startedAt: launched.createdAt, lastActivityAt: new Date() })
         .where(and(eq(tasks.id, task.id), eq(tasks.state, "queued")))
         .run()
+      if (changes > 0) emitTaskState({ ...task, startedAt: launched.createdAt }, "running")
       console.log(`[task:${task.id}] its session ${launched.id} was already launched — adopted`)
       return
     }
@@ -723,6 +737,7 @@ async function runTask(taskId: string, fileIds: string[]): Promise<void> {
   if (changes === 0) await commands.cancelTaskCommand(session).catch(() => {})
   else {
     console.log(`[task:${task.id}] agent session ${session.id} started in ${cwd}`)
+    emitTaskState({ ...task, startedAt }, "running")
     await askSessionTitle(task, session, protocol, task.prompt)
   }
 }
@@ -1368,22 +1383,26 @@ async function releaseTaskWorker(taskId: string): Promise<void> {
 // ─── The background floor ─────────────────────────────────────────────────────
 
 const REFRESH_FLOOR_MS = 30_000
+/** Relayed to Spunto, a task's `task.progress` may move every 20 s (services/lite-events.ts): the floor follows. */
+const REFRESH_FLOOR_ONLINE_MS = 20_000
 const SCHEDULER_TICK_MS = 10_000
 const MAX_REFRESH_PER_TICK = 25
 let schedulerTimer: ReturnType<typeof setInterval> | null = null
 
 /**
- * Re-derive every `running` task nobody has looked at for 30 s. With the dashboard open, reads
- * keep them fresh and nothing comes due; closed, this is what still parks a `stop` worker when
- * its session ends, and what frees a pool machine for the next task.
+ * Re-derive every `running` task nobody has looked at for 30 s — 20 s while relayed to Spunto,
+ * whose Live Activities read what this ingests. With the dashboard open, reads keep them fresh
+ * and nothing comes due; closed, this is what still parks a `stop` worker when its session ends,
+ * and what frees a pool machine for the next task.
  */
 export async function refreshDueTasks(now = Date.now()): Promise<number> {
+  const floor = liteTunnel()?.status().state === "online" ? REFRESH_FLOOR_ONLINE_MS : REFRESH_FLOOR_MS
   const due = db
     .select()
     .from(tasks)
     .where(eq(tasks.state, "running"))
     .all()
-    .filter((t) => !t.lastRefreshedAt || now - t.lastRefreshedAt.getTime() >= REFRESH_FLOOR_MS)
+    .filter((t) => !t.lastRefreshedAt || now - t.lastRefreshedAt.getTime() >= floor)
     .slice(0, MAX_REFRESH_PER_TICK)
   await Promise.all(due.map((t) => refreshTask(t).catch((err) => console.warn(`[task:${t.id}] background refresh failed: ${err}`))))
   return due.length
@@ -1562,8 +1581,13 @@ export async function validateTask(taskId: string): Promise<Task> {
         const result = command ? await runTaskAction(task, command, "validate") : { exitCode: 0, output: "" }
         const now = new Date()
         if (result.exitCode === 0) {
-          db.update(tasks).set({ state: "done", completedAt: now, lastActivityAt: now, error: null }).where(and(eq(tasks.id, taskId), eq(tasks.state, "in-review"))).run()
+          const { changes } = db
+            .update(tasks)
+            .set({ state: "done", completedAt: now, lastActivityAt: now, error: null })
+            .where(and(eq(tasks.id, taskId), eq(tasks.state, "in-review")))
+            .run()
           releaseWorker(taskId)
+          if (changes > 0) emitTaskState(task, "done")
         } else {
           db.update(tasks).set({ error: `Accept failed (exit ${result.exitCode}): ${result.output.slice(-500)}`, lastActivityAt: now }).where(eq(tasks.id, taskId)).run()
         }
@@ -1810,7 +1834,12 @@ export async function followUpTask(
     // Somebody answered: the countdown to a park is off. The next review starts its own.
     clearScheduledPark(taskId)
     if (task.state !== "running") {
-      db.update(tasks).set({ state: "running", error: null, completedAt: null, lastActivityAt: new Date() }).where(eq(tasks.id, taskId)).run()
+      const { changes } = db
+        .update(tasks)
+        .set({ state: "running", error: null, completedAt: null, lastActivityAt: new Date() })
+        .where(and(eq(tasks.id, taskId), ne(tasks.state, "running")))
+        .run()
+      if (changes > 0) emitTaskState(task, "running")
     }
     return { ...getRawTask(taskId)!, state: "running" }
   }
@@ -1861,10 +1890,12 @@ export async function followUpTask(
           stored,
           marker,
         )
-        db.update(tasks)
+        const { changes } = db
+          .update(tasks)
           .set({ commandId: session.id, sessionProtocol, state: "running", error: null, completedAt: null, lastActivityAt: new Date() })
           .where(and(eq(tasks.id, taskId), eq(tasks.state, "in-review")))
           .run()
+        if (changes > 0) emitTaskState(row, "running")
         // A task whose earlier session never got a name is asked again; once named, a no-op.
         await askSessionTitle(getRawTask(taskId) ?? row, session, sessionProtocol, row.prompt)
       } finally {
@@ -2016,6 +2047,7 @@ export async function retryTask(taskId: string): Promise<Task> {
     .where(and(eq(tasks.id, taskId), eq(tasks.state, "failed")))
     .run()
   if (changes === 0) throw new TaskActionError("The task moved meanwhile — reload it and try again", 409)
+  emitTaskState({ ...task, startedAt: null }, "queued")
   const fileIds = attachments.openingFileIds(taskId)
   void runJob(taskId, "run", () => runTask(taskId, fileIds), (error) => failTask(taskId, error))
   console.log(`[task:${taskId}] failed → retried from the top`)

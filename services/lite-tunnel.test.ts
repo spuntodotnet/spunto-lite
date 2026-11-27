@@ -1,6 +1,6 @@
 // Lite Connect end to end against a fake Spunto Cloud (scripts/fake-spunto-cloud.ts): the pairing
-// in OAuth, the hello, the relay and its refusals, the reconnections, 4403, `task.state`, and
-// Disconnect's revocation (RFC 7009).
+// in OAuth, the hello, the relay and its refusals, the reconnections, 4403, the events of the Live
+// Activities (`task.state`, `task.progress`, `machine.summary`), and Disconnect's revocation (RFC 7009).
 // Lite's own routes are a stub listener here, so the test sees exactly what reaches them. `npm test`.
 import { after, before, describe, it } from "node:test"
 import assert from "node:assert/strict"
@@ -20,7 +20,27 @@ const { runMigrations } = await import("../db/index")
 const lc = await import("./lite-connect")
 const { startLiteTunnel } = await import("./lite-tunnel")
 const { liteTunnel } = await import("../lib/lite-connect-hooks")
-const { emitTaskState } = await import("./tasks")
+const { emitTaskState, validateTask, cancelTask } = await import("./tasks")
+const { liveEventsTick, PROGRESS_EVERY_MS, SUMMARY_DEBOUNCE_MS } = await import("./lite-events")
+const { db } = await import("../db/index")
+const { projects, taskEvents, tasks } = await import("../db/schema")
+const { eq } = await import("drizzle-orm")
+
+type TaskRow = typeof tasks.$inferInsert
+/** A task row as `createTask` writes it — no job behind it: the tests move it by hand. */
+function addTask(id: string, state: string, extra: Partial<TaskRow> = {}): TaskRow {
+  const now = new Date()
+  const row: TaskRow = {
+    id, projectId: "p_live", title: `Task ${id}`, prompt: "do it", state,
+    lastActivityAt: now, createdAt: now, startedAt: state === "queued" ? null : now, ...extra,
+  }
+  db.insert(tasks).values(row).run()
+  return row
+}
+let seq = 0
+function addEvent(taskId: string, type: string, payload: Record<string, unknown>): void {
+  db.insert(taskEvents).values({ taskId, seq: ++seq, ts: new Date(), type, payload }).run()
+}
 
 async function until<T>(what: string, probe: () => T | undefined | null | false, ms = 8_000): Promise<T> {
   const deadline = Date.now() + ms
@@ -55,7 +75,9 @@ describe("Lite Connect, against a fake Spunto Cloud", () => {
     })
     await new Promise<void>((r) => local.listen(0, "127.0.0.1", r))
     localBase = `http://127.0.0.1:${(local.address() as AddressInfo).port}`
-    startLiteTunnel({ localBase })
+    db.insert(projects).values({ id: "p_live", name: "Live", image: "x" }).run()
+    // The tick of the Live Activities' events is driven by hand, on a clock of the test's.
+    startLiteTunnel({ localBase, liveTickMs: 0 })
   })
 
   after(async () => {
@@ -175,10 +197,10 @@ describe("Lite Connect, against a fake Spunto Cloud", () => {
   })
 
   it("emits task.state once online, with the agent's last words clipped", async () => {
-    emitTaskState({ id: "t_ev", projectId: "p_ev", title: "Fix the login", error: `Agent session failed: ${"x".repeat(400)}` }, "failed")
-    emitTaskState({ id: "t_ev2", projectId: "p_ev", title: "Write the docs", error: null }, "in-review")
-    await until("two events", () => fake.events.length >= 2)
-    const [failed, review] = fake.events.slice(-2)
+    emitTaskState({ id: "t_ev", projectId: "p_ev", title: "Fix the login", error: `Agent session failed: ${"x".repeat(400)}`, startedAt: null }, "failed")
+    emitTaskState({ id: "t_ev2", projectId: "p_ev", title: "Write the docs", error: null, startedAt: null }, "in-review")
+    await until("two events", () => fake.eventsNamed("task.state").length >= 2)
+    const [failed, review] = fake.eventsNamed("task.state").slice(-2)
     assert.equal(failed.type, "event")
     assert.equal(failed.event, "task.state")
     assert.equal(failed.taskId, "t_ev")
@@ -187,7 +209,162 @@ describe("Lite Connect, against a fake Spunto Cloud", () => {
     assert.equal(failed.title, "Fix the login")
     assert.equal((failed.lastMessage as string).length, 200)
     assert.match(failed.lastMessage as string, /^Agent session failed: x+…$/)
-    assert.deepEqual(review, { type: "event", event: "task.state", taskId: "t_ev2", projectId: "p_ev", state: "in-review", title: "Write the docs" })
+    assert.match(review.at as string, /^\d{4}-\d\d-\d\dT/)
+    assert.deepEqual({ ...review, at: "…" }, { type: "event", event: "task.state", taskId: "t_ev2", projectId: "p_ev", state: "in-review", title: "Write the docs", at: "…" })
+  })
+
+  it("task.state: every state, with startedAt once it started, and lastMessage only once it stopped", async () => {
+    const startedAt = new Date("2026-11-27T10:00:00.000Z")
+    const task = { id: "t_states", projectId: "p_ev", title: "All the states", error: null }
+    addTask("t_ev3", "done")
+    addEvent("t_ev3", "message", { role: "assistant", text: "Done.\nAll tests pass." })
+    const states = () => fake.eventsNamed("task.state")
+    const before = states().length
+    emitTaskState({ ...task, startedAt: null }, "queued")
+    emitTaskState({ ...task, startedAt }, "running")
+    emitTaskState({ ...task, id: "t_ev3", startedAt }, "done")
+    await until("three events", () => states().length >= before + 3)
+    const [queued, running, done] = states().slice(before)
+    assert.equal(queued.state, "queued")
+    assert.equal("startedAt" in queued, false)
+    assert.equal("lastMessage" in queued, false)
+    assert.equal(running.state, "running")
+    assert.equal(running.startedAt, "2026-11-27T10:00:00.000Z")
+    assert.equal("lastMessage" in running, false)
+    assert.equal(done.state, "done")
+    assert.equal(done.lastMessage, "Done. All tests pass.")
+    assert.equal(fake.liveActivities.get("t_ev3")!.state, "done")
+  })
+
+  it("task.state: one per transition — Accept sends done once; a Drop, the member's own move, sends none", async () => {
+    addTask("t_accept", "in-review")
+    addTask("t_drop", "in-review")
+    const before = fake.eventsNamed("task.state").length
+    await validateTask("t_accept")
+    await until("accepted", () => db.select().from(tasks).where(eq(tasks.id, "t_accept")).get()!.state === "done")
+    await assert.rejects(validateTask("t_accept"), /Task is done/)
+    await cancelTask("t_drop")
+    await until("dropped", () => db.select().from(tasks).where(eq(tasks.id, "t_drop")).get()!.state === "failed")
+    await sleep(200)
+    const sent = fake.eventsNamed("task.state").slice(before)
+    assert.deepEqual(sent.map((e) => [e.taskId, e.state]), [["t_accept", "done"]])
+  })
+
+  it("task.progress: the agent's last line or tool, at most every 20 s per task, and only when it changed", async () => {
+    // The summary's own sends are another test's business: this one starts from a quiet tick.
+    const t0 = Date.now() + 1_000_000
+    addTask("t_prog", "running")
+    const progress = () => fake.eventsNamed("task.progress").filter((e) => e.taskId === "t_prog")
+    liveEventsTick(t0)
+    await sleep(100)
+    assert.equal(progress().length, 0, "nothing said, nothing sent")
+
+    addEvent("t_prog", "tool.call", { callId: "c1", name: "Edit", input: JSON.stringify({ file_path: "/workspace/spunto-lite/lib/foo.ts", old_string: "a" }) })
+    liveEventsTick(t0 + 1_000)
+    await until("the first progress", () => progress().length === 1)
+    assert.deepEqual({ ...progress()[0], at: "…" }, { type: "event", event: "task.progress", taskId: "t_prog", projectId: "p_live", title: "Task t_prog", activity: "Edit lib/foo.ts", at: "…" })
+    assert.equal(progress()[0].at, new Date(t0 + 1_000).toISOString())
+
+    // Unchanged: nothing, however long.
+    liveEventsTick(t0 + 1_000 + PROGRESS_EVERY_MS * 2)
+    // A subagent's line is not the session's: still unchanged.
+    addEvent("t_prog", "message", { role: "assistant", text: "subagent chatter", parentCallId: "c0" })
+    liveEventsTick(t0 + 1_000 + PROGRESS_EVERY_MS * 2 + 1_000)
+    await sleep(100)
+    assert.equal(progress().length, 1)
+
+    // Changed, but 20 s have not passed since the last send — wait; then the latest line goes.
+    const t1 = t0 + 100_000
+    addEvent("t_prog", "message", { role: "assistant", text: "Let me run the tests." })
+    liveEventsTick(t1)
+    await until("the second progress", () => progress().length === 2)
+    addEvent("t_prog", "tool.call", { callId: "c2", name: "Bash", input: JSON.stringify({ command: "npm test" }) })
+    liveEventsTick(t1 + 5_000)
+    addEvent("t_prog", "message", { role: "assistant", text: "Tests are green.\n\n```\nok 12\n```" })
+    liveEventsTick(t1 + PROGRESS_EVERY_MS - 1)
+    await sleep(100)
+    assert.equal(progress().length, 2, "throttled")
+    liveEventsTick(t1 + PROGRESS_EVERY_MS)
+    await until("the third progress", () => progress().length === 3)
+    assert.deepEqual(progress().map((e) => e.activity), ["Edit lib/foo.ts", "Let me run the tests.", "Tests are green."])
+    assert.equal(fake.liveActivities.get("t_prog")!.activity, "Tests are green.")
+
+    // A long line is clipped like a notification.
+    addEvent("t_prog", "message", { role: "assistant", text: `${"y".repeat(300)}` })
+    liveEventsTick(t1 + PROGRESS_EVERY_MS * 2)
+    await until("the fourth progress", () => progress().length === 4)
+    assert.equal((progress()[3].activity as string).length, 200)
+    db.update(tasks).set({ state: "in-review" }).where(eq(tasks.id, "t_prog")).run()
+  })
+
+  it("machine.summary: on change, debounced ~2 s, as the Agents page counts", async () => {
+    const t0 = Date.now() + 10_000_000
+    // Settle: whatever changed before this test goes out, and the next tick is quiet.
+    liveEventsTick(t0)
+    liveEventsTick(t0 + SUMMARY_DEBOUNCE_MS)
+    const summaries = () => fake.eventsNamed("machine.summary")
+    await sleep(100)
+    const settled = summaries().length
+    liveEventsTick(t0 + SUMMARY_DEBOUNCE_MS * 2)
+    await sleep(100)
+    assert.equal(summaries().length, settled, "no change, no summary")
+
+    const t1 = t0 + 100_000
+    addTask("t_sq", "queued", { lastActivityAt: new Date(t1) })
+    liveEventsTick(t1)
+    liveEventsTick(t1 + 1_000)
+    // A second change inside the window rides along with the first.
+    addTask("t_sr", "running", { lastActivityAt: new Date(t1 + 1) })
+    addEvent("t_sr", "tool.call", { name: "mcp__spunto-tasks__create_subtask", input: "{}" })
+    // Set aside: not on the Agents page by default, so not counted.
+    addTask("t_hold", "in-review", { onHoldAt: new Date(), lastActivityAt: new Date(t1 + 2) })
+    liveEventsTick(t1 + 1_500)
+    await sleep(100)
+    assert.equal(summaries().length, settled, "debounced")
+    liveEventsTick(t1 + SUMMARY_DEBOUNCE_MS)
+    await until("one summary", () => summaries().length === settled + 1)
+    liveEventsTick(t1 + SUMMARY_DEBOUNCE_MS + 1_000)
+    await sleep(100)
+    assert.equal(summaries().length, settled + 1, "one for the two changes")
+
+    const summary = summaries().at(-1)!
+    const live = db.select().from(tasks).all().filter((t) => ["queued", "running", "in-review"].includes(t.state) && !t.onHoldAt)
+    assert.equal(summary.running, live.filter((t) => t.state === "running").length)
+    assert.equal(summary.queued, live.filter((t) => t.state === "queued").length)
+    assert.equal(summary.inReview, live.filter((t) => t.state === "in-review").length)
+    const listed = summary.tasks as Record<string, unknown>[]
+    assert.equal(listed.length, 3)
+    assert.deepEqual(listed.slice(0, 2), [
+      { taskId: "t_sr", projectId: "p_live", title: "Task t_sr", state: "running", activity: "create_subtask" },
+      { taskId: "t_sq", projectId: "p_live", title: "Task t_sq", state: "queued" },
+    ])
+    assert.equal(listed.some((t) => t.taskId === "t_hold"), false)
+    assert.deepEqual(summary.last, { taskId: "t_prog", title: "Task t_prog", state: "in-review", at: (summary.last as { at: string }).at })
+    assert.equal(summary.at, new Date(t1 + SUMMARY_DEBOUNCE_MS).toISOString())
+    assert.deepEqual(fake.machine, summary)
+
+    // A task that stops is the new `last`.
+    db.update(tasks).set({ state: "failed", lastActivityAt: new Date(t1 + 10) }).where(eq(tasks.id, "t_sr")).run()
+    liveEventsTick(t1 + 10_000)
+    liveEventsTick(t1 + 10_000 + SUMMARY_DEBOUNCE_MS)
+    await until("the next summary", () => summaries().length === settled + 2)
+    const next = summaries().at(-1)!
+    assert.equal(next.running, (summary.running as number) - 1)
+    assert.equal((next.last as Record<string, unknown>).taskId, "t_sr")
+    assert.equal((next.last as Record<string, unknown>).state, "failed")
+  })
+
+  it("machine.summary: sent right after every welcome, as the machine is now", async () => {
+    const welcomes = fake.welcomes
+    const before = fake.eventsNamed("machine.summary").length
+    fake.closeTunnels(1012, "redeploy")
+    await until("welcomed again", () => fake.welcomes > welcomes && liteTunnel()!.status().state === "online")
+    await until("the summary", () => fake.eventsNamed("machine.summary").length === before + 1)
+    const replayed = fake.eventsNamed("machine.summary").at(-1)!
+    // Right after the welcome, before anything else this tunnel sends.
+    assert.equal(fake.events.at(-1), replayed)
+    assert.equal(replayed.queued, db.select().from(tasks).where(eq(tasks.state, "queued")).all().length)
+    assert.equal((replayed.last as Record<string, unknown>).taskId, "t_sr")
   })
 
   it("on 4409 (another tunnel took over), waits before redialing", async () => {
@@ -210,9 +387,14 @@ describe("Lite Connect, against a fake Spunto Cloud", () => {
     const hellos = fake.hellos.length
     await sleep(2_500)
     assert.equal(fake.hellos.length, hellos, "no redial after 4403")
-    // Nothing goes up a closed tunnel.
+    // Nothing goes up a closed tunnel — and nothing is kept for later.
     const events = fake.events.length
-    emitTaskState({ id: "t_x", projectId: "p", title: "t", error: null }, "in-review")
+    emitTaskState({ id: "t_x", projectId: "p", title: "t", error: null, startedAt: null }, "in-review")
+    addTask("t_off", "running")
+    addEvent("t_off", "message", { role: "assistant", text: "Working offline." })
+    const t = Date.now() + 100_000_000
+    liveEventsTick(t)
+    liveEventsTick(t + 60_000)
     await sleep(100)
     assert.equal(fake.events.length, events)
   })

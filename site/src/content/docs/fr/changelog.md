@@ -23,6 +23,10 @@ mêmes volumes, même clé, rien à migrer à la main.
 
 ### Amélioré
 
+- **Vos tâches, en direct sur votre téléphone.** Relié à Spunto, Lite lui dit maintenant aussi
+  l’état de chaque tâche quand il change, ce que fait son agent, et un résumé de la machine — pour
+  les Live Activities de l’app Spunto Lite, sur l’écran verrouillé et dans la Dynamic Island.
+  Seulement tant qu’il est connecté ; rien n’est stocké. [Détails](/fr/docs/connect-to-spunto#live-activities)
 - **Disconnect retire aussi la machine de Spunto.** Lite rend ses identifiants à Spunto avant de
   les oublier : la machine quitte votre liste là-bas, sans passer par Account Settings. Si Spunto
   est injoignable, Lite se déconnecte quand même et vous dit où la retirer.

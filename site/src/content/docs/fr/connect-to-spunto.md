@@ -54,6 +54,15 @@ Quand une tâche rend la main (**In review**) ou **échoue**, Lite le dit à Spu
 tâche et les premiers mots du dernier message de l’agent — pour que votre téléphone vous prévienne.
 Rien n’est envoyé quand Lite est hors ligne, ni quand vous abandonnez vous-même une tâche.
 
+## Live Activities
+
+Tant qu’il est connecté, Lite dit aussi à Spunto où en sont ses tâches, pour que l’app Spunto Lite
+les suive sur l’écran verrouillé et dans la Dynamic Island : l’état de chaque tâche quand il change,
+ce que fait son agent (sa dernière phrase, ou l’outil qu’il utilise — *Edit lib/auth.ts*), au plus
+toutes les 20 secondes, et un résumé de la machine — combien de tâches tournent, attendent ou sont en
+revue, les quelques plus récemment actives, et la dernière qui s’est arrêtée. Les tâches mises de
+côté (On hold) n’y sont pas, comme sur la page Agents.
+
 ## Se déconnecter
 
 - **Disconnect** dans Settings rend à Spunto les identifiants de Lite, puis les oublie et ferme le
