@@ -14,6 +14,7 @@ describe("relayCapability", () => {
     assert.equal(relayCapability("GET", "/api/tasks/t_1"), "read")
     assert.equal(relayCapability("GET", "/api/tasks/t_1/events"), "read")
     assert.equal(relayCapability("GET", "/api/tasks/t_1/diff"), "read")
+    assert.equal(relayCapability("GET", "/api/tasks/t_1/diff/patch"), "read")
     assert.equal(relayCapability("GET", "/api/tasks/t_1/attachments/a-1"), "read")
   })
 
@@ -35,7 +36,7 @@ describe("relayCapability", () => {
     assert.equal(relayCapability("POST", "/api/workers"), null)
     assert.equal(relayCapability("GET", "/api/workers/w1/terminal"), null)
     assert.equal(relayCapability("GET", "/api/tasks/t_1/events/extra"), null)
-    assert.equal(relayCapability("GET", "/api/tasks/t_1/diff/patch"), null)
+    assert.equal(relayCapability("GET", "/api/tasks/t_1/diff/patch/extra"), null)
     // The method is part of the rule: reading is not answering, answering is not reading.
     assert.equal(relayCapability("POST", "/api/tasks/t_1"), null)
     assert.equal(relayCapability("GET", "/api/tasks/t_1/messages"), null)
