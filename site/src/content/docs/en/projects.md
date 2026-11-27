@@ -47,7 +47,7 @@ see [Configuration](/docs/configuration#extension-gallery).
 
 A repository is a **clone URL**, exactly as `git clone` takes it — SSH
 (`git@gitlab.example.com:team/app.git`) or HTTPS — plus where to clone it under `/workspace`.
-There is no forge integration: no app to install, no token to mint. Whatever your SSH key reaches
+Cloning needs no forge integration: no app to install, no token to mint. Whatever your SSH key reaches
 works the same way — see [SSH keys and git](/docs/ssh-and-git).
 
 A project can have several repositories, or none: a workspace without one is just an environment.

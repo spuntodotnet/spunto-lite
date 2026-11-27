@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm"
 import { sqliteTable, text, integer, real, blob, primaryKey, index, uniqueIndex, type AnySQLiteColumn } from "drizzle-orm/sqlite-core"
+import type { IntegrationKind } from "../lib/integrations/types"
 import type { SharedVolume } from "../lib/shared-volumes"
 import type { PortsAttributes } from "../lib/ports"
 import type { BuildStep } from "@spunto/build/steps"
@@ -667,3 +668,22 @@ export const mcpGatewayTokens = sqliteTable(
 export type McpServer = typeof mcpServers.$inferSelect
 export type McpConnection = typeof mcpConnections.$inferSelect
 export type ProjectMcpSetting = typeof projectMcpSettings.$inferSelect
+
+/**
+ * A forge account connected in Settings → Integrations (docs/integrations.md): a token, and the
+ * instance it is for. One per origin — github.com, a GitHub Enterprise, a self-hosted GitLab —
+ * since that is what a pull request link is matched by. Read-only use so far: what a task's pull
+ * requests stand at. Never given to a worker.
+ */
+export const integrationConnections = sqliteTable("integration_connections", {
+  id: text("id").primaryKey(),
+  kind: text("kind").$type<IntegrationKind>().notNull(),
+  /** `https://github.com`, `https://gitlab.example.com` — scheme and host, no path. */
+  origin: text("origin").notNull().unique(),
+  encryptedToken: text("encrypted_token").notNull(),
+  /** The login the token answered with when it was checked. */
+  account: text("account"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+})
+
+export type IntegrationConnection = typeof integrationConnections.$inferSelect

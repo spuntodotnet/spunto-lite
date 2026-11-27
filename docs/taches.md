@@ -480,8 +480,9 @@ design system — l'ordre est le sien, Lite fournit les données (`components/ta
    permissions refusées, les recherches web. Un champ absent est une ligne absente. Codex n'écrit
    rien de tout ça : pas de bloc pour lui (`lib/claude-tile.ts`, porté de Cloud 8fa27672).
 4. **Pull requests** : les PR (GitHub, GitLab `!n`, Bitbucket) reconnues parmi les liens partagés,
-   une par PR. **Le lien seulement** : Lite ne parle à aucune forge (clone et push passent par la
-   clé SSH), donc ni état, ni checks, ni revue comme les dessine l'app GitHub de Cloud.
+   une par PR. Quand leur forge est connectée dans **Settings → Integrations**, chacune dit où
+   elle en est : état, checks, revue, conflit ([integrations.md](integrations.md)) ; sinon, le
+   lien seulement.
 5. **Shared links** / **Shared files** — § [Ce qui a circulé dans la conversation](#ce-qui-a-circulé-dans-la-conversation).
 6. **Prompt**, **What ran**, **Metadata**.
 7. **Monitoring**, le dernier : où tourne le worker (« This computer · Docker »), CPU et mémoire

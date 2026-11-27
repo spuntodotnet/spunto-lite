@@ -8,6 +8,8 @@ import {
   DEFAULT_GROUPS,
   EDIT_SECTIONS,
   ProjectForm as DesignSystemProjectForm,
+  type GitProvider,
+  type GitRepoOption,
   type ProjectFeatureSelection,
   type ProjectFormCustomSection,
   type ProjectFormGroup,
@@ -21,6 +23,8 @@ import {
   fromExport,
   fromProject,
   newProjectFormValue,
+  pickRepository,
+  resolvePickedRepositories,
   toProjectPayload,
   validateProjectPayload,
   withUniqueRepoIds,
@@ -42,7 +46,11 @@ import type {
   SecretMeta,
   SharedVolume,
 } from "@/lib/types"
+import { definitionOf } from "@/lib/integrations"
+import type { RepositoryChoice, RepositorySource } from "@/services/integrations"
 import { useAgentApps } from "@/components/new-task"
+import { ForgeMark } from "@/components/integrations-card"
+import { RepositoryPickerField } from "@/components/repository-picker-field"
 import { ProjectTaskFields, taskSettingsSummary } from "@/components/project-task-fields"
 import { ProjectPortsAttributesFields } from "@/components/project-ports-fields"
 import { ProjectMcpServersSection, useProjectMcpServers } from "@/components/project-mcp-servers-section"
@@ -174,6 +182,24 @@ export function ProjectForm({ initial }: { initial?: Project }) {
     enabled: editing,
   })
 
+  // The repositories the connected forges reach (Settings → Integrations), for the picker of the
+  // Repositories section. Nothing connected: no picker, only "Add Git URL", as before.
+  const { data: reachable } = useQuery({
+    queryKey: ["integration-repositories"],
+    queryFn: () => api.get<{ sources: RepositorySource[]; repositories: RepositoryChoice[] }>("/api/integrations/repositories"),
+    staleTime: 60_000,
+  })
+  const sources = reachable?.sources ?? []
+  const picks = reachable?.repositories ?? []
+  const gitProviders: GitProvider[] = sources.map((src) => ({
+    id: src.id,
+    name: sourceName(src)!,
+    connected: true,
+    accounts: src.account ? [{ login: src.account }] : undefined,
+    icon: <ForgeMark kind={src.kind} />,
+  }))
+  const gitRepos: GitRepoOption[] = picks.map((r) => ({ provider: r.source, fullName: r.fullName, private: r.private }))
+
   // Ids the registry search handed back this session. Anything in here provably
   // exists, so it skips the verification below.
   const searched = useRef(new Set<string>())
@@ -261,6 +287,15 @@ export function ProjectForm({ initial }: { initial?: Project }) {
   }
 
   async function submit(submitted: LiteFormValue) {
+    // An `owner/repo` typed rather than picked is still on its forge: resolved to its clone URL here.
+    const resolved = resolvePickedRepositories(submitted.repositories, sources, picks)
+    if (resolved.unresolved.length) {
+      const message = `Pick ${resolved.unresolved[0]} from the list, or add it as a Git URL`
+      setError(message)
+      toast.error(message)
+      return
+    }
+    submitted = { ...submitted, repositories: resolved.repositories }
     const payload = toProjectPayload(submitted)
     const invalid = validateProjectPayload(payload)
     if (invalid) {
@@ -381,10 +416,24 @@ export function ProjectForm({ initial }: { initial?: Project }) {
             },
           },
         ]}
-        // No `gitProviders`, and no `renderRepoField`: Lite reaches no forge, so it declares no
-        // hosting provider. The package then draws the one control that matches — "Add Git URL",
-        // a clone URL cloned with the mounted SSH key — and drops the repository picker and the
-        // "connect an integration" prompt, which would both be offers Lite cannot honour.
+        // The connected forges, as the package's git providers: they only *list* repositories.
+        // A picked one becomes a Git URL row at once (`pickRepository`) — Lite stores clone URLs
+        // and clones them with the mounted SSH key, whoever listed them. Nothing connected: no
+        // provider, and the package draws "Add Git URL" alone.
+        gitProviders={gitProviders}
+        gitRepos={gitRepos}
+        renderRepoField={(field) => (
+          <RepositoryPickerField
+            {...field}
+            sourceLabel={(o) => (sources.length > 1 ? sourceName(sources.find((src) => src.id === o.provider)) : null)}
+            onChange={(next, option) => {
+              field.onChange(next, option)
+              const picked = option && picks.find((r) => r.source === option.provider && r.fullName === option.fullName)
+              // After the package's own patch, which this update is queued behind.
+              if (picked) setValue((cur) => ({ ...cur, repositories: pickRepository(cur.repositories, field.id, picked) }))
+            }}
+          />
+        )}
         extras={{
           // A label and a landing path per declared port (devcontainer `portsAttributes`).
           ports: (
@@ -611,4 +660,12 @@ function toExtensionEntry(e: ExtensionSuggestion): VscodeExtensionEntry {
     downloadCount: e.downloads,
     verified: e.verified,
   }
+}
+
+/** « GitHub », or « GitLab · gitlab.example.com » for an instance that is not the public one. */
+function sourceName(src: RepositorySource | undefined): string | null {
+  if (!src) return null
+  const def = definitionOf(src.kind)
+  const host = new URL(src.origin).host
+  return host === def.defaultHost ? def.label : `${def.label} · ${host}`
 }

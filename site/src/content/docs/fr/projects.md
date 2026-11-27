@@ -48,7 +48,7 @@ utiliser une autre galerie, voir [Configuration](/fr/docs/configuration#galerie-
 
 Un dépôt est une **URL de clonage**, exactement telle que `git clone` l’accepte — SSH
 (`git@gitlab.example.com:team/app.git`) ou HTTPS — plus l’emplacement où le cloner sous
-`/workspace`. Il n’y a aucune intégration de forge : pas d’application à installer, pas de jeton à
+`/workspace`. Cloner ne demande aucune intégration de forge : pas d’application à installer, pas de jeton à
 générer. Tout ce que votre clé SSH atteint fonctionne de la même façon — voir
 [Clés SSH et git](/fr/docs/ssh-and-git).
 

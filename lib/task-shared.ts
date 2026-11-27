@@ -6,6 +6,8 @@
 // a second copy would only be one more thing to keep in step with a resumed task or an adapter fix
 // replayed over history.
 
+import { definitionOf, parsePullRequestUrl as parseRef, type IntegrationKind } from "./integrations"
+
 /** One link of the thread, deduplicated on its URL. */
 export type SharedLink = {
   url: string
@@ -107,6 +109,10 @@ export function linkThread(messages: MessageEvent[], max = MAX_SHARED_LINKS): Sh
 /** A shared link that is a pull (or merge) request on a forge — recognised by its URL alone. */
 export type PullRequestLink = {
   url: string
+  /** Which forge's route the URL follows (lib/integrations). */
+  kind: IntegrationKind
+  /** `https://github.com` — what a connection of Settings → Integrations is found by. */
+  origin: string
   /** `github.com` */
   host: string
   /** `owner/repo` — for GitLab, the whole group path. */
@@ -120,37 +126,11 @@ export type PullRequestLink = {
   lastTs: string
 }
 
-// GitHub (and GitHub Enterprise: any host), GitLab (`/-/merge_requests/`), Bitbucket
-// (`/pull-requests/`). Anything after the number — `/files`, `#discussion_r1` — is the same PR.
-const GITHUB_PR = /^\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#]|$)/
-const GITLAB_MR = /^\/(.+?)\/-\/merge_requests\/(\d+)(?:[/?#]|$)/
-const BITBUCKET_PR = /^\/([^/]+\/[^/]+)\/pull-requests\/(\d+)(?:[/?#]|$)/
-
 /** The pull request a URL points at, or null. Pure; no forge is asked anything. */
 export function parsePullRequestUrl(url: string): Omit<PullRequestLink, "title" | "role" | "lastTs"> | null {
-  let u: URL
-  try {
-    u = new URL(url)
-  } catch {
-    return null
-  }
-  if (u.protocol !== "https:" && u.protocol !== "http:") return null
-  const host = u.host.replace(/^www\./, "")
-  // The canonical URL, without the tab or the anchor the link happened to carry.
-  const pr = (m: RegExpExecArray, path: string, mark: string) => ({
-    url: `${u.origin}/${m[1]}/${path}/${m[2]}`,
-    host,
-    repo: m[1],
-    number: Number(m[2]),
-    label: `${mark}${m[2]}`,
-  })
-  const gitlab = GITLAB_MR.exec(u.pathname)
-  if (gitlab) return pr(gitlab, "-/merge_requests", "!")
-  const github = GITHUB_PR.exec(u.pathname)
-  if (github) return pr(github, "pull", "#")
-  const bitbucket = BITBUCKET_PR.exec(u.pathname)
-  if (bitbucket) return pr(bitbucket, "pull-requests", "#")
-  return null
+  const pr = parseRef(url)
+  if (!pr) return null
+  return { ...pr, host: new URL(pr.origin).host, label: `${definitionOf(pr.kind).numberMark}${pr.number}` }
 }
 
 /**
@@ -162,7 +142,7 @@ export function pullRequests(links: SharedLink[]): PullRequestLink[] {
   for (const link of links) {
     const pr = parsePullRequestUrl(link.url)
     if (!pr) continue
-    const key = `${pr.host}/${pr.repo}/${pr.number}`
+    const key = `${pr.origin}/${pr.repo}/${pr.number}`
     const seen = byKey.get(key)
     if (seen) {
       seen.title ??= link.label

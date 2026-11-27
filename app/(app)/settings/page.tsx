@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { SshKeyUnlock, SSH_AGENT_QUERY_KEY } from "@/components/ssh-key-unlock"
 import { McpServersCard } from "@/components/mcp-servers-card"
+import { IntegrationsCard } from "@/components/integrations-card"
 import { AppearanceCard } from "@/components/appearance-card"
 import { DefaultProjectCard } from "@/components/default-project-card"
 
@@ -261,6 +262,7 @@ export default function SettingsPage() {
       {/* Saved on each action, outside the form above. */}
       <DefaultProjectCard value={settings?.defaultProjectId} />
       <AppearanceCard initial={settings?.dashboardColor} />
+      <IntegrationsCard />
       <McpServersCard />
     </div>
   )

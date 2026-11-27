@@ -5,7 +5,7 @@ group: use
 order: 3
 ---
 
-Lite n’a aucune intégration de forge. Un dépôt est une URL de clonage, et **votre clé SSH est le
+Cloner ne demande aucune intégration de forge. Un dépôt est une URL de clonage, et **votre clé SSH est le
 seul identifiant** : c’est l’identité avec laquelle vos commits sont poussés, et la seule chose qui
 clone. C’est aussi pourquoi n’importe quel hébergeur fonctionne — GitHub, GitLab, Bitbucket, un
 Gitea auto-hébergé, un dépôt nu sur un NAS. Autorisez la clé une fois, où que ce soit, et chaque
@@ -76,6 +76,17 @@ Les chemins se changent avec `SSH_AGENT_DIR` (par défaut `/run/spunto-ssh-agent
 
 ## URL de clonage HTTPS
 
-Une URL HTTPS clone sans clé quand le dépôt est public. Pour un dépôt privé en HTTPS, mettez un
-jeton dans les identifiants de l’URL ou passez à l’URL SSH — la clé SSH est la voie autour de
-laquelle Lite est conçu.
+Une URL HTTPS clone sans clé quand le dépôt est public. Pour un dépôt privé en HTTPS, connectez
+sa forge dans **Settings → Integrations** (plus bas) : les espaces de travail le clonent et le
+poussent alors avec ce jeton. Sinon, passez à l’URL SSH.
+
+## Intégrations : vos dépôts, vos pull requests
+
+Connectez une forge dans **Settings → Integrations** avec un jeton personnel — GitHub
+(`github.com` ou Enterprise) ou GitLab (`gitlab.com` ou auto-hébergé) — et le formulaire projet
+liste vos dépôts ; les espaces de travail clonent et poussent ceux que vous choisissez en HTTPS avec
+ce jeton, sans clé SSH à enregistrer chez la forge ; et les pull requests dont parle une tâche
+disent où elles en sont — ouverte ou fusionnée, checks, revue, conflits. Le jeton reste dans Lite,
+chiffré : un espace de travail le demande à chaque opération git, seulement pour l’hôte que git
+contacte, et ne le garde jamais. Lite lit aussi `GH_TOKEN` ou `GITLAB_TOKEN` dans son propre environnement, pour les instances
+publiques.

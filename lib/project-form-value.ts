@@ -8,8 +8,11 @@
 //
 // Lite's model is *narrower* than the dashboard's: a repository is a clone URL and nothing else,
 // cloned with the one mounted SSH key (see the `Repository` type). So every row this module
-// produces is a `git` row, and the package's provider machinery — the picker, the per-host
-// grouping, the "connect an integration" prompt — is simply never fed.
+// produces is a `git` row. The package's picker is fed by the integrations (docs/integrations.md)
+// only as a way to *find* a repository: a row picked there carries a connection's id as its
+// provider for as long as it is being typed, and becomes a `git` row with the repository's HTTPS
+// URL as soon as it is picked (`pickRepository`), or on submit (`resolvePickedRepositories`) —
+// cloned and pushed with the connection's token, through the worker's credential helper.
 
 import {
   toProjectFormValue,
@@ -294,4 +297,52 @@ function deriveLabel(urlOrPath: string): string {
   const cleaned = urlOrPath.replace(/\.git$/, "")
   const parts = cleaned.split(/[/:]/).filter(Boolean)
   return parts[parts.length - 1] || "repo"
+}
+
+// ── Repositories picked from a connected forge ─────────────────────────────────────────────────
+
+/** A repository the project form's picker offers (`GET /api/integrations/repositories`). */
+export type RepositoryPick = { source: string; fullName: string; cloneUrl: string }
+
+/** The row `id` turned into what Lite stores for the picked repository: a clone URL. */
+export function pickRepository(repos: ProjectRepo[], id: string, pick: RepositoryPick): ProjectRepo[] {
+  return repos.map((r) =>
+    r.id === id
+      ? {
+          ...r,
+          provider: "git",
+          project: pick.fullName,
+          cloneUrl: pick.cloneUrl,
+          workspacePath: r.workspacePathTouched ? r.workspacePath : deriveLabel(pick.fullName),
+        }
+      : r,
+  )
+}
+
+/**
+ * Rows still on a forge at submit — an `owner/repo` typed rather than picked — resolved to clone
+ * URLs: the listed repository's when the name is one, else `<origin>/<owner/repo>.git` on the
+ * row's connection — HTTPS, like a picked one, cloned with the connection's token. What
+ * cannot be resolved is named in `unresolved`, for the form to say rather than drop.
+ */
+export function resolvePickedRepositories(
+  repos: ProjectRepo[],
+  sources: { id: string; origin: string }[],
+  picks: RepositoryPick[],
+): { repositories: ProjectRepo[]; unresolved: string[] } {
+  const unresolved: string[] = []
+  const repositories = repos.map((r) => {
+    if (r.provider === "git") return r
+    const name = r.project.trim().replace(/\.git$/, "").replace(/^\/+|\/+$/g, "")
+    if (!name) return r
+    const listed = picks.find((p) => p.fullName.toLowerCase() === name.toLowerCase() && (!r.provider || p.source === r.provider))
+    if (listed) return pickRepository([r], r.id, listed)[0]
+    const source = sources.find((s) => s.id === r.provider)
+    if (!source || !name.includes("/")) {
+      unresolved.push(name)
+      return r
+    }
+    return pickRepository([r], r.id, { source: source.id, fullName: name, cloneUrl: `${source.origin}/${name}.git` })[0]
+  })
+  return { repositories, unresolved }
 }
