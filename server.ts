@@ -19,6 +19,7 @@ import { startUsageTelemetry } from "./services/telemetry"
 import { trackRequest } from "./lib/telemetry"
 import { startSshAgentProxy } from "./lib/ssh-agent"
 import { joinSharedNetworkAsLite } from "./lib/docker"
+import { startLiteTunnel } from "./services/lite-tunnel"
 
 const dev = process.env.NODE_ENV !== "production"
 const app = next({ dev })
@@ -128,6 +129,9 @@ async function main() {
   const domains = BASE_DOMAINS.map((d) => `*.${d}`).join(", ")
   server.listen(PORT, () => {
     console.log(`▲ spunto-lite ready on http://localhost:${PORT}  (workers + services: ${domains})`)
+    // Lite Connect (docs/lite-connect.md): dials Spunto Cloud only if Settings connected it, once
+    // the routes it relays to are being served.
+    startLiteTunnel()
   })
 
   // Same app, same proxy, same WebSocket routing — just terminated with TLS.

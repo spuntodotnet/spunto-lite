@@ -181,6 +181,12 @@ the pull requests a task talks about say where they stand — open or merged, ch
 worker never keeps the token: its git credential helper asks Lite for it, for the host git is
 talking to, at each operation: [`docs/integrations.md`](docs/integrations.md).
 
+**Connect to Spunto** (Settings, off by default) pairs Lite with a Spunto account in OAuth, then
+keeps an outgoing tunnel to Spunto Cloud: the member's devices — the Spunto Lite iPhone app — reach
+a short list of task routes through it, each under a capability ticked in Settings (`read`,
+`reply`, `create`), checked again by Lite; a task handing back or failing is announced up the
+tunnel for push notifications: [`docs/lite-connect.md`](docs/lite-connect.md).
+
 MCP servers (Notion, Linear…) are declared once in **Settings → MCP servers**, connected in OAuth
 from there, and given to each project's tasks through Lite's gateway — the worker never holds the
 vendor's token: [`docs/serveurs-mcp.md`](docs/serveurs-mcp.md).

@@ -15,7 +15,7 @@ import { startTelemetry, TELEMETRY_ENABLED, track } from "../lib/telemetry"
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000
 
 /** The image's revision when built by CI (Dockerfile's SPUNTO_LITE_VERSION), else package.json's. */
-function liteVersion(): string {
+export function liteVersion(): string {
   if (process.env.SPUNTO_LITE_VERSION) return process.env.SPUNTO_LITE_VERSION
   try {
     return (JSON.parse(readFileSync("package.json", "utf8")) as { version?: string }).version ?? "unknown"

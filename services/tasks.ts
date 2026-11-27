@@ -14,6 +14,7 @@ import { projects, taskEvents, tasks, workers, type Project, type Task, type Tas
 import { newId } from "../lib/id"
 import { shellQuote } from "../lib/shell"
 import { internalUrl } from "../lib/agent"
+import { liteTunnel } from "../lib/lite-connect-hooks"
 import { AgentAppChoiceError, NO_AGENT_APP, protocolOf, resolveAgentOptions, resolveTaskAgentApp, taskAgentAppBlocker, taskHarness, type Harness } from "../lib/agent-apps"
 import { MAX_TASK_METADATA_KEYS, type CreateTaskInput, type UpdateTaskInput } from "../lib/validation"
 import { getProjectRow } from "./projects"
@@ -493,6 +494,29 @@ export function signalParent(child: Pick<Task, "id" | "parentTaskId" | "startedA
   }
 }
 
+/** How much of the agent's last message a `task.state` event carries — a notification's worth. */
+const EVENT_EXCERPT_CHARS = 200
+
+/**
+ * A task just handed back or failed: tell Spunto Cloud through the Lite Connect tunnel, which makes
+ * it a push notification on the member's phone (docs/lite-connect.md § « Événements »). Called on
+ * the transition itself, after the conditional write that made it — so once per passage, never on
+ * a mere refresh. Dropped when the tunnel is not online: a notification is not worth a queue.
+ * Best effort, never in the way of the transition.
+ */
+export function emitTaskState(task: Pick<Task, "id" | "projectId" | "title" | "error">, state: HandBack): void {
+  const tunnel = liteTunnel()
+  if (!tunnel || tunnel.status().state !== "online") return
+  try {
+    const said = lastAgentMessages(task.id, 1)[0] ?? (state === "failed" ? task.error : null)
+    const text = said?.replace(/\s+/g, " ").trim()
+    const lastMessage = text ? (text.length > EVENT_EXCERPT_CHARS ? `${text.slice(0, EVENT_EXCERPT_CHARS - 1).trimEnd()}…` : text) : undefined
+    tunnel.emit({ type: "event", event: "task.state", taskId: task.id, projectId: task.projectId, state, title: task.title, ...(lastMessage ? { lastMessage } : {}) })
+  } catch (err) {
+    console.warn(`[task:${task.id}] could not emit task.state: ${(err as Error)?.message ?? err}`)
+  }
+}
+
 /** The message a parent's session reads — said by the platform, with what to call next. */
 export function subtaskSignalText(child: Pick<Task, "id" | "title" | "error">, state: HandBack, report: string | null): string {
   const clip = (text: string) => (text.length > SIGNAL_EXCERPT_CHARS ? `${text.slice(0, SIGNAL_EXCERPT_CHARS).trimEnd()}…` : text)
@@ -566,7 +590,7 @@ export function getRawTask(id: string): Task | undefined {
   return db.select().from(tasks).where(eq(tasks.id, id)).get()
 }
 
-function failTask(taskId: string, error: string, opts: { signalParent?: boolean } = {}): void {
+function failTask(taskId: string, error: string, opts: { signalParent?: boolean; dropped?: boolean } = {}): void {
   const before = getRawTask(taskId)
   const now = new Date()
   db.update(tasks)
@@ -576,6 +600,8 @@ function failTask(taskId: string, error: string, opts: { signalParent?: boolean 
   releaseWorker(taskId)
   // Dropped by its parent's own session (`cancel_subtask`): the parent knows, it is not told.
   if (before && before.state !== "failed" && opts.signalParent !== false) signalParent(before, "failed")
+  // A Drop is someone's own move, not news for their phone.
+  if (before && before.state !== "failed" && !opts.dropped) emitTaskState({ ...before, error }, "failed")
 }
 
 function projectOf(task: Task): Project {
@@ -1117,6 +1143,7 @@ async function refreshTask(row: Task): Promise<Task> {
     console.warn(`[task:${row.id}] ${down.note ?? "machine down after the turn ended"} (worker ${row.workerId}: ${worker?.state ?? "gone"}) → ${down.state}`)
     if (down.state === "failed") releaseWorker(row.id)
     signalParent({ ...row, ...patch }, down.state)
+    emitTaskState({ ...row, ...patch }, down.state)
     return { ...row, ...patch }
   }
 
@@ -1169,7 +1196,10 @@ async function refreshTask(row: Task): Promise<Task> {
   // A session that died lands straight in `failed`: its machine goes back to the pool, parked.
   if (patch.state === "failed") releaseWorker(row.id)
   // A sub-task handing back, or dying, is news its parent is waiting on: its session gets a message.
-  if (patch.state === "in-review" || patch.state === "failed") signalParent({ ...row, ...patch }, patch.state)
+  if (patch.state === "in-review" || patch.state === "failed") {
+    signalParent({ ...row, ...patch }, patch.state)
+    emitTaskState({ ...row, ...patch }, patch.state)
+  }
   const fresh = { ...row, ...patch }
   // The ingestion above may have renamed the task (the session named itself).
   const now = getRawTask(row.id)
@@ -1579,13 +1609,13 @@ export async function cancelTask(
             note = `Cancelled — cleanup could not run: ${(err as Error).message}`
           }
         }
-        failTask(taskId, note, { signalParent: !opts.byParent })
+        failTask(taskId, note, { signalParent: !opts.byParent, dropped: true })
       } finally {
         clearPending(taskId, "dropping")
       }
     },
     // The reader asked for it to be over; a live task with a silent error would block the pool.
-    (error) => failTask(taskId, `Cancelled — the drop failed: ${error}`, { signalParent: !opts.byParent }),
+    (error) => failTask(taskId, `Cancelled — the drop failed: ${error}`, { signalParent: !opts.byParent, dropped: true }),
   )
   return claimed
 }

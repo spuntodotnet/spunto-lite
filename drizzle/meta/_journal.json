@@ -204,6 +204,13 @@
       "when": 1795710517399,
       "tag": "0028_integration_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1795785009026,
+      "tag": "0029_lite_connect",
+      "breakpoints": true
     }
   ]
 }

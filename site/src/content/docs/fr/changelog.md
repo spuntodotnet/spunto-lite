@@ -9,6 +9,18 @@ Ce qui change dans Lite, du plus récent au plus ancien. Tout ce qui est listé 
 `latest` à partir du jour indiqué : pour l’avoir, [mettez Lite à jour](/fr/docs/installation#mettre-à-jour),
 mêmes volumes, même clé, rien à migrer à la main.
 
+## 2026-11-27
+
+**Les tâches de votre Lite sur votre téléphone, par Spunto**
+
+### Nouveau
+
+- **Connect to Spunto.** Dans **Settings → Connect to Spunto**, reliez Lite à votre compte Spunto :
+  vos appareils connectés à Spunto — d’abord l’app iPhone Spunto Lite — retrouvent ses tâches
+  d’agent par un tunnel que Lite ouvre, sans ouvrir de port. Lecture seule au départ ; *Reply* et
+  *Create tasks* sont à cocher. Une tâche qui rend la main ou échoue est annoncée à Spunto, pour les
+  notifications du téléphone. Coupé tant que vous ne le connectez pas. [Détails](/fr/docs/connect-to-spunto)
+
 ## 2026-11-25
 
 **L’agent peut vous poser une question, déléguer des sous-tâches, et ses sous-agents ont leur bloc**

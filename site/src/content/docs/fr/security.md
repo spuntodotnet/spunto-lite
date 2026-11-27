@@ -27,6 +27,15 @@ Donc :
 Spunto Cloud est la version avec comptes, rôles et authentification devant chaque espace de
 travail.
 
+## Connect to Spunto
+
+Coupé par défaut. Une fois [connecté](/fr/docs/connect-to-spunto), Lite garde un tunnel sortant
+vers Spunto, qui lui relaie une liste fixe de requêtes de tâches venues de vos propres appareils
+connectés — jamais les secrets, les réglages, les workers, les terminaux ni les services. Lite
+revérifie la liste et les capacités que vous avez cochées avant de servir quoi que ce soit.
+*Create tasks* veut dire qu’un agent peut démarrer sur votre machine, avec votre clé SSH, depuis
+votre téléphone : c’est décoché tant que vous ne le cochez pas.
+
 ## Ce que peut faire un espace de travail
 
 Un worker est un conteneur sur votre démon Docker, avec :
