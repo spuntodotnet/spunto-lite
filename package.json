@@ -68,6 +68,9 @@
     },
     "@esbuild-kit/core-utils": {
       "esbuild": "^0.25.12"
+    },
+    "@spunto/design-system": {
+      "@legendapp/list": "3.9.2"
     }
   }
 }
