@@ -20,13 +20,13 @@ Décision : RFC 0072 de `coderhammer/spunto`. Le contrat côté Cloud : son
 | `services/lite-tunnel.ts` | le tunnel : `hello`, relais, reconnexions |
 | `lib/lite-connect-hooks.ts` | les commandes du tunnel sur `globalThis`, pour les routes |
 | `components/lite-connect-card.tsx` | Settings → **Connect to Spunto** |
-| `scripts/fake-spunto-cloud.ts` | un faux Cloud (OAuth + tunnel), pour les tests et l'essai à la main |
+| `scripts/fake-spunto-cloud.ts` | un faux Cloud (OAuth, révocation, tunnel), pour les tests et l'essai à la main |
 
 ## Coupé par défaut
 
 Rien ne se connecte sans le bouton **Connect to Spunto**. Le tunnel ne s'ouvre au démarrage
 (`startLiteTunnel`, `server.ts`) que si un refresh token est en base, et seul le retour du
-consentement en écrit un. **Disconnect** l'efface et ferme le tunnel.
+consentement en écrit un. **Disconnect** le rend à Spunto, l'efface et ferme le tunnel.
 
 La capacité par défaut est `read`. `reply` et `create` se cochent à la main ; `create` avertit qu'un
 agent démarre alors sur cette machine, depuis un téléphone, avec la clé SSH et les secrets.
@@ -40,6 +40,8 @@ par défaut, modifiable tant qu'on n'est pas connecté — pour le dev) :
    [<origine de Lite>/api/lite-connect/callback], scope: "lite", token_endpoint_auth_method: "none" }`.
    Le `client_id` est gardé, avec l'URL de Spunto et le redirect URI pour lesquels il a été
    inscrit ; on ne réinscrit que si l'un des deux change (Lite ouvert depuis une autre origine).
+   Les jetons encore en main sont alors ceux de l'ancien client, inutiles avec le nouveau : son
+   refresh token est **rendu** (révocation, ci-dessous) puis oublié, avant l'inscription.
 2. **Autorisation** : `GET /api/oauth/authorize` dans le navigateur, code + PKCE S256 + `state`
    (gardés 15 min dans la ligne, le verifier chiffré). Spunto montre sa page de consentement
    (« Spunto Lite », nom non vérifié) ; il faut y être connecté.
@@ -74,7 +76,7 @@ renvoyés par une route ni écrits dans un log. Seul le tunnel rafraîchit, une 
 |---|---|
 | `4401` jeton refusé | rafraîchit (forcé) et redit `hello` tout de suite ; refusé encore → délai croissant |
 | refresh refusé (4xx du token endpoint) | **déconnecté** : jetons oubliés, la raison dans Settings |
-| `4403` déconnecté depuis Spunto | **jetons oubliés, pas de reconnexion** ; « reconnecte depuis Settings » |
+| `4403` déconnecté depuis Spunto | **jetons oubliés, pas de reconnexion** ; « reconnecte depuis Settings ». Pendant la révocation de Disconnect, c'en est l'écho : le tunnel s'éteint, sans erreur |
 | `4409` remplacé par un tunnel plus récent | attend 30 s : deux Lite qui partagent un lien ne se relaient pas chaque seconde |
 | autre (coupure, redéploiement) | 1 s, 2 s, 4 s… jusqu'à 30 s ; remis à 1 s au `welcome` |
 
@@ -144,12 +146,41 @@ GET  /api/lite-connect             — { spuntoUrl, machineName, defaultMachineN
 PATCH /api/lite-connect            — { spuntoUrl? (déconnecté seulement, sinon 409), machineName?, capabilities? }
 POST /api/lite-connect/connect     — { url } : la page de consentement (inscrit le client si besoin)
 GET  /api/lite-connect/callback    — retour du consentement → /settings?liteConnected=1 | ?liteError=…
-POST /api/lite-connect/disconnect  — oublie les jetons, ferme le tunnel
+POST /api/lite-connect/disconnect  — rend le refresh token à Spunto, oublie les jetons, ferme le tunnel → { …vue, revoked }
 ```
 
-**Disconnect ne révoque pas côté Spunto** (aucune route ne le permet à un client) : Spunto liste ce
-Lite hors ligne jusqu'à ce qu'on le retire dans Account Settings → Connected apps (ce qui, tunnel
-ouvert, le ferme en `4403`). Reconnecter réutilise le même client, donc la même connexion.
+## Déconnecter : rendre le jeton (RFC 7009)
+
+**Disconnect** (`disconnectLiteConnect`) rend d'abord le refresh token au Spunto qui l'a émis
+(celui de l'inscription du client), comme le contrat de Cloud le prévoit (son `docs/lite-connect.md`
+§ Déconnecter, coderhammer/spunto#876) :
+
+```
+POST {spuntoUrl}/api/oauth/revoke
+Content-Type: application/x-www-form-urlencoded
+
+token=spr_…&client_id=mcp_…          (client public : pas de secret)
+```
+
+Spunto révoque alors **tout le consentement du client** : ses jetons, la machine dans
+`GET /api/users/me/lite` (elle quitte la liste du membre) et le tunnel ouvert, fermé en `4403`.
+
+- **Puis**, quoi qu'ait répondu Spunto, les jetons sont oubliés et le tunnel fermé.
+- **Le tunnel reste ouvert pendant l'appel** : le `4403` qui arrive alors est l'écho de la
+  révocation (`liteTunnel().revoking()`), pas un « déconnecté depuis Spunto » — le tunnel s'éteint
+  sans écrire d'erreur, Disconnect fait le reste.
+- **Rendu** : `200` (aussi pour un jeton déjà inconnu) ou `401 invalid_client` (Spunto ne connaît
+  plus le client : il n'y a rien à retirer). La carte dit « Disconnected from Spunto ».
+- **Pas rendu** : Spunto injoignable (10 s au plus), `5xx`, un Spunto sans la route (`404`)… Lite
+  oublie quand même ; la route répond `revoked: false`, et `lastError` (sous « Disconnected ») dit
+  pourquoi, que **la machine reste peut-être listée dans Spunto, à retirer depuis Account Settings
+  → Connected apps**.
+
+Le même rendu sert quand **l'inscription est refaite** (ci-dessus) : le refresh token de l'ancien
+client part avant qu'un autre ne le remplace. Jamais pour un nouvel appairage du *même* client :
+révoquer l'ancien jeton emporterait le consentement tout neuf avec lui.
+
+Reconnecter réutilise le même client ; Cloud recrée la connexion au premier `hello`.
 
 ## Tests
 
@@ -162,7 +193,9 @@ atteint les routes), puis : coupé par défaut, appairage OAuth complet (inscrip
 `hello` en `read`, relais d'une lecture avec sa query, refus hors liste (sans rien atteindre),
 refus d'une capacité non donnée puis nouveau `hello` après l'avoir cochée, reconnexion après
 coupure, 4401 → refresh (jeton tourné), `task.state`, 4409, 4403 qui arrête tout, refresh refusé,
-Disconnect.
+réinscription qui rend l'ancien jeton, Disconnect qui le rend (le corps exact de l'appel, le `4403`
+qui suit sans erreur, jetons oubliés), Disconnect avec Spunto injoignable ou en `503` (oublié quand
+même, et dit).
 
 À la main, contre une vraie instance :
 
@@ -170,6 +203,6 @@ Disconnect.
 npx tsx scripts/fake-spunto-cloud.ts --port 4999      # consentement accordé d'office
 # Settings → Connect to Spunto → Spunto URL : http://localhost:4999, puis Connect
 curl -XPOST localhost:4999/_fake/relay -d '{"method":"GET","path":"/api/tasks"}'
-curl localhost:4999/_fake/state                       # hellos, événements
+curl localhost:4999/_fake/state                       # hellos, événements, révocations
 curl -XPOST localhost:4999/_fake/close -d '{"code":4403}'
 ```

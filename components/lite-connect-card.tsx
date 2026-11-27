@@ -7,7 +7,7 @@ import { toast } from "@spunto/design-system"
 import { AlertTriangle, CircleDot, Loader2, Smartphone, Unplug } from "lucide-react"
 import { api } from "@/lib/api"
 import type { LiteCapability } from "@/lib/lite-relay"
-import type { LiteConnectView } from "@/services/lite-connect"
+import type { LiteConnectView, LiteDisconnectResult } from "@/services/lite-connect"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -84,10 +84,12 @@ export function LiteConnectCard() {
   })
 
   const disconnect = useMutation({
-    mutationFn: () => api.post<LiteConnectView>("/api/lite-connect/disconnect"),
-    onSuccess: (view) => {
+    mutationFn: () => api.post<LiteDisconnectResult>("/api/lite-connect/disconnect"),
+    onSuccess: ({ revoked, ...view }) => {
       set(view)
-      toast.success("Disconnected from Spunto")
+      if (revoked) toast.success("Disconnected from Spunto")
+      // The why, and where to finish the job, stay under « Disconnected » (lastError).
+      else toast.warning("Disconnected here, but Spunto could not be told: this machine may still be listed in Spunto.")
     },
     onError: (e) => toast.error((e as Error).message),
   })
@@ -188,7 +190,7 @@ export function LiteConnectCard() {
         <div className="flex flex-wrap items-center gap-2">
           {data.connected ? (
             <Button size="sm" variant="outline" disabled={disconnect.isPending} onClick={() => disconnect.mutate()}>
-              <Unplug className="size-3.5" /> Disconnect
+              {disconnect.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Unplug className="size-3.5" />} Disconnect
             </Button>
           ) : (
             <Button size="sm" disabled={connect.isPending} onClick={() => connect.mutate()}>

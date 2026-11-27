@@ -166,12 +166,15 @@ async function registerClient(spuntoUrl: string, redirectUri: string, name: stri
 /**
  * Starts the pairing: the consent page's URL, to send the browser to. `origin` is Lite's origin as
  * the browser sees it — where Spunto sends it back. The client registration is kept and reused,
- * and done again only for another Spunto or another redirect URI (Lite opened from elsewhere).
+ * and done again only for another Spunto or another redirect URI (Lite opened from elsewhere) —
+ * the previous client's refresh token, if still held, is then revoked and forgotten.
  */
 export async function startLiteConnect(origin: string): Promise<string> {
   let row = getLiteConnect()
   const redirectUri = redirectUriFor(origin)
   if (!row.clientId || row.clientSpuntoUrl !== row.spuntoUrl || row.clientRedirectUri !== redirectUri) {
+    // The tokens in hand are the old client's, of no use with the new one: give them back first.
+    if (isConnected(row)) await giveBackTokens(row)
     const clientId = await registerClient(row.spuntoUrl, redirectUri, machineNameOf(row))
     row = update({ clientId, clientSpuntoUrl: row.spuntoUrl, clientRedirectUri: redirectUri })
   }
@@ -245,19 +248,66 @@ export async function finishLiteConnect(params: { state?: string; code?: string;
 }
 
 /**
- * Forgets the tokens (and the link's id), keeps the client registration and the settings. From the
- * Disconnect button (`reason` null) or because Spunto ended it (4403, a refused refresh). Cloud
- * keeps the connection until it is removed there (Account Settings → Connected apps): no token
- * endpoint revokes it from here.
+ * Forgets the tokens (and the link's id), keeps the client registration and the settings. From
+ * Disconnect (after giving the token back, `disconnectLiteConnect`), or because Spunto ended it
+ * (4403, a refused refresh). `reason` is what the card shows under « Disconnected ».
  */
 export function forgetLiteConnect(reason: string | null): void {
   update({ encryptedAccessToken: null, accessExpiresAt: null, encryptedRefreshToken: null, connectedAt: null, connectionId: null, lastError: reason })
 }
 
-export function disconnectLiteConnect(): LiteConnectView {
-  forgetLiteConnect(null)
+/**
+ * `POST /api/oauth/revoke` (RFC 7009): gives this refresh token back to the Spunto that issued it.
+ * Spunto drops the client's whole consent with it — its tokens, its machine in the member's list,
+ * its open tunnel (closed in 4403). 200 also when Spunto no longer knows the token; 401
+ * `invalid_client` when it no longer knows the client: nothing is left there either way. Anything
+ * else (unreachable, 5xx, a Spunto without the route) → the reason, for the card: the machine may
+ * still be listed there.
+ */
+async function revokeToken(spuntoUrl: string, clientId: string, refreshToken: string): Promise<string | null> {
+  let res: Response
+  try {
+    res = await spuntoFetch(`${spuntoUrl}/api/oauth/revoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: new URLSearchParams({ token: refreshToken, client_id: clientId }),
+    })
+  } catch (err) {
+    return (err as Error).message
+  }
+  if (res.ok) return null
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
+  if (res.status === 401 && body.error === "invalid_client") return null
+  return `Spunto's revocation endpoint failed: ${String(body.error_description ?? body.error ?? `HTTP ${res.status}`)}`
+}
+
+/** Said under « Disconnected » when Spunto could not be told. */
+const notRevoked = (why: string) =>
+  `Disconnected here, but Spunto could not be told (${why}): this machine may still be listed there — remove it in Account Settings → Connected apps`
+
+/**
+ * Gives the stored refresh token back to its Spunto (the one its client was registered with), then
+ * forgets the tokens and closes the tunnel — whether Spunto answered or not. The tunnel stays open
+ * during the call: the 4403 Spunto closes it with is the revocation's echo, not news
+ * (`revoking`). Null when revoked (or nothing to revoke), else why not.
+ */
+async function giveBackTokens(row: LiteConnect): Promise<string | null> {
+  let why: string | null = null
+  if (row.encryptedRefreshToken && row.clientId) {
+    liteTunnel()?.revoking()
+    why = await revokeToken(row.clientSpuntoUrl ?? row.spuntoUrl, row.clientId, decrypt(row.encryptedRefreshToken))
+  }
+  forgetLiteConnect(why && notRevoked(why))
   liteTunnel()?.stop()
-  return getLiteConnectView()
+  return why
+}
+
+export type LiteDisconnectResult = LiteConnectView & { revoked: boolean }
+
+/** Settings → Disconnect. `revoked: false`: forgotten here, but Spunto may still list the machine (`lastError` says so). */
+export async function disconnectLiteConnect(): Promise<LiteDisconnectResult> {
+  const why = await giveBackTokens(getLiteConnect())
+  return { ...getLiteConnectView(), revoked: why === null }
 }
 
 /**

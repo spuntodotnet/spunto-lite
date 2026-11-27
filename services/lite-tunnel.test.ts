@@ -1,5 +1,6 @@
 // Lite Connect end to end against a fake Spunto Cloud (scripts/fake-spunto-cloud.ts): the pairing
-// in OAuth, the hello, the relay and its refusals, the reconnections, 4403, `task.state`.
+// in OAuth, the hello, the relay and its refusals, the reconnections, 4403, `task.state`, and
+// Disconnect's revocation (RFC 7009).
 // Lite's own routes are a stub listener here, so the test sees exactly what reaches them. `npm test`.
 import { after, before, describe, it } from "node:test"
 import assert from "node:assert/strict"
@@ -235,16 +236,89 @@ describe("Lite Connect, against a fake Spunto Cloud", () => {
     fake.refuseRefresh = false
   })
 
-  it("Disconnect closes the tunnel and forgets the tokens; the URL can change again", async () => {
+  it("a new registration gives the old client's refresh token back before replacing it", async () => {
     await pair()
-    assert.throws(() => lc.updateLiteConnect({ spuntoUrl: "https://elsewhere.example" }), /Disconnect before/)
-    const view = lc.disconnectLiteConnect()
+    const oldClient = lc.getLiteConnect().clientId!
+    const revocations = fake.revocations.length
+    // Lite opened from another origin: another redirect URI, so another client.
+    const authorize = new URL(await lc.startLiteConnect("http://localhost:3999"))
+    const newClient = authorize.searchParams.get("client_id")!
+    assert.notEqual(newClient, oldClient)
+    assert.equal(fake.revocations.length, revocations + 1)
+    const { params, status } = fake.revocations.at(-1)!
+    assert.equal(params.client_id, oldClient)
+    assert.match(params.token, /^spr_/)
+    assert.equal(status, 200)
+    assert.equal([...fake.refreshTokens.values()].includes(oldClient), false, "the old grant is gone at Spunto")
+    const view = lc.getLiteConnectView()
     assert.equal(view.connected, false)
     assert.equal(view.lastError, null)
+    await until("off", () => liteTunnel()!.status().state === "off")
+    // The pairing goes on with the new client.
+    const back = new URL((await fetch(authorize, { redirect: "manual" })).headers.get("location")!)
+    await lc.finishLiteConnect({ state: back.searchParams.get("state")!, code: back.searchParams.get("code")! })
+    await until("online", () => liteTunnel()!.status().state === "online")
+  })
+
+  it("Disconnect gives the refresh token back (RFC 7009), then closes the tunnel and forgets the tokens", async () => {
+    await pair()
+    assert.throws(() => lc.updateLiteConnect({ spuntoUrl: "https://elsewhere.example" }), /Disconnect before/)
+    const clientId = lc.getLiteConnect().clientId!
+    const held = [...fake.refreshTokens].filter(([, c]) => c === clientId).map(([t]) => t)
+    assert.equal(held.length, 1)
+    const revocations = fake.revocations.length
+    // What the card would read while Spunto has closed the tunnel and not answered yet.
+    let during: ReturnType<typeof lc.getLiteConnectView> | null = null
+    fake.beforeRevokeAnswer = async () => {
+      await until("the 4403 heard", () => liteTunnel()!.status().state === "off")
+      during = lc.getLiteConnectView()
+    }
+    const view = await lc.disconnectLiteConnect()
+    fake.beforeRevokeAnswer = null
+    assert.equal(during!.lastError, null, "the 4403 that follows the revocation is no error")
+    assert.equal(fake.revocations.length, revocations + 1)
+    const call = fake.revocations.at(-1)!
+    assert.equal(call.contentType, "application/x-www-form-urlencoded")
+    assert.deepEqual(call.params, { token: held[0], client_id: clientId })
+    assert.equal(call.status, 200)
+    assert.equal(view.revoked, true)
+    assert.equal(view.connected, false)
+    assert.equal(view.lastError, null)
+    assert.equal(view.tunnel.state, "off")
+    assert.equal(lc.getLiteConnect().encryptedAccessToken, null)
+    assert.equal(lc.getLiteConnect().encryptedRefreshToken, null)
     await until("closed at the fake", () => fake.online === 0)
     const hellos = fake.hellos.length
     await sleep(1_500)
     assert.equal(fake.hellos.length, hellos)
+    assert.equal(lc.getLiteConnectView().lastError, null)
+  })
+
+  for (const failure of ["unreachable", 503] as const) {
+    it(`Disconnect with Spunto ${failure === "unreachable" ? "unreachable" : `answering ${failure}`} forgets anyway, and says so`, async () => {
+      await pair()
+      fake.revokeFailure = failure
+      try {
+        const view = await lc.disconnectLiteConnect()
+        assert.equal(fake.revocations.at(-1)!.params.client_id, lc.getLiteConnect().clientId)
+        assert.equal(view.revoked, false)
+        assert.equal(view.connected, false)
+        assert.equal(view.tunnel.state, "off")
+        assert.equal(lc.getLiteConnect().encryptedRefreshToken, null)
+        assert.match(view.lastError ?? "", /may still be listed there — remove it in Account Settings → Connected apps/)
+        assert.match(view.lastError ?? "", failure === "unreachable" ? /unreachable/ : /server_error/)
+        await until("closed at the fake", () => fake.online === 0)
+      } finally {
+        fake.revokeFailure = null
+      }
+    })
+  }
+
+  it("Disconnect when not connected asks Spunto nothing; the URL can change again", async () => {
+    const revocations = fake.revocations.length
+    const view = await lc.disconnectLiteConnect()
+    assert.equal(view.revoked, true)
+    assert.equal(fake.revocations.length, revocations)
     assert.equal(lc.updateLiteConnect({ spuntoUrl: "https://elsewhere.example/" }).spuntoUrl, "https://elsewhere.example")
   })
 })

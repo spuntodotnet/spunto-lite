@@ -56,8 +56,10 @@ Rien n’est envoyé quand Lite est hors ligne, ni quand vous abandonnez vous-m�
 
 ## Se déconnecter
 
-- **Disconnect** dans Settings oublie les jetons et ferme le tunnel. Spunto continue de lister la
-  machine, hors ligne, jusqu’à ce que vous l’y retiriez.
+- **Disconnect** dans Settings rend à Spunto les identifiants de Lite, puis les oublie et ferme le
+  tunnel : la machine quitte aussitôt votre liste dans Spunto. Si Spunto est injoignable à ce
+  moment-là, Lite se déconnecte quand même et le dit : la machine reste alors peut-être listée dans
+  Spunto — retirez-la depuis **Account Settings → Connected apps**.
 - La retirer dans Spunto (**Account Settings → Connected apps**) ferme le tunnel aussitôt ; Lite
   affiche alors *Disconnected* et ne réessaie plus avant une nouvelle connexion.
 - Si Spunto n’accepte plus les identifiants de Lite (30 jours sans usage, par exemple), Lite

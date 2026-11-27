@@ -21,6 +21,13 @@ migrate by hand.
   tasks* are yours to tick. A task that hands back or fails is announced to Spunto, for your
   phone's notifications. Off until you connect it. [Details](/docs/connect-to-spunto)
 
+### Improved
+
+- **Disconnect removes the machine from Spunto too.** Lite gives its credentials back to Spunto
+  before forgetting them: the machine leaves your list there, no trip to Account Settings needed.
+  If Spunto can't be reached, Lite still disconnects and tells you where to remove it.
+  [Details](/docs/connect-to-spunto#disconnecting)
+
 ## 2026-11-25
 
 **The agent can ask you, delegate sub-tasks, and its subagents get their own block**
