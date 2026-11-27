@@ -5,8 +5,9 @@ appareils où son propriétaire est connecté à Spunto, l'app iPhone « Spunto 
 
 - Lite **ouvre un tunnel** WebSocket vers Spunto Cloud ;
 - Cloud y **relaie** une courte liste de routes de tâches ;
-- Lite **revérifie** chaque requête, la sert par ses propres routes, et **émet** un événement quand
-  une tâche rend la main ou échoue (Cloud en fait une notification).
+- Lite **revérifie** chaque requête, la sert par ses propres routes, et **émet** des événements sur
+  ses tâches : leurs changements d'état (Cloud en fait les notifications), ce que fait leur agent
+  et le résumé de la machine (Cloud en fait les Live Activities de l'iPhone).
 
 Décision : RFC 0072 de `coderhammer/spunto`. Le contrat côté Cloud : son
 [`docs/lite-connect.md`](https://github.com/coderhammer/spunto/blob/main/docs/lite-connect.md)
@@ -18,6 +19,7 @@ Décision : RFC 0072 de `coderhammer/spunto`. Le contrat côté Cloud : son
 | `lib/lite-relay-url.ts` | l'URL locale où une requête permise est servie, rien d'autre |
 | `services/lite-connect.ts` | la ligne `lite_connect`, l'appairage OAuth, les jetons |
 | `services/lite-tunnel.ts` | le tunnel : `hello`, relais, reconnexions |
+| `services/lite-events.ts` | `task.progress` et `machine.summary` (`task.state` : `emitTaskState`, `services/tasks.ts`) |
 | `lib/lite-connect-hooks.ts` | les commandes du tunnel sur `globalThis`, pour les routes |
 | `components/lite-connect-card.tsx` | Settings → **Connect to Spunto** |
 | `scripts/fake-spunto-cloud.ts` | un faux Cloud (OAuth, révocation, tunnel), pour les tests et l'essai à la main |
@@ -113,23 +115,80 @@ Pour chaque requête, dans cet ordre :
 Jamais relayé : secrets, réglages (la clé SSH), `lite-connect` lui-même, workers, terminaux,
 services, et tout le reste.
 
-## Événements : `task.state`
+## Événements
 
-Quand une tâche **passe** à `in-review` ou `failed`, Lite envoie dans le tunnel :
+Trois événements montent dans le tunnel, pour les notifications et les **Live Activities** (écran
+verrouillé, Dynamic Island) de l'app iPhone : Cloud ne voit pas tourner les tâches, il montre ce que
+Lite lui dit. Pour les trois :
+
+- envoyés **seulement quand le tunnel est `online`** : rien n'est mis en file tunnel fermé, un
+  événement manqué est perdu — `machine.summary`, rejoué à chaque `welcome`, remet Cloud d'aplomb ;
+- un Cloud qui ne connaît pas un `event` l'ignore ;
+- les textes (`lastMessage`, `activity`) tiennent sur une ligne : espaces réduits, coupés à 200
+  caractères (`…` compris) ;
+- les dates sont en ISO 8601 ; `at` est le moment de l'envoi.
+
+Rien de nouveau n'est stocké : les derniers envois (pour le throttle et le debounce) sont en mémoire,
+sur `globalThis` comme l'état du tunnel.
+
+### `task.state` — à chaque transition
 
 ```json
-{ "type": "event", "event": "task.state", "taskId": "…", "projectId": "…", "state": "in-review", "title": "…", "lastMessage": "…" }
+{ "type": "event", "event": "task.state", "taskId": "…", "projectId": "…", "state": "in-review",
+  "title": "…", "lastMessage": "…", "startedAt": "2026-11-27T10:00:00.000Z", "at": "2026-11-27T10:12:03.000Z" }
 ```
 
-- Émis par `emitTaskState` (`services/tasks.ts`) aux mêmes endroits que le signal au parent d'une
-  sous-tâche : juste après l'écriture conditionnelle qui fait la transition (`refreshTask`, machine
-  tombée, `failTask`). **Une fois par passage**, jamais à un simple rafraîchissement ; un nouveau
-  tour qui rend la main en émet un nouveau.
-- `lastMessage` : le dernier message de l'agent (le sien, pas d'un sous-agent), espaces réduits,
-  coupé à 200 caractères ; à défaut, pour `failed`, l'erreur de la tâche. Absent sinon.
-- **Pas émis** pour un Drop (c'est le geste du propriétaire, pas une nouvelle), ni quand le tunnel
-  n'est pas `online` : l'événement est perdu, pas mis en file.
-- Un Cloud qui ne connaît pas `event` l'ignore.
+- `state` : `queued` | `running` | `in-review` | `failed` | `done`. Émis par `emitTaskState`
+  (`services/tasks.ts`) juste après l'écriture conditionnelle qui fait la transition — **une fois
+  par passage**, jamais à un simple rafraîchissement ; un nouveau tour qui rend la main en émet un
+  nouveau. Où : `createTask` et Retry (`queued`), le lancement de la session et son adoption après
+  un redémarrage, une réponse (`running`), `refreshTask` et la machine tombée (`in-review` /
+  `failed`), `failTask` (`failed`), Accept (`done`).
+- **Pas émis** pour les gestes du propriétaire qui ne sont pas une nouvelle : un Drop (le `failed`
+  qui suit, y compris un Drop terminé au redémarrage), et la remise en revue d'une tâche échouée à
+  qui l'on répond (`failed` → `in-review` → `running` : seul le `running` part).
+- `lastMessage` (tâche arrêtée : `in-review`, `failed`, `done`) : le dernier message de l'agent (le
+  sien, pas d'un sous-agent) ; à défaut, pour `failed`, l'erreur de la tâche. Absent sinon.
+- `startedAt` : le début de la première session, dès qu'elle a démarré (absent en `queued`).
+
+### `task.progress` — pendant qu'une tâche tourne
+
+```json
+{ "type": "event", "event": "task.progress", "taskId": "…", "projectId": "…", "title": "…", "activity": "Edit lib/foo.ts", "at": "…" }
+```
+
+- `activity` : ce que l'agent fait, tiré des `task_events` déjà ingérés — le plus récent `message`
+  de l'agent ou `tool.call` du fil de la session (ceux d'un sous-agent, `parentCallId`, ne comptent
+  pas). Un message : sa dernière ligne de prose, sans le Markdown autour (blocs de code, puces,
+  titres). Un outil : son nom et son sujet, comme le cockpit (`toolSubject`) — `Edit lib/foo.ts`,
+  `Bash npm test`, `create_subtask` pour `mcp__spunto-tasks__create_subtask` ; un chemin sous
+  `/workspace/<dépôt>/` est donné relatif.
+- **Au plus une fois toutes les 20 s par tâche, et seulement si `activity` a changé** : une ligne qui
+  change plus vite attend, et c'est la dernière qui part.
+- Lu par une boucle d'une seconde, active seulement tunnel ouvert (`liveEventsTick`,
+  `services/lite-events.ts`, lancée avec le tunnel). Une tâche n'a de lignes nouvelles qu'une fois
+  ingérées : tunnel ouvert, le rafraîchissement de fond des tâches `running` passe de 30 à 20 s
+  (`refreshDueTasks`).
+
+### `machine.summary` — la machine d'un coup d'œil
+
+```json
+{ "type": "event", "event": "machine.summary", "running": 2, "queued": 1, "inReview": 3,
+  "tasks": [{ "taskId": "…", "projectId": "…", "title": "…", "state": "running", "activity": "Bash npm test" }],
+  "last": { "taskId": "…", "title": "…", "state": "in-review", "at": "…" }, "at": "…" }
+```
+
+- Ce que la page Agents montre par défaut : les tâches **mises de côté** (On hold, en revue) ne
+  comptent pas (Lite n'a pas d'archive).
+- `tasks` : jusqu'à 3 tâches `queued` / `running` / `in-review`, les plus récemment actives
+  (`lastActivityAt`) d'abord ; `activity`, pour une tâche `running`, est celle de son dernier
+  `task.progress` — le résumé ne bouge pas plus vite qu'eux.
+- `last` : la dernière tâche arrêtée (`in-review`, `failed` ou `done`, par `lastActivityAt`) ; absent
+  s'il n'y en a pas.
+- Envoyé **à chaque changement** des compteurs ou de la liste (son ordre seul ne compte pas),
+  **débouncé à 2 s** : le premier changement vu ouvre la fenêtre, le résumé du moment part à sa fin.
+- Envoyé **une fois juste après chaque `welcome`**, sans attendre : un Cloud redémarré ou un Lite
+  reconnecté repart de la machine telle qu'elle est.
 
 ## Deux graphes de modules
 
@@ -188,11 +247,15 @@ Reconnecter réutilise le même client ; Cloud recrée la connexion au premier `
 npm test     # node:test via tsx : lib/lite-relay.test.ts (la liste) + services/lite-tunnel.test.ts (faux Cloud)
 ```
 
-Le test d'intégration monte le faux Cloud et un faux « Lite local » (pour voir exactement ce qui
+Le test d'intégration monte le faux Cloud (qui replie les événements comme l'API de Cloud : une
+Live Activity par tâche, `liveActivities`, et le résumé de la machine, `machine`) et un faux « Lite local » (pour voir exactement ce qui
 atteint les routes), puis : coupé par défaut, appairage OAuth complet (inscription, PKCE, callback),
 `hello` en `read`, relais d'une lecture avec sa query, refus hors liste (sans rien atteindre),
 refus d'une capacité non donnée puis nouveau `hello` après l'avoir cochée, reconnexion après
-coupure, 4401 → refresh (jeton tourné), `task.state`, 4409, 4403 qui arrête tout, refresh refusé,
+coupure, 4401 → refresh (jeton tourné), `task.state` (tous les états, un seul par transition —
+Accept —, rien pour un Drop), `task.progress` (throttlé à 20 s, seulement sur changement),
+`machine.summary` (sur changement, débouncé, rejoué après chaque `welcome`), 4409, 4403 qui arrête
+tout — et plus rien ne monte, refresh refusé,
 réinscription qui rend l'ancien jeton, Disconnect qui le rend (le corps exact de l'appel, le `4403`
 qui suit sans erreur, jetons oubliés), Disconnect avec Spunto injoignable ou en `503` (oublié quand
 même, et dit).
@@ -203,6 +266,6 @@ même, et dit).
 npx tsx scripts/fake-spunto-cloud.ts --port 4999      # consentement accordé d'office
 # Settings → Connect to Spunto → Spunto URL : http://localhost:4999, puis Connect
 curl -XPOST localhost:4999/_fake/relay -d '{"method":"GET","path":"/api/tasks"}'
-curl localhost:4999/_fake/state                       # hellos, événements, révocations
+curl localhost:4999/_fake/state                       # hellos, événements, Live Activities, résumé, révocations
 curl -XPOST localhost:4999/_fake/close -d '{"code":4403}'
 ```

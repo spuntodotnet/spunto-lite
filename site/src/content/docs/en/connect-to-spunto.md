@@ -50,6 +50,15 @@ When a task hands back (**In review**) or **fails**, Lite tells Spunto — the t
 first words of the agent's last message — so your phone can notify you. Nothing is sent while Lite
 is offline, and dropping a task yourself sends nothing.
 
+## Live Activities
+
+While Lite is connected it also tells Spunto how its tasks are doing, so the Spunto Lite app can
+follow them on your Lock Screen and in the Dynamic Island: each task's state as it changes, what its
+agent is doing (its last sentence, or the tool it is using — *Edit lib/auth.ts*), at most every 20
+seconds, and a summary of the machine — how many tasks are running, queued and in review, the few
+most recently active, and the last one that stopped. Tasks you put on hold are left out, as on the
+Agents page.
+
 ## Disconnecting
 
 - **Disconnect** in Settings gives Lite's credentials back to Spunto, then forgets them and closes

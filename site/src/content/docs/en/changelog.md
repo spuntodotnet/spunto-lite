@@ -23,6 +23,10 @@ migrate by hand.
 
 ### Improved
 
+- **Your tasks, live on your phone.** Connected to Spunto, Lite now also tells it each task's state
+  as it changes, what its agent is doing, and a summary of the machine — for the Spunto Lite app's
+  Live Activities on your Lock Screen and in the Dynamic Island. Only while connected; nothing is
+  stored. [Details](/docs/connect-to-spunto#live-activities)
 - **Disconnect removes the machine from Spunto too.** Lite gives its credentials back to Spunto
   before forgetting them: the machine leaves your list there, no trip to Account Settings needed.
   If Spunto can't be reached, Lite still disconnects and tells you where to remove it.

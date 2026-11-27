@@ -10,7 +10,9 @@
  * - `POST /api/oauth/revoke` (RFC 7009, coderhammer/spunto#876) → the client's whole grant gone,
  *   its tunnel closed in 4403 before the answer (the echo reaches Lite while it waits); 200 for an
  *   unknown token;
- * - `GET /api/lite/connect` (WebSocket) → `hello` checked, `welcome`; 4401 on a bad token.
+ * - `GET /api/lite/connect` (WebSocket) → `hello` checked, `welcome`; 4401 on a bad token. Its
+ *   events are kept as they came, and folded the way Cloud's API folds them for the iPhone's Live
+ *   Activities: one per task (`task.state` + `task.progress`), the machine's (`machine.summary`).
  *
  * Imported by the integration test (services/lite-tunnel.test.ts), or run on its own to try a real
  * Lite against it:
@@ -31,6 +33,8 @@ import { WebSocketServer, type WebSocket } from "ws"
 export type Hello = { token: string; name: string; version: string; capabilities: string[]; connectionId: string | null }
 export type Revocation = { contentType: string; params: Record<string, string>; status: number }
 export type Relayed = { status: number; contentType?: string; body: Buffer; json?: unknown }
+/** A task's Live Activity, as Cloud would draw it from what Lite said. */
+export type LiveActivity = { taskId: string; projectId: string; title: string; state: string; activity: string | null; lastMessage: string | null; startedAt: string | null; at: string }
 
 const rand = (n = 18) => randomBytes(n).toString("base64url")
 
@@ -41,6 +45,12 @@ export class FakeSpuntoCloud {
   readonly refreshTokens = new Map<string, string>() // token → clientId
   readonly hellos: Hello[] = []
   readonly events: Record<string, unknown>[] = []
+  /** Per task: its state and activity, from `task.state` and `task.progress`. */
+  readonly liveActivities = new Map<string, LiveActivity>()
+  /** The last `machine.summary` heard. */
+  machine: Record<string, unknown> | null = null
+  /** How many `welcome`s were sent. */
+  welcomes = 0
   /** Refuse every refresh (`invalid_grant`), as for a revoked or expired grant. */
   refuseRefresh = false
   refreshCount = 0
@@ -107,6 +117,32 @@ export class FakeSpuntoCloud {
     })
   }
 
+  /** The events of one kind, in the order they came. */
+  eventsNamed(event: string): Record<string, unknown>[] {
+    return this.events.filter((e) => e.event === event)
+  }
+
+  private fold(msg: Record<string, unknown>): void {
+    this.events.push(msg)
+    const str = (v: unknown) => (typeof v === "string" ? v : null)
+    if (msg.event === "machine.summary") this.machine = msg
+    if ((msg.event === "task.state" || msg.event === "task.progress") && typeof msg.taskId === "string") {
+      const was = this.liveActivities.get(msg.taskId)
+      const next: LiveActivity = {
+        taskId: msg.taskId,
+        projectId: String(msg.projectId ?? was?.projectId ?? ""),
+        title: String(msg.title ?? was?.title ?? ""),
+        state: str(msg.state) ?? was?.state ?? "running",
+        // A new state is a new line: what the agent was at is not what it is at any more.
+        activity: msg.event === "task.progress" ? str(msg.activity) : null,
+        lastMessage: msg.event === "task.state" ? str(msg.lastMessage) : (was?.lastMessage ?? null),
+        startedAt: str(msg.startedAt) ?? was?.startedAt ?? null,
+        at: String(msg.at ?? ""),
+      }
+      this.liveActivities.set(msg.taskId, next)
+    }
+  }
+
   /** Closes every tunnel with a code: 4403 (disconnected in Spunto), 4409 (replaced), 1012 (a redeploy)… */
   closeTunnels(code: number, reason = ""): void {
     for (const ws of this.sockets) ws.close(code, reason)
@@ -156,6 +192,7 @@ export class FakeSpuntoCloud {
       for (const other of this.sockets) if (other !== ws && this.welcomed.has(other)) other.close(4409, "replaced by a newer connection")
       this.welcomed.add(ws)
       ws.send(JSON.stringify({ type: "welcome", connectionId }))
+      this.welcomes++
       ws.on("message", (raw) => {
         let msg: Record<string, unknown>
         try {
@@ -163,7 +200,7 @@ export class FakeSpuntoCloud {
         } catch {
           return
         }
-        if (msg.type === "event") this.events.push(msg)
+        if (msg.type === "event") this.fold(msg)
         if (msg.type === "response" && typeof msg.id === "string") {
           const settle = this.pending.get(msg.id)
           this.pending.delete(msg.id)
@@ -276,6 +313,8 @@ export class FakeSpuntoCloud {
         status: 200,
         body: { online: this.online, clients: [...this.clients.keys()], hellos: this.hellos.map((h) => ({ ...h, token: `${h.token.slice(0, 8)}…` })),
           events: this.events,
+          liveActivities: [...this.liveActivities.values()],
+          machine: this.machine,
           revocations: this.revocations.map((r) => ({ ...r, params: { ...r.params, token: `${(r.params.token ?? "").slice(0, 8)}…` } })),
         },
       }
