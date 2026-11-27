@@ -51,6 +51,13 @@ export function LiteConnectCard() {
     router.replace("/settings#connect-to-spunto", { scroll: false })
   }, [router])
 
+  // The card draws once its data is in, after the browser looked for `#connect-to-spunto`: back
+  // from the consent page, bring it into view ourselves.
+  const loaded = !!data
+  useEffect(() => {
+    if (loaded && window.location.hash === "#connect-to-spunto") document.getElementById("connect-to-spunto")?.scrollIntoView({ block: "start" })
+  }, [loaded])
+
   const save = useMutation({
     mutationFn: (patch: { spuntoUrl?: string; machineName?: string | null; capabilities?: LiteCapability[] }) =>
       api.patch<LiteConnectView>("/api/lite-connect", patch),

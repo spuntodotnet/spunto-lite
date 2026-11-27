@@ -50,8 +50,17 @@ function update(patch: Partial<LiteConnect>): LiteConnect {
 
 export const isConnected = (row: LiteConnect = getLiteConnect()) => !!row.encryptedRefreshToken
 
+/**
+ * The name when none is given: the machine's hostname — except in Docker (the image's usual
+ * home), where it is the container's id, which says nothing on a phone.
+ */
+export function defaultMachineName(): string {
+  const name = hostname()
+  return /^[0-9a-f]{12}$/.test(name) ? "Spunto Lite" : name
+}
+
 /** What Cloud lists this machine as. */
-export const machineNameOf = (row: LiteConnect) => row.machineName?.trim() || hostname()
+export const machineNameOf = (row: LiteConnect) => row.machineName?.trim() || defaultMachineName()
 
 export function capabilitiesOf(row: LiteConnect): LiteCapability[] {
   return normalizeCapabilities(row.capabilities)
@@ -75,7 +84,7 @@ export function getLiteConnectView(): LiteConnectView {
   return {
     spuntoUrl: row.spuntoUrl,
     machineName: row.machineName,
-    defaultMachineName: hostname(),
+    defaultMachineName: defaultMachineName(),
     capabilities: capabilitiesOf(row),
     connected: isConnected(row),
     connectedAt: row.connectedAt?.toISOString() ?? null,
