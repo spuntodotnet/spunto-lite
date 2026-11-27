@@ -52,8 +52,10 @@ is offline, and dropping a task yourself sends nothing.
 
 ## Disconnecting
 
-- **Disconnect** in Settings forgets the tokens and closes the tunnel. Spunto keeps listing the
-  machine, offline, until you remove it there.
+- **Disconnect** in Settings gives Lite's credentials back to Spunto, then forgets them and closes
+  the tunnel: the machine leaves your list in Spunto at once. If Spunto can't be reached at that
+  moment, Lite disconnects anyway and says so: the machine may then still be listed in Spunto —
+  remove it from **Account Settings → Connected apps**.
 - Removing it in Spunto (**Account Settings → Connected apps**) closes the tunnel at once; Lite then
   shows *Disconnected* and does not try again until you connect it anew.
 - If Spunto stops accepting Lite's credentials (unused for 30 days, for instance), Lite shows

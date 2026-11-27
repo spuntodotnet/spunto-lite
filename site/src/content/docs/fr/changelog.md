@@ -21,6 +21,13 @@ mêmes volumes, même clé, rien à migrer à la main.
   *Create tasks* sont à cocher. Une tâche qui rend la main ou échoue est annoncée à Spunto, pour les
   notifications du téléphone. Coupé tant que vous ne le connectez pas. [Détails](/fr/docs/connect-to-spunto)
 
+### Amélioré
+
+- **Disconnect retire aussi la machine de Spunto.** Lite rend ses identifiants à Spunto avant de
+  les oublier : la machine quitte votre liste là-bas, sans passer par Account Settings. Si Spunto
+  est injoignable, Lite se déconnecte quand même et vous dit où la retirer.
+  [Détails](/fr/docs/connect-to-spunto#se-déconnecter)
+
 ## 2026-11-25
 
 **L’agent peut vous poser une question, déléguer des sous-tâches, et ses sous-agents ont leur bloc**

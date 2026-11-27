@@ -7,6 +7,9 @@
  * - `GET /api/oauth/authorize` → the consent, **allowed at once**: straight back to the redirect
  *   URI with a code (Cloud shows its consent page there and waits for the member's click);
  * - `POST /api/oauth/token` → `spo_` (1 h) + `spr_` (turned at every use), PKCE S256 checked;
+ * - `POST /api/oauth/revoke` (RFC 7009, coderhammer/spunto#876) → the client's whole grant gone,
+ *   its tunnel closed in 4403 before the answer (the echo reaches Lite while it waits); 200 for an
+ *   unknown token;
  * - `GET /api/lite/connect` (WebSocket) → `hello` checked, `welcome`; 4401 on a bad token.
  *
  * Imported by the integration test (services/lite-tunnel.test.ts), or run on its own to try a real
@@ -16,7 +19,7 @@
  *
  * then set Settings → Connect to Spunto → Spunto URL to `http://localhost:4999`, and drive it:
  *
- *   curl localhost:4999/_fake/state                                   # hellos, events, tunnels
+ *   curl localhost:4999/_fake/state                                   # hellos, events, revocations
  *   curl -XPOST localhost:4999/_fake/relay -d '{"method":"GET","path":"/api/tasks"}'
  *   curl -XPOST localhost:4999/_fake/close -d '{"code":4403}'         # « disconnected in Spunto »
  */
@@ -26,6 +29,7 @@ import type { AddressInfo } from "node:net"
 import { WebSocketServer, type WebSocket } from "ws"
 
 export type Hello = { token: string; name: string; version: string; capabilities: string[]; connectionId: string | null }
+export type Revocation = { contentType: string; params: Record<string, string>; status: number }
 export type Relayed = { status: number; contentType?: string; body: Buffer; json?: unknown }
 
 const rand = (n = 18) => randomBytes(n).toString("base64url")
@@ -33,14 +37,21 @@ const rand = (n = 18) => randomBytes(n).toString("base64url")
 export class FakeSpuntoCloud {
   readonly clients = new Map<string, { name: string; redirectUris: string[] }>()
   readonly codes = new Map<string, { clientId: string; redirectUri: string; challenge: string }>()
-  readonly accessTokens = new Set<string>()
+  readonly accessTokens = new Map<string, string>() // token → clientId
   readonly refreshTokens = new Map<string, string>() // token → clientId
   readonly hellos: Hello[] = []
   readonly events: Record<string, unknown>[] = []
   /** Refuse every refresh (`invalid_grant`), as for a revoked or expired grant. */
   refuseRefresh = false
   refreshCount = 0
+  /** Every call to the revocation endpoint, as received. */
+  readonly revocations: Revocation[] = []
+  /** The revocation endpoint fails: `unreachable` cuts the connection, a number is the status answered. */
+  revokeFailure: "unreachable" | number | null = null
+  /** Called once a revocation's tunnels are closed, before the answer: what Lite looks like then. */
+  beforeRevokeAnswer: (() => void | Promise<void>) | null = null
   private sockets = new Set<WebSocket>()
+  private socketClients = new Map<WebSocket, string>() // welcomed tunnel → clientId
   private welcomed = new WeakSet<WebSocket>()
   private pending = new Map<string, (r: Relayed) => void>()
   private server: Server
@@ -51,6 +62,7 @@ export class FakeSpuntoCloud {
     this.server = createServer((req, res) => {
       void this.http(req).then(
         ({ status, body, headers }) => {
+          if (status === -1) return req.socket.destroy()
           res.writeHead(status, { "content-type": "application/json", ...headers })
           res.end(body === undefined ? "" : JSON.stringify(body))
         },
@@ -112,7 +124,10 @@ export class FakeSpuntoCloud {
 
   private tunnel(ws: WebSocket): void {
     this.sockets.add(ws)
-    ws.on("close", () => this.sockets.delete(ws))
+    ws.on("close", () => {
+      this.sockets.delete(ws)
+      this.socketClients.delete(ws)
+    })
     const timer = setTimeout(() => ws.close(4401, "no hello"), 10_000)
     ws.once("message", (data) => {
       clearTimeout(timer)
@@ -132,7 +147,8 @@ export class FakeSpuntoCloud {
       }
       this.hellos.push(record)
       if (hello.type !== "hello" || !this.accessTokens.has(token)) return ws.close(4401, "invalid token")
-      const clientId = [...this.clients.keys()][0] ?? "none"
+      const clientId = this.accessTokens.get(token)!
+      this.socketClients.set(ws, clientId)
       const connectionId = this.connectionIds.get(clientId) ?? `lc_${rand(10)}`
       this.connectionIds.set(clientId, connectionId)
       record.connectionId = connectionId
@@ -200,7 +216,7 @@ export class FakeSpuntoCloud {
       const grant = (clientId: string) => {
         const access = `spo_${rand()}`
         const refresh = `spr_${rand()}`
-        this.accessTokens.add(access)
+        this.accessTokens.set(access, clientId)
         this.refreshTokens.set(refresh, clientId)
         return { status: 200, body: { access_token: access, token_type: "Bearer", expires_in: 3600, scope: "lite", refresh_token: refresh } }
       }
@@ -226,11 +242,42 @@ export class FakeSpuntoCloud {
       return { status: 400, body: { error: "unsupported_grant_type" } }
     }
 
+    if (req.method === "POST" && url.pathname === "/api/oauth/revoke") {
+      const p = Object.fromEntries(new URLSearchParams(raw))
+      const answer = (status: number, body?: unknown) => {
+        this.revocations.push({ contentType: req.headers["content-type"] ?? "", params: p, status })
+        return { status, body }
+      }
+      if (this.revokeFailure === "unreachable") return answer(-1)
+      if (typeof this.revokeFailure === "number") return answer(this.revokeFailure, { error: "server_error" })
+      if (!this.clients.has(p.client_id)) return answer(401, { error: "invalid_client", error_description: "Client authentication failed" })
+      if (!p.token) return answer(400, { error: "invalid_request", error_description: "token is required" })
+      const owner = this.refreshTokens.get(p.token) ?? this.accessTokens.get(p.token)
+      // Unknown, or another client's: 200, nothing done (RFC 7009 § 2.2).
+      if (owner !== p.client_id) return answer(200)
+      for (const [t, c] of this.refreshTokens) if (c === owner) this.refreshTokens.delete(t)
+      for (const [t, c] of this.accessTokens) if (c === owner) this.accessTokens.delete(t)
+      this.connectionIds.delete(owner)
+      const closing = [...this.socketClients].filter(([, c]) => c === owner).map(([ws]) => ws)
+      await Promise.all(
+        closing.map((ws) => {
+          const closed = new Promise((resolve) => ws.once("close", resolve))
+          ws.close(4403, "disconnected")
+          return closed
+        }),
+      )
+      await this.beforeRevokeAnswer?.()
+      return answer(200)
+    }
+
     // The CLI's handles (not Cloud's): look at what happened, relay a request, close the tunnels.
     if (url.pathname === "/_fake/state") {
       return {
         status: 200,
-        body: { online: this.online, clients: [...this.clients.keys()], hellos: this.hellos.map((h) => ({ ...h, token: `${h.token.slice(0, 8)}…` })), events: this.events },
+        body: { online: this.online, clients: [...this.clients.keys()], hellos: this.hellos.map((h) => ({ ...h, token: `${h.token.slice(0, 8)}…` })),
+          events: this.events,
+          revocations: this.revocations.map((r) => ({ ...r, params: { ...r.params, token: `${(r.params.token ?? "").slice(0, 8)}…` } })),
+        },
       }
     }
     if (req.method === "POST" && url.pathname === "/_fake/relay") {

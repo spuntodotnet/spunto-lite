@@ -56,6 +56,8 @@ type State = {
   silenceTimer: NodeJS.Timeout | null
   /** Where relayed requests are served: Lite's own listener. */
   localBase: string
+  /** Disconnect is revoking the token: the 4403 that follows is expected (`revoking`). */
+  revoking: boolean
 }
 
 const KEY = Symbol.for("spunto-lite.lite-tunnel-state")
@@ -69,6 +71,7 @@ function state(): State {
     retryTimer: null,
     silenceTimer: null,
     localBase: `http://127.0.0.1:${PORT}`,
+    revoking: false,
   })
 }
 
@@ -89,6 +92,7 @@ function clearTimers(s: State): void {
 /** Ends the current attempt: its socket is closed and its callbacks will be ignored. */
 function halt(s: State): void {
   s.generation++
+  s.revoking = false
   clearTimers(s)
   const ws = s.ws
   s.ws = null
@@ -190,6 +194,12 @@ async function dial(s: State, generation: number, forceRefresh: boolean): Promis
   ws.on("close", (code, reasonBuf) => {
     if (generation !== s.generation || s.ws !== ws) return
     const reason = reasonBuf.toString() || lastError || `closed (${code})`
+    if (code === 4403 && s.revoking) {
+      log("token given back — tunnel closed by Spunto (4403)")
+      halt(s)
+      setStatus(s, { state: "off" })
+      return
+    }
     if (code === 4403) {
       log("disconnected from Spunto (4403) — tokens forgotten")
       halt(s)
@@ -264,6 +274,6 @@ function emit(message: Record<string, unknown>): boolean {
 export function startLiteTunnel(opts: { localBase?: string } = {}): void {
   const s = state()
   if (opts.localBase) s.localBase = opts.localBase
-  setLiteTunnel({ restart, stop, status: () => state().status, emit })
+  setLiteTunnel({ restart, stop, revoking: () => void (state().revoking = true), status: () => state().status, emit })
   restart()
 }

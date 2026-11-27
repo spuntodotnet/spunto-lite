@@ -19,6 +19,11 @@ export type LiteTunnelControl = {
   restart(): void
   /** Closes the tunnel and does not redial. */
   stop(): void
+  /**
+   * Disconnect is giving the token back: a 4403 until the next `stop`/`restart` is the
+   * revocation's echo — the tunnel just goes off, and the forgetting is left to Disconnect.
+   */
+  revoking(): void
   status(): LiteTunnelStatus
   /** Sends a message up the tunnel if it is online; false otherwise (the message is dropped). */
   emit(message: Record<string, unknown>): boolean
