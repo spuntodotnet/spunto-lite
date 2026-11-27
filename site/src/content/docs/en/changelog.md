@@ -9,6 +9,18 @@ What changed in Lite, newest first. Everything listed here is in the `latest` im
 it is dated: to get it, [upgrade](/docs/installation#upgrade) — same volumes, same key, nothing to
 migrate by hand.
 
+## 2026-11-27
+
+**Your Lite's tasks on your phone, through Spunto**
+
+### New
+
+- **Connect to Spunto.** In **Settings → Connect to Spunto**, pair Lite with your Spunto account:
+  your devices signed in to Spunto — the Spunto Lite iPhone app first — reach its agent tasks
+  through a tunnel Lite opens, without opening a port. Read only at first; *Reply* and *Create
+  tasks* are yours to tick. A task that hands back or fails is announced to Spunto, for your
+  phone's notifications. Off until you connect it. [Details](/docs/connect-to-spunto)
+
 ## 2026-11-25
 
 **The agent can ask you, delegate sub-tasks, and its subagents get their own block**
