@@ -687,3 +687,41 @@ export const integrationConnections = sqliteTable("integration_connections", {
 })
 
 export type IntegrationConnection = typeof integrationConnections.$inferSelect
+
+// ─── Lite Connect (docs/lite-connect.md) ─────────────────────────────────────
+
+/**
+ * This Lite's link to a Spunto Cloud account (Settings → Connect to Spunto), so the member's
+ * devices — the « Spunto Lite » iPhone app first — reach its tasks through Cloud's relay. One row
+ * (`singleton`), created on the first visit to the card. **Off by default**: the tunnel opens only
+ * once a refresh token is here, which only the Connect button's OAuth flow writes.
+ */
+export const liteConnect = sqliteTable("lite_connect", {
+  id: text("id").primaryKey().default("singleton"),
+  /** The Spunto the tunnel dials and the OAuth flow goes through. Not changeable while connected. */
+  spuntoUrl: text("spunto_url").notNull().default("https://spunto.net"),
+  /** What Cloud lists this machine as (taken by Cloud at the first `hello` only). Null = the hostname. */
+  machineName: text("machine_name"),
+  /** What the member's devices may do (`lib/lite-relay.ts`): `read` only, until the owner says more. */
+  capabilities: text("capabilities", { mode: "json" }).$type<string[]>().notNull().default(sql`'["read"]'`),
+  /** The public OAuth client registered at Cloud, for this Spunto URL and this redirect URI. */
+  clientId: text("client_id"),
+  clientSpuntoUrl: text("client_spunto_url"),
+  clientRedirectUri: text("client_redirect_uri"),
+  /** An authorization in progress (15 minutes): its `state`, PKCE verifier and redirect URI. */
+  pendingState: text("pending_state"),
+  encryptedPendingVerifier: text("encrypted_pending_verifier"),
+  pendingRedirectUri: text("pending_redirect_uri"),
+  pendingAt: integer("pending_at", { mode: "timestamp_ms" }),
+  /** The tokens, encrypted (`lib/crypto.ts`). The refresh token turns at every use. */
+  encryptedAccessToken: text("encrypted_access_token"),
+  accessExpiresAt: integer("access_expires_at", { mode: "timestamp_ms" }),
+  encryptedRefreshToken: text("encrypted_refresh_token"),
+  connectedAt: integer("connected_at", { mode: "timestamp_ms" }),
+  /** Why the link stopped on its own (a refused refresh, a disconnection from Spunto): shown in Settings. */
+  lastError: text("last_error"),
+  /** The `lc_…` id of the last `welcome`. */
+  connectionId: text("connection_id"),
+})
+
+export type LiteConnect = typeof liteConnect.$inferSelect

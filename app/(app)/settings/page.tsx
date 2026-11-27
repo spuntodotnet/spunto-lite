@@ -18,6 +18,7 @@ import { McpServersCard } from "@/components/mcp-servers-card"
 import { IntegrationsCard } from "@/components/integrations-card"
 import { AppearanceCard } from "@/components/appearance-card"
 import { DefaultProjectCard } from "@/components/default-project-card"
+import { LiteConnectCard } from "@/components/lite-connect-card"
 
 // Google "G" mark (inline so we don't pull in an icon dependency).
 function GoogleLogo({ className }: { className?: string }) {
@@ -264,6 +265,7 @@ export default function SettingsPage() {
       <AppearanceCard initial={settings?.dashboardColor} />
       <IntegrationsCard />
       <McpServersCard />
+      <LiteConnectCard />
     </div>
   )
 }
