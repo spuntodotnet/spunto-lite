@@ -106,7 +106,7 @@ Pour chaque requête, dans cet ordre :
 
 | Capacité | Routes |
 |---|---|
-| `read` | `GET /api/projects`, `/api/projects/:id`, `/api/projects/:id/tasks`, `/api/tasks`, `/api/tasks/:id`, `/events`, `/diff`, `/attachments/:aid` |
+| `read` | `GET /api/projects`, `/api/projects/:id`, `/api/projects/:id/tasks`, `/api/tasks`, `/api/tasks/:id`, `/events`, `/diff`, `/diff/patch`, `/attachments/:aid` |
 | `reply` | `POST /api/tasks/:id/messages`, `/interrupt`, `/answer`, `/validate`, `/cancel` |
 | `create` | `POST /api/projects/:id/tasks` |
 

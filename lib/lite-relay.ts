@@ -22,6 +22,7 @@ const RULES: { method: "GET" | "POST"; path: RegExp; capability: LiteCapability 
   { method: "GET", path: new RegExp(`^/api/tasks/${ID}$`), capability: "read" },
   { method: "GET", path: new RegExp(`^/api/tasks/${ID}/events$`), capability: "read" },
   { method: "GET", path: new RegExp(`^/api/tasks/${ID}/diff$`), capability: "read" },
+  { method: "GET", path: new RegExp(`^/api/tasks/${ID}/diff/patch$`), capability: "read" },
   { method: "GET", path: new RegExp(`^/api/tasks/${ID}/attachments/${ID}$`), capability: "read" },
   // Answering a conversation, and deciding its fate: Accept (`validate`) and Drop (`cancel`).
   { method: "POST", path: new RegExp(`^/api/tasks/${ID}/messages$`), capability: "reply" },
