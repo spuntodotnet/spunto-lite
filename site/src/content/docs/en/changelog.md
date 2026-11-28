@@ -11,10 +11,16 @@ migrate by hand.
 
 ## 2026-11-27
 
-**Your Lite's tasks on your phone, through Spunto**
+**GitHub and GitLab integrations, and your Lite's tasks on your phone**
 
 ### New
 
+- **GitHub and GitLab integrations.** In **Settings → Integrations**, connect GitHub (github.com or
+  Enterprise) or GitLab (gitlab.com or self-hosted) with a personal token, checked with the forge
+  and stored encrypted. In a project's **Repositories**, **Add repository** then searches your
+  repositories, and workspaces clone and push them over HTTPS with that token, which never enters
+  a workspace. A task's **Pull requests** tile says where each PR or MR stands: open, draft,
+  merged or closed, checks, review, conflicts. [Details](/docs/ssh-and-git#integrations-your-repositories-your-pull-requests)
 - **Connect to Spunto.** In **Settings → Connect to Spunto**, pair Lite with your Spunto account:
   your devices signed in to Spunto — the Spunto Lite iPhone app first — reach its agent tasks
   through a tunnel Lite opens, without opening a port. Read only at first; *Reply* and *Create
@@ -31,6 +37,12 @@ migrate by hand.
   before forgetting them: the machine leaves your list there, no trip to Account Settings needed.
   If Spunto can't be reached, Lite still disconnects and tells you where to remove it.
   [Details](/docs/connect-to-spunto#disconnecting)
+
+### Fixed
+
+- **No more empty space under the last message.** In a long conversation, scrolling back up to
+  load older messages and then down again no longer leaves one or two blank screens below the end,
+  in a zoomed-in or zoomed-out browser.
 
 ## 2026-11-25
 

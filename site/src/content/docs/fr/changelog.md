@@ -11,10 +11,16 @@ mêmes volumes, même clé, rien à migrer à la main.
 
 ## 2026-11-27
 
-**Les tâches de votre Lite sur votre téléphone, par Spunto**
+**Les intégrations GitHub et GitLab, et les tâches de votre Lite sur votre téléphone**
 
 ### Nouveau
 
+- **Intégrations GitHub et GitLab.** Dans **Settings → Integrations**, connectez GitHub (github.com
+  ou Enterprise) ou GitLab (gitlab.com ou auto-hébergé) avec un jeton personnel, vérifié auprès de
+  la forge et gardé chiffré. Dans **Repositories** d’un projet, **Add repository** cherche alors
+  dans vos dépôts, et les workspaces les clonent et y poussent en HTTPS avec ce jeton, qui n’entre
+  jamais dans un workspace. La tuile **Pull requests** d’une tâche dit où en est chaque PR ou MR :
+  ouverte, brouillon, fusionnée ou fermée, checks, revue, conflits. [Détails](/fr/docs/ssh-and-git#intégrations--vos-dépôts-vos-pull-requests)
 - **Connect to Spunto.** Dans **Settings → Connect to Spunto**, reliez Lite à votre compte Spunto :
   vos appareils connectés à Spunto — d’abord l’app iPhone Spunto Lite — retrouvent ses tâches
   d’agent par un tunnel que Lite ouvre, sans ouvrir de port. Lecture seule au départ ; *Reply* et
@@ -31,6 +37,12 @@ mêmes volumes, même clé, rien à migrer à la main.
   les oublier : la machine quitte votre liste là-bas, sans passer par Account Settings. Si Spunto
   est injoignable, Lite se déconnecte quand même et vous dit où la retirer.
   [Détails](/fr/docs/connect-to-spunto#se-déconnecter)
+
+### Corrigé
+
+- **Plus de vide sous le dernier message.** Dans une longue conversation, remonter pour charger les
+  messages plus anciens puis redescendre ne laisse plus un ou deux écrans vides sous la fin, dans un
+  navigateur zoomé ou dézoomé.
 
 ## 2026-11-25
 
