@@ -1042,7 +1042,12 @@ function metadataContains(pairs: Record<string, string>) {
 /**
  * Every task of the install, filtered and paged — what the agent cockpit reads. Only the returned
  * page's live rows are refreshed; the counts ignore the state filter on purpose (a filter you
- * cannot see out of is a trap). Most recently active first, like a conversation list.
+ * cannot see out of is a trap).
+ *
+ * Ordered by state first, in the order the cockpit groups them (queued → running → in-review,
+ * then failed and done), then most recently active first inside a state, like Cloud's
+ * `listOrgTasks`. The state comes first because the page is a prefix of that order: sorted on
+ * recency alone, a page of 40 full of finished tasks left older ones in review behind « Show more ».
  */
 export async function listAllTasks(q: TaskQuery = {}) {
   const limit = Math.min(100, Math.max(1, q.limit ?? 40))
@@ -1080,7 +1085,7 @@ export async function listAllTasks(q: TaskQuery = {}) {
     .from(tasks)
     .innerJoin(projects, eq(tasks.projectId, projects.id))
     .where(where)
-    .orderBy(desc(tasks.lastActivityAt), desc(tasks.createdAt))
+    .orderBy(STATE_RANK, desc(tasks.lastActivityAt), desc(tasks.createdAt), tasks.id)
     .limit(limit)
     .offset(offset)
     .all()
@@ -1092,6 +1097,10 @@ export async function listAllTasks(q: TaskQuery = {}) {
   )
   return { tasks: page, total, counts, onHoldCount }
 }
+
+/** A task's place in the cockpit's lifecycle order — the design system's `TASK_STATE_ORDER`. */
+const STATE_RANK = sql`case ${tasks.state}
+  when 'queued' then 0 when 'running' then 1 when 'in-review' then 2 when 'failed' then 3 else 4 end`
 
 /**
  * On hold, as the lists read it: the flag *and* still in review. Everything that moves a task on
